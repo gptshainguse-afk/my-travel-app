@@ -7,7 +7,7 @@ import {
   Trash2, ChevronDown, ChevronUp, Heart,
   List, ArrowLeft, BookOpen, Search, Key, 
   MessageSquare, Banknote, Share2, Download, Copy, Check,
-  FileJson, Upload
+  FileJson, Upload, Car, ParkingCircle // 新增 Icon
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -72,7 +72,7 @@ const DayTimeline = ({ day, isPrintMode = false }) => {
           {day.timeline.map((item, idx) => (
             <div key={idx} className="relative flex gap-4 md:gap-8 group break-inside-avoid">
               
-              {/* Icon (網頁版顯示，列印版為了省空間隱藏或簡化) */}
+              {/* Icon */}
               <div className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 
                 ${isPrintMode ? 'hidden' : 
                   item.type === 'flight' ? 'bg-indigo-500 text-white' : 
@@ -191,6 +191,10 @@ const App = () => {
     travelers: 2,
     hasTransitTour: true,
     isMultiCityFlight: false,
+    // 新增：航班有無、交通方式、停車需求
+    hasFlights: true,
+    transportMode: 'public', // 'public' | 'self_driving'
+    needParking: false,
     specialRequests: '',
     priceRanges: { high: false, medium: false, low: false }
   });
@@ -427,12 +431,16 @@ const App = () => {
     setStep('loading');
     setErrorMsg('');
 
-    let flightsString = "";
-    if (basicData.isMultiCityFlight) {
-      flightsString = multiFlights.map(f => `${f.type} | 日期:${f.date} | 時間:${f.time} | 航班:${f.code} | 機場:${f.airport}`).join('\n');
-    } else {
-      flightsString = `去程 | 日期:${simpleFlights.outbound.date} | 時間:${simpleFlights.outbound.time} | 航班:${simpleFlights.outbound.code} | 機場:${simpleFlights.outbound.airport}\n中轉 | 日期:${simpleFlights.transit.date ? simpleFlights.transit.date : '無'} | 時間:${simpleFlights.transit.time} | 航班:${simpleFlights.transit.code} | 機場:${simpleFlights.transit.airport}\n回程 | 日期:${simpleFlights.inbound.date} | 時間:${simpleFlights.inbound.time} | 航班:${simpleFlights.inbound.code} | 機場:${simpleFlights.inbound.airport}`;
+    // 處理航班字串 (如果無航班則不傳送航班資訊)
+    let flightsString = "No flights involved.";
+    if (basicData.hasFlights) {
+      if (basicData.isMultiCityFlight) {
+        flightsString = multiFlights.map(f => `${f.type} | 日期:${f.date} | 時間:${f.time} | 航班:${f.code} | 機場:${f.airport}`).join('\n');
+      } else {
+        flightsString = `去程 | 日期:${simpleFlights.outbound.date} | 時間:${simpleFlights.outbound.time} | 航班:${simpleFlights.outbound.code} | 機場:${simpleFlights.outbound.airport}\n中轉 | 日期:${simpleFlights.transit.date ? simpleFlights.transit.date : '無'} | 時間:${simpleFlights.transit.time} | 航班:${simpleFlights.transit.code} | 機場:${simpleFlights.transit.airport}\n回程 | 日期:${simpleFlights.inbound.date} | 時間:${simpleFlights.inbound.time} | 航班:${simpleFlights.inbound.code} | 機場:${simpleFlights.inbound.airport}`;
+      }
     }
+
     const accommodationString = accommodations.map(a => `住處:${a.name}(${a.type}) 地址:${a.address}`).join('\n');
 
     const selectedPrices = [];
@@ -441,6 +449,15 @@ const App = () => {
     if (basicData.priceRanges.low) selectedPrices.push("低 (<300 TWD)");
     const priceConstraint = selectedPrices.length > 0 ? selectedPrices.join(', ') : "無限制";
 
+    // 處理交通與停車需求
+    const transportConstraint = basicData.transportMode === 'self_driving' 
+      ? "Self-driving (Prioritize driving routes/distances)" 
+      : "Public Transport";
+    
+    const parkingConstraint = (basicData.transportMode === 'self_driving' && basicData.needParking)
+      ? "Include nearby parking lot recommendations with estimated prices for each stop (Activity/Meal)."
+      : "";
+
     const systemPrompt = `
       You are an expert AI Travel Planner API. Respond with valid JSON only.
       User Constraints:
@@ -448,7 +465,9 @@ const App = () => {
       - Dates: ${basicData.dates}
       - Type: ${basicData.type}
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString} (Use Airport Codes to identify cities. E.g., FUK=Fukuoka, TAE=Daegu).
+      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka, TAE=Daegu)." : "(No flights involved)"}
+      - Transport Mode: ${transportConstraint}
+      - Parking Info Needed: ${parkingConstraint}
       - Accommodation: ${accommodationString}
       - Transit Tour: ${basicData.hasTransitTour}
       - Special Requests: ${basicData.specialRequests || "None"}
@@ -477,7 +496,7 @@ const App = () => {
                 "title": "Title",
                 "description": "Detailed description",
                 "location_query": "Google Maps Query",
-                "transport_detail": "Transport Info",
+                "transport_detail": "Transport Info (include parking info if requested)",
                 "price_level": "Low" | "Mid" | "High",
                 "warnings_tips": "Important tips",
                 "menu_recommendations": [{ "local": "", "cn": "", "price": "" }]
@@ -569,10 +588,43 @@ const App = () => {
               </div>
             </div>
           </div>
+
+          {/* 新增：交通方式與停車資訊 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-600">交通偏好</label>
+              <div className="relative">
+                {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" />}
+                <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-sm md:text-base">
+                  <option value="public">大眾交通</option>
+                  <option value="self_driving">自駕</option>
+                </select>
+              </div>
+            </div>
+            
+            {basicData.transportMode === 'self_driving' && (
+              <div className="space-y-2 flex items-center h-full pt-6">
+                <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-3 rounded-xl border border-slate-200 w-full hover:bg-slate-100 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    name="needParking" 
+                    checked={basicData.needParking} 
+                    onChange={handleBasicChange} 
+                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" 
+                  />
+                  <span className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                    <ParkingCircle className="w-5 h-5 text-slate-500" />
+                    是否提供停車資訊
+                  </span>
+                </label>
+              </div>
+            )}
+          </div>
         </section>
 
         <hr className="border-slate-100" />
 
+        {/* 新增：特殊要求與價位 */}
         <section className="space-y-4">
           <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
             <span className="bg-purple-100 p-2 rounded-lg text-purple-600"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
@@ -603,12 +655,26 @@ const App = () => {
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Plane className="w-5 h-5" /></span>航班資訊</h3>
-            <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
-              <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-              <span className="text-sm font-bold text-slate-600">複雜航班</span>
-            </label>
+            
+            <div className="flex items-center gap-4">
+               {/* 新增：無航班勾選 */}
+               <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500" />
+                <span className="text-sm font-bold text-slate-600">無 (不需航班)</span>
+              </label>
+
+              {basicData.hasFlights && (
+                <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
+                  <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
+                  <span className="text-sm font-bold text-slate-600">複雜航班</span>
+                </label>
+              )}
+            </div>
           </div>
-          {!basicData.isMultiCityFlight ? (
+          
+          {/* 根據 hasFlights 決定是否顯示航班輸入 */}
+          {basicData.hasFlights && (
+            !basicData.isMultiCityFlight ? (
             <div className="bg-slate-50/50 p-4 md:p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
               {[ { label: '去程', key: 'outbound', color: 'text-emerald-600' }, { label: '中轉', key: 'transit', color: 'text-amber-600' }, { label: '回程', key: 'inbound', color: 'text-blue-600' } ].map((row) => (
                 <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
@@ -641,7 +707,8 @@ const App = () => {
               ))}
               <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-400 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增航段</button>
             </div>
-          )}
+          ))}
+
           <div className="flex items-center gap-3 pt-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
              <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
              <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機入境觀光</label>
