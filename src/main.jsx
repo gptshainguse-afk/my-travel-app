@@ -33,7 +33,7 @@ const App = () => {
   // --- 表單資料 ---
   const [basicData, setBasicData] = useState({
     destinations: '福岡',
-    dates: '2024-12-08 to 2024-12-12',
+    dates: '2025-12-08 to 2025-12-12',
     type: '綜合 (購物+文化)',
     travelers: 2,
     hasTransitTour: true,
@@ -41,9 +41,9 @@ const App = () => {
   });
 
   const [simpleFlights, setSimpleFlights] = useState({
-    outbound: { date: '2024-12-08', time: '16:55', code: 'CI116', airport: 'FUK', type: '去程' },
-    transit:  { date: '2024-12-12', time: '12:10', code: 'TW232', airport: 'TAE', type: '中轉' },
-    inbound:  { date: '2024-12-12', time: '22:40', code: 'TW663', airport: 'TPE', type: '回程' },
+    outbound: { date: '2025-12-08', time: '16:55', code: 'IT720', airport: 'FUK', type: '去程' },
+    transit:  { date: '2025-12-12', time: '12:10', code: 'TW214', airport: 'TAE', type: '中轉' },
+    inbound:  { date: '2025-12-12', time: '22:40', code: 'TW663', airport: 'TPE', type: '回程' },
   });
 
   const [multiFlights, setMultiFlights] = useState([
