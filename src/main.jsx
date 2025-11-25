@@ -81,6 +81,7 @@ const App = () => {
   const [savedPlans, setSavedPlans] = useState([]);
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
+  const [showCopyMenu, setShowCopyMenu] = useState(false); // 新增：控制複製選單顯示
 
   const printRef = useRef();
   const fileInputRef = useRef();
@@ -250,14 +251,23 @@ const App = () => {
     document.body.removeChild(textArea);
   };
 
-  const handleShareText = () => {
+  // --- 新增：處理複製文字的邏輯 (支援簡約與詳細模式) ---
+  const handleShareText = (mode = 'simple') => {
     if (!itineraryData) return;
+    
     let text = `${basicData.destinations}\n`;
+    
     itineraryData.days.forEach(day => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
-        const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
-        text += `${item.time}｜${item.title}｜${desc}\n`;
+        if (mode === 'simple') {
+          // 簡約模式：時間｜地點
+          text += `${item.time}｜${item.title}\n`;
+        } else {
+          // 詳細模式：時間｜地點｜預定建議
+          const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
+          text += `${item.time}｜${item.title}｜${desc}\n`;
+        }
       });
     });
     
@@ -271,6 +281,9 @@ const App = () => {
     } else {
       fallbackCopyTextToClipboard(text);
     }
+    
+    // 複製完畢後關閉選單
+    setShowCopyMenu(false);
   };
 
   const generateItinerary = async () => {
@@ -622,9 +635,33 @@ const App = () => {
               <p className="text-slate-600 max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
             </div>
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
-              <button onClick={handleShareText} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500 flex items-center gap-2" title="複製文字分享">
-                {copySuccess ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5" />}
-              </button>
+              <div className="relative">
+                <button 
+                  onClick={() => setShowCopyMenu(!showCopyMenu)} 
+                  className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500 flex items-center gap-2" 
+                  title="複製文字分享"
+                >
+                  {copySuccess ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5" />}
+                </button>
+                
+                {showCopyMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-32 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
+                    <button 
+                      onClick={() => handleShareText('simple')}
+                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold border-b border-slate-50"
+                    >
+                      簡約內容
+                    </button>
+                    <button 
+                      onClick={() => handleShareText('detailed')}
+                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold"
+                    >
+                      詳細內容
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button onClick={handleExportPDF} disabled={isExporting} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 PDF (使用瀏覽器列印)">
                 {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
               </button>
@@ -691,7 +728,7 @@ const App = () => {
                         </h4>
                       </div>
                       {/* Hide map button on print */}
-                      <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 md:gap-2 text-blue-500 hover:text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-full bg-white border border-blue-100 shadow-sm text-xs md:text-sm print:hidden">
+                      <a href="#" className="flex items-center gap-1 md:gap-2 text-blue-500 px-3 py-1.5 rounded-full bg-white border border-blue-100 shadow-sm text-xs md:text-sm print:hidden">
                         <Map className="w-3 h-3 md:w-4 md:h-4" /> <span className="font-bold">地圖</span>
                       </a>
                     </div>
