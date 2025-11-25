@@ -41,6 +41,143 @@ const usePersistentState = (key, initialValue) => {
   return [state, setState];
 };
 
+// --- 獨立出的單日行程元件 (供網頁版與列印版共用) ---
+const DayTimeline = ({ day, isPrintMode = false }) => {
+  return (
+    <div className={`bg-white/80 backdrop-blur rounded-3xl shadow-xl min-h-[600px] overflow-hidden border border-white/50 
+      ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
+      
+      {/* Day Header */}
+      <div className={`bg-slate-800 text-white p-6 md:p-10 relative overflow-hidden 
+        ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
+        {!isPrintMode && (
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/4 blur-3xl"></div>
+        )}
+        <div className="relative z-10">
+           <h3 className={`text-3xl md:text-5xl font-extrabold mb-2 ${isPrintMode ? 'text-black text-4xl' : ''}`}>
+             {isPrintMode && <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>}
+             {day.city}
+           </h3>
+           <p className={`text-blue-200 text-base md:text-xl font-medium flex items-center gap-2 ${isPrintMode ? 'text-slate-700' : ''}`}>
+             <Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${isPrintMode ? 'hidden' : ''}`} /> 
+             {day.title}
+           </p>
+        </div>
+      </div>
+
+      {/* Timeline Content */}
+      <div className={`p-4 md:p-12 relative ${isPrintMode ? 'p-0' : ''}`}>
+        <div className={`absolute left-[35px] md:left-[59px] top-12 bottom-12 w-0.5 bg-gradient-to-b from-slate-200 via-slate-300 to-slate-200 ${isPrintMode ? 'hidden' : ''}`}></div>
+        <div className={`space-y-8 md:space-y-12 ${isPrintMode ? 'space-y-6' : ''}`}>
+          {day.timeline.map((item, idx) => (
+            <div key={idx} className="relative flex gap-4 md:gap-8 group break-inside-avoid">
+              
+              {/* Icon (網頁版顯示，列印版為了省空間隱藏或簡化) */}
+              <div className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 
+                ${isPrintMode ? 'hidden' : 
+                  item.type === 'flight' ? 'bg-indigo-500 text-white' : 
+                  item.type === 'meal' ? 'bg-orange-500 text-white' : 
+                  item.type === 'transport' ? 'bg-slate-500 text-white' : 
+                  item.type === 'activity' ? 'bg-pink-500 text-white' : 
+                  'bg-blue-500 text-white'
+                }`}>
+                {item.type === 'flight' && <Plane className="w-5 h-5 md:w-6 md:h-6" />}
+                {item.type === 'transport' && <Train className="w-5 h-5 md:w-6 md:h-6" />}
+                {item.type === 'meal' && <Utensils className="w-5 h-5 md:w-6 md:h-6" />}
+                {item.type === 'hotel' && <Hotel className="w-5 h-5 md:w-6 md:h-6" />}
+                {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
+              </div>
+
+              <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 
+                ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
+                <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
+                  <div>
+                    <div className={`inline-flex items-center gap-2 bg-slate-100 text-slate-600 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-xs font-bold mb-2 ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`}>
+                      <span className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-slate-400 ${isPrintMode ? 'hidden' : ''}`}></span>
+                      {item.time}
+                    </div>
+                    <h4 className="font-bold text-xl md:text-2xl text-slate-800 flex flex-wrap items-center gap-2 md:gap-3">
+                      {item.title}
+                      {item.price_level && (
+                        <span className={`text-[10px] md:text-xs px-2 py-0.5 rounded border 
+                          ${isPrintMode ? 'border-black text-black' : 
+                            item.price_level === 'High' ? 'bg-red-50 text-red-600 border-red-100' : 
+                            item.price_level === 'Mid' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' : 
+                            'bg-green-50 text-green-600 border-green-100'
+                          }`}>
+                          {item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}
+                        </span>
+                      )}
+                    </h4>
+                  </div>
+                  <a 
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className={`flex items-center gap-1 md:gap-2 text-blue-500 hover:text-blue-600 hover:bg-blue-50 px-3 py-1.5 md:px-4 md:py-2 rounded-full transition-colors bg-white border border-blue-100 shadow-sm text-xs md:text-sm ${isPrintMode ? 'hidden' : ''}`}
+                  >
+                    <Map className="w-3 h-3 md:w-4 md:h-4" /> <span className="font-bold">地圖</span>
+                  </a>
+                </div>
+                
+                <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>
+                  {item.description}
+                </div>
+
+                {item.transport_detail && (
+                  <div className={`bg-slate-50 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 border border-slate-100 ${isPrintMode ? 'bg-transparent border border-slate-300' : ''}`}>
+                    <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><Train className="w-4 h-4 text-slate-500" /></div>
+                    <div className="text-xs md:text-sm text-slate-600 flex-1">
+                      <span className="block font-bold text-slate-800 mb-1">交通建議</span>
+                      {item.transport_detail}
+                    </div>
+                  </div>
+                )}
+                
+                {item.warnings_tips && (
+                  <div className={`bg-amber-50 border border-amber-100 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 ${isPrintMode ? 'bg-transparent border border-black' : ''}`}>
+                    <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><AlertTriangle className="w-4 h-4 text-amber-500" /></div>
+                    <div className="text-xs md:text-sm text-amber-800 flex-1">
+                      <span className="block font-bold text-amber-900 mb-1">重要提醒 (Tips)</span>
+                      {item.warnings_tips}
+                    </div>
+                  </div>
+                )}
+
+                {item.menu_recommendations && (
+                  <div className={`mt-4 md:mt-6 border-t border-slate-100 pt-3 md:pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}>
+                    <h5 className="text-xs md:text-sm font-bold text-orange-600 mb-2 md:mb-3 flex items-center gap-2"><Globe className={`w-4 h-4 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5>
+                    <div className={`bg-orange-50/50 rounded-xl overflow-hidden border border-orange-100 overflow-x-auto ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}>
+                      <table className="w-full text-xs md:text-sm text-left min-w-[300px]">
+                        <thead className={`bg-orange-100 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}>
+                          <tr>
+                            <th className="p-2 md:p-3 pl-3 md:pl-4 font-bold">當地菜名</th>
+                            <th className="p-2 md:p-3 font-bold">中文</th>
+                            <th className="p-2 md:p-3 font-bold">預估價格</th>
+                          </tr>
+                        </thead>
+                        <tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>
+                          {item.menu_recommendations.map((menu, mIdx) => (
+                            <tr key={mIdx} className={`hover:bg-orange-50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}>
+                              <td className="p-2 md:p-3 pl-3 md:pl-4 font-medium text-orange-900">{menu.local}</td>
+                              <td className="p-2 md:p-3">{menu.cn}</td>
+                              <td className="p-2 md:p-3 text-slate-500 font-mono">{menu.price}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
   const [step, setStep] = useState('input'); 
   
@@ -81,7 +218,7 @@ const App = () => {
   const [savedPlans, setSavedPlans] = useState([]);
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
-  const [showCopyMenu, setShowCopyMenu] = useState(false); // 新增：控制複製選單顯示
+  const [showCopyMenu, setShowCopyMenu] = useState(false);
 
   const printRef = useRef();
   const fileInputRef = useRef();
@@ -251,7 +388,6 @@ const App = () => {
     document.body.removeChild(textArea);
   };
 
-  // --- 新增：處理複製文字的邏輯 (支援簡約與詳細模式) ---
   const handleShareText = (mode = 'simple') => {
     if (!itineraryData) return;
     
@@ -261,10 +397,8 @@ const App = () => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
         if (mode === 'simple') {
-          // 簡約模式：時間｜地點
           text += `${item.time}｜${item.title}\n`;
         } else {
-          // 詳細模式：時間｜地點｜預定建議
           const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
           text += `${item.time}｜${item.title}｜${desc}\n`;
         }
@@ -282,7 +416,6 @@ const App = () => {
       fallbackCopyTextToClipboard(text);
     }
     
-    // 複製完畢後關閉選單
     setShowCopyMenu(false);
   };
 
@@ -691,76 +824,18 @@ const App = () => {
           ))}
         </div>
 
-        {/* Timeline Content (Print Area) */}
-        <div ref={printRef} className="bg-white/80 backdrop-blur rounded-3xl shadow-xl min-h-[600px] overflow-hidden border border-white/50 print:shadow-none print:border-none print:bg-white print:min-h-0 print:overflow-visible" id="itinerary-content">
-          <div className="bg-slate-800 text-white p-6 md:p-10 relative overflow-hidden print:bg-white print:text-black print:p-0 print:mb-6">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/4 blur-3xl print:hidden"></div>
-            <div className="relative z-10">
-               <h3 className="text-3xl md:text-5xl font-extrabold mb-2 print:text-black">{currentDay.city}</h3>
-               <p className="text-blue-200 text-base md:text-xl font-medium flex items-center gap-2 print:text-black"><Sparkles className="w-4 h-4 md:w-5 md:h-5 print:hidden" /> {currentDay.title}</p>
-            </div>
-          </div>
+        {/* Timeline Content (Normal View - Single Day) */}
+        <div className="print:hidden">
+           <DayTimeline day={currentDay} isPrintMode={false} />
+        </div>
 
-          <div className="p-4 md:p-12 relative print:p-0">
-            <div className="absolute left-[35px] md:left-[59px] top-12 bottom-12 w-0.5 bg-gradient-to-b from-slate-200 via-slate-300 to-slate-200 print:hidden"></div>
-            <div className="space-y-8 md:space-y-12 print:space-y-6">
-              {currentDay.timeline.map((item, idx) => (
-                <div key={idx} className="relative flex gap-4 md:gap-8 group break-inside-avoid print:block">
-                  {/* Icon (Hidden on Print to save space/ink) */}
-                  <div className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 print:hidden ${item.type === 'flight' ? 'bg-indigo-500 text-white' : item.type === 'meal' ? 'bg-orange-500 text-white' : item.type === 'transport' ? 'bg-slate-500 text-white' : item.type === 'activity' ? 'bg-pink-500 text-white' : 'bg-blue-500 text-white'}`}>
-                    {item.type === 'flight' && <Plane className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'transport' && <Train className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'meal' && <Utensils className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'hotel' && <Hotel className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
-                  </div>
-
-                  <div className="flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 print:shadow-none print:border-l-4 print:border-slate-300 print:rounded-none print:pl-4 print:mb-4">
-                    <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
-                      <div>
-                        <div className="inline-flex items-center gap-2 bg-slate-100 text-slate-600 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-xs font-bold mb-2 print:bg-transparent print:p-0 print:text-black">
-                          <span className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-slate-400 print:hidden"></span>
-                          {item.time}
-                        </div>
-                        <h4 className="font-bold text-xl md:text-2xl text-slate-800 flex flex-wrap items-center gap-2 md:gap-3 print:text-black">
-                          {item.title}
-                          {item.price_level && <span className="text-[10px] md:text-xs px-2 py-0.5 rounded border border-slate-300 text-slate-600 print:border-black print:text-black">{item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}</span>}
-                        </h4>
-                      </div>
-                      {/* Hide map button on print */}
-                      <a href="#" className="flex items-center gap-1 md:gap-2 text-blue-500 px-3 py-1.5 rounded-full bg-white border border-blue-100 shadow-sm text-xs md:text-sm print:hidden">
-                        <Map className="w-3 h-3 md:w-4 md:h-4" /> <span className="font-bold">地圖</span>
-                      </a>
-                    </div>
-                    
-                    <div className="text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 print:text-black print:border-none print:pl-0">
-                      {item.description}
-                    </div>
-
-                    {item.transport_detail && <div className="bg-slate-50 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 border border-slate-100 print:bg-transparent print:border print:border-slate-300"><div className="bg-white p-2 rounded-full shadow-sm shrink-0 print:hidden"><Train className="w-4 h-4 text-slate-500" /></div><div className="text-xs md:text-sm text-slate-600 flex-1 print:text-black"><span className="block font-bold text-slate-800 mb-1 print:text-black">交通建議</span>{item.transport_detail}</div></div>}
-                    
-                    {item.warnings_tips && <div className="bg-amber-50 border border-amber-100 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 print:border print:border-black print:bg-transparent"><div className="bg-white p-2 rounded-full shadow-sm shrink-0 print:hidden"><AlertTriangle className="w-4 h-4 text-amber-500" /></div><div className="text-xs md:text-sm text-amber-800 flex-1 print:text-black"><span className="block font-bold text-amber-900 mb-1 print:text-black">重要提醒 (Tips)</span>{item.warnings_tips}</div></div>}
-
-                    {item.menu_recommendations && (
-                      <div className="mt-4 md:mt-6 border-t border-slate-100 pt-3 md:pt-4 print:border-slate-300">
-                        <h5 className="text-xs md:text-sm font-bold text-orange-600 mb-2 md:mb-3 flex items-center gap-2 print:text-black"><Globe className="w-4 h-4 print:hidden" /> 點餐翻譯小幫手</h5>
-                        <div className="bg-orange-50/50 rounded-xl overflow-hidden border border-orange-100 overflow-x-auto print:bg-transparent print:border-slate-300">
-                          <table className="w-full text-xs md:text-sm text-left min-w-[300px]">
-                            <thead className="bg-orange-100 text-orange-800 print:bg-slate-100 print:text-black"><tr><th className="p-2 md:p-3 pl-3 md:pl-4 font-bold">當地菜名</th><th className="p-2 md:p-3 font-bold">中文</th><th className="p-2 md:p-3 font-bold">預估價格</th></tr></thead>
-                            <tbody className="divide-y divide-orange-100 text-slate-700 print:divide-slate-300">
-                              {item.menu_recommendations.map((menu, mIdx) => (
-                                <tr key={mIdx} className="hover:bg-orange-50 transition-colors print:text-black"><td className="p-2 md:p-3 pl-3 md:pl-4 font-medium text-orange-900 print:text-black">{menu.local}</td><td className="p-2 md:p-3">{menu.cn}</td><td className="p-2 md:p-3 text-slate-500 font-mono print:text-black">{menu.price}</td></tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+        {/* Printable View (All Days) */}
+        <div className="hidden print:block">
+           {itineraryData.days.map((day, idx) => (
+             <div key={idx} className="break-before-page">
+               <DayTimeline day={day} isPrintMode={true} />
+             </div>
+           ))}
         </div>
       </div>
     );
