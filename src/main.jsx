@@ -201,8 +201,10 @@ const App = () => {
     itineraryData.days.forEach(day => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
-        // 格式：時間｜地點
-        text += `${item.time}｜${item.title}\n`;
+        // 格式：時間｜地點｜預定建議是做什麼
+        // 移除 description 中的換行符號並簡化空白，保持單行格式
+        const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
+        text += `${item.time}｜${item.title}｜${desc}\n`;
       });
     });
     
