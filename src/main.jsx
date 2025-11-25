@@ -6,11 +6,12 @@ import {
   Loader2, Sparkles, Train, Globe, Plus, 
   Trash2, ChevronDown, ChevronUp, Heart,
   List, ArrowLeft, BookOpen, Search, Key, 
-  MessageSquare, Banknote, Share2, Download, Copy, Check
+  MessageSquare, Banknote, Share2, Download, Copy, Check,
+  FileJson, Upload // 新增 Icon
 } from 'lucide-react';
 
-// 【注意】在本地開發時，請取消下一行的註解以載入樣式
-// import './index.css'; 
+// 【已修復】取消註解以載入樣式，解決主頁 CSS 出錯問題
+import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 const usePersistentState = (key, initialValue) => {
@@ -81,7 +82,10 @@ const App = () => {
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
 
+  // 用於 PDF 截圖的參照點
   const printRef = useRef();
+  // 用於檔案上傳的參照點
+  const fileInputRef = useRef();
 
   useEffect(() => {
     try {
@@ -159,6 +163,69 @@ const App = () => {
     return savedPlans.some(p => p.created === itineraryData.created);
   };
 
+  // --- 匯出 JSON (分享規劃) ---
+  const handleExportJSON = () => {
+    if (!itineraryData) {
+      alert('目前沒有可匯出的行程規劃');
+      return;
+    }
+    
+    // 打包所有相關資料，確保對方載入後能看到完整的設定
+    const dataToExport = {
+      version: 1,
+      timestamp: Date.now(),
+      basicData,
+      simpleFlights,
+      multiFlights,
+      accommodations,
+      itineraryData
+    };
+
+    const dataStr = JSON.stringify(dataToExport, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Trip_${basicData.destinations}_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // --- 匯入 JSON (載入規劃) ---
+  const handleImportJSON = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target.result);
+        
+        // 簡單的格式驗證
+        if (imported.basicData && imported.itineraryData) {
+          if (confirm(`確定要載入 "${imported.basicData.destinations}" 的行程嗎？當前的輸入將被覆蓋。`)) {
+            setBasicData(imported.basicData);
+            setSimpleFlights(imported.simpleFlights);
+            setMultiFlights(imported.multiFlights);
+            setAccommodations(imported.accommodations);
+            setItineraryData(imported.itineraryData);
+            setStep('result');
+            alert('行程載入成功！');
+          }
+        } else {
+          alert('無效的行程檔案格式');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('檔案讀取失敗，請確認檔案是否損毀');
+      }
+      // 清空 input，確保下次選同一個檔案也能觸發
+      event.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   const handleExportPDF = () => {
     window.print();
   };
@@ -167,16 +234,13 @@ const App = () => {
   const fallbackCopyTextToClipboard = (text) => {
     var textArea = document.createElement("textarea");
     textArea.value = text;
-    
     textArea.style.top = "0";
     textArea.style.left = "0";
     textArea.style.position = "fixed";
     textArea.style.opacity = "0"; 
-
     document.body.appendChild(textArea);
     textArea.focus();
     textArea.select();
-
     try {
       var successful = document.execCommand('copy');
       if (successful) {
@@ -188,27 +252,20 @@ const App = () => {
     } catch (err) {
       console.error('Fallback: Oops, unable to copy', err);
     }
-
     document.body.removeChild(textArea);
   };
 
   const handleShareText = () => {
     if (!itineraryData) return;
-    
-    // --- 簡約版文字格式 ---
     let text = `${basicData.destinations}\n`;
-    
     itineraryData.days.forEach(day => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
-        // 格式：時間｜地點｜預定建議是做什麼
-        // 移除 description 中的換行符號並簡化空白，保持單行格式
         const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
         text += `${item.time}｜${item.title}｜${desc}\n`;
       });
     });
     
-    // 優先嘗試現代 API，失敗則使用 fallback
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(() => {
         setCopySuccess(true);
@@ -476,9 +533,30 @@ const App = () => {
       </div>
 
       <div className="space-y-4 pt-4">
-        <button onClick={generateItinerary} className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100">
-          <Sparkles className="w-6 h-6 animate-pulse" /> 開始 AI 一鍵規劃
-        </button>
+        <div className="flex gap-2">
+          {/* 隱藏的檔案上傳欄位 */}
+          <input 
+            type="file" 
+            accept=".json" 
+            ref={fileInputRef} 
+            style={{ display: 'none' }} 
+            onChange={handleImportJSON} 
+          />
+          <button 
+            onClick={() => fileInputRef.current.click()}
+            className="flex-1 bg-white border-2 border-blue-600 text-blue-600 font-bold py-5 rounded-2xl shadow-md hover:bg-blue-50 hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl"
+          >
+            <Upload className="w-6 h-6" /> 匯入 JSON 規劃
+          </button>
+          
+          <button 
+            onClick={generateItinerary} 
+            className="flex-[2] bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100"
+          >
+            <Sparkles className="w-6 h-6 animate-pulse" /> 開始 AI 一鍵規劃
+          </button>
+        </div>
+
         <button onClick={() => setStep('saved_list')} className="w-full bg-white border-2 border-slate-200 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-50 hover:border-slate-300 transition-all flex justify-center items-center gap-2">
           <List className="w-5 h-5" /> 查看已儲存的規劃 ({savedPlans.length})
         </button>
@@ -554,6 +632,9 @@ const App = () => {
               </button>
               <button onClick={handleExportPDF} disabled={isExporting} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 PDF (使用瀏覽器列印)">
                 {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+              </button>
+              <button onClick={handleExportJSON} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 JSON (分享規劃)">
+                <FileJson className="w-5 h-5" />
               </button>
               <button onClick={saveCurrentPlan} className={`p-3 md:p-4 rounded-full transition-all shadow-md ${isSaved ? 'bg-red-50 text-red-500' : 'bg-white text-slate-400'}`}>
                 <Heart className={`w-5 h-5 ${isSaved ? 'fill-current' : ''}`} />
