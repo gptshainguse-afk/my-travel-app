@@ -7,7 +7,7 @@ import {
   Trash2, ChevronDown, ChevronUp, Heart,
   List, ArrowLeft, BookOpen, Search, Key, 
   MessageSquare, Banknote, Share2, Download, Copy, Check,
-  FileJson, Upload, Car, ParkingCircle // 新增 Icon
+  FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt // 新增 Icon
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -62,6 +62,24 @@ const DayTimeline = ({ day, isPrintMode = false }) => {
              <Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${isPrintMode ? 'hidden' : ''}`} /> 
              {day.title}
            </p>
+
+           {/* 新增：天氣與穿著建議區塊 */}
+           {(day.weather_forecast || day.clothing_suggestion) && (
+             <div className={`mt-4 flex flex-wrap gap-4 ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
+               {day.weather_forecast && (
+                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-blue-50'}`}>
+                   <CloudSun className="w-4 h-4" />
+                   <span>{day.weather_forecast}</span>
+                 </div>
+               )}
+               {day.clothing_suggestion && (
+                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-orange-50'}`}>
+                   <Shirt className="w-4 h-4" />
+                   <span>{day.clothing_suggestion}</span>
+                 </div>
+               )}
+             </div>
+           )}
         </div>
       </div>
 
@@ -191,9 +209,8 @@ const App = () => {
     travelers: 2,
     hasTransitTour: true,
     isMultiCityFlight: false,
-    // 新增：航班有無、交通方式、停車需求
     hasFlights: true,
-    transportMode: 'public', // 'public' | 'self_driving'
+    transportMode: 'public', 
     needParking: false,
     specialRequests: '',
     priceRanges: { high: false, medium: false, low: false }
@@ -431,7 +448,6 @@ const App = () => {
     setStep('loading');
     setErrorMsg('');
 
-    // 處理航班字串 (如果無航班則不傳送航班資訊)
     let flightsString = "No flights involved.";
     if (basicData.hasFlights) {
       if (basicData.isMultiCityFlight) {
@@ -449,7 +465,6 @@ const App = () => {
     if (basicData.priceRanges.low) selectedPrices.push("低 (<300 TWD)");
     const priceConstraint = selectedPrices.length > 0 ? selectedPrices.join(', ') : "無限制";
 
-    // 處理交通與停車需求
     const transportConstraint = basicData.transportMode === 'self_driving' 
       ? "Self-driving (Prioritize driving routes/distances)" 
       : "Public Transport";
@@ -477,6 +492,7 @@ const App = () => {
       1. Logistics: Realistic travel times + buffer.
       2. Culture & History: detailed background story for historical sites.
       3. Food: Menu translation (Local | Chinese | Est. Price).
+      4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
       
       JSON Schema Structure:
       {
@@ -489,6 +505,8 @@ const App = () => {
             "date": "YYYY-MM-DD",
             "city": "City Name",
             "title": "Theme",
+            "weather_forecast": "String (e.g. 晴時多雲 15°C-20°C)", 
+            "clothing_suggestion": "String (e.g. 建議穿著薄長袖與外套)",
             "timeline": [
               {
                 "time": "HH:MM",
