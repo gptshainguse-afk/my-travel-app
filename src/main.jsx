@@ -9,10 +9,11 @@ import {
   MessageSquare, Banknote, Share2, Download, Copy, Check
 } from 'lucide-react';
 
-// 【注意】在本地開發時，請取消下一行的註解以載入樣式
-// import './index.css'; 
+// 恢復引入 CSS，確保您本地開發時樣式正常顯示
+import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
+// 這能大幅簡化程式碼，讓每個欄位都能自動記憶
 const usePersistentState = (key, initialValue) => {
   const [state, setState] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -91,7 +92,7 @@ const App = () => {
   // 用於 PDF 截圖的參照點
   const printRef = useRef();
 
-  // 初始化讀取已儲存的行程
+  // 初始化讀取已儲存的行程 (已儲存的結果列表)
   useEffect(() => {
     try {
       const saved = localStorage.getItem('my_travel_plans');
