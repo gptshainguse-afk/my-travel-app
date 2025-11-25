@@ -17,16 +17,6 @@ const App = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [savedPlans, setSavedPlans] = useState([]);
 
-  // --- 自動注入 Tailwind CSS (確保樣式正常顯示) ---
-  useEffect(() => {
-    const existingScript = document.querySelector('script[src*="tailwindcss"]');
-    if (!existingScript) {
-      const script = document.createElement('script');
-      script.src = "https://cdn.tailwindcss.com";
-      document.head.appendChild(script);
-    }
-  }, []);
-
   // 初始化讀取 localStorage
   useEffect(() => {
     try {
