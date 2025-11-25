@@ -21,6 +21,10 @@ const App = () => {
   // 初始化讀取 localStorage
   useEffect(() => {
     try {
+      const storedKey = localStorage.getItem('gemini_api_key');
+      if (storedKey) {
+        setApiKey(storedKey);
+      }
       const saved = localStorage.getItem('my_travel_plans');
       if (saved) {
         setSavedPlans(JSON.parse(saved));
