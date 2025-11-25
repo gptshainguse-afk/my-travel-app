@@ -1,30 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import './index.css'; 
 import { 
   Plane, Hotel, MapPin, Users, Calendar, 
   Utensils, AlertTriangle, Map, DollarSign, 
   Loader2, Sparkles, Train, Globe, Plus, 
   Trash2, ChevronDown, ChevronUp, Heart,
-  List, ArrowLeft, BookOpen, Search
+  List, ArrowLeft, BookOpen, Search, Key
 } from 'lucide-react';
+import './index.css';
 
 const App = () => {
   // --- 狀態管理 ---
   const [step, setStep] = useState('input'); // input, loading, result, saved_list
-  const [apiKey, setApiKey] = useState('');
+  
+  // 【關鍵修改 1】初始化狀態時，直接從 localStorage 讀取
+  // 這樣網頁一重新整理，Key 就會自動填入
+  const [apiKey, setApiKey] = useState(() => {
+    return localStorage.getItem('gemini_api_key') || '';
+  });
+
   const [itineraryData, setItineraryData] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedPlans, setSavedPlans] = useState([]);
 
-  // 初始化讀取 localStorage
+  // 【關鍵修改 2】監聽 apiKey 的變化，自動存入 localStorage
+  useEffect(() => {
+    if (apiKey) {
+      localStorage.setItem('gemini_api_key', apiKey);
+    }
+  }, [apiKey]);
+
+  // 初始化讀取已儲存的行程 (與 API Key 分開處理，比較乾淨)
   useEffect(() => {
     try {
-      const storedKey = localStorage.getItem('gemini_api_key');
-      if (storedKey) {
-        setApiKey(storedKey);
-      }
       const saved = localStorage.getItem('my_travel_plans');
       if (saved) {
         setSavedPlans(JSON.parse(saved));
@@ -140,6 +149,12 @@ const App = () => {
     if (!itineraryData.created) {
       setItineraryData(prev => ({ ...prev, created: Date.now() }));
     }
+  };
+
+  // 新增：清除 API Key 的功能 (安全考量)
+  const clearApiKey = () => {
+    setApiKey('');
+    localStorage.removeItem('gemini_api_key');
   };
 
   const loadSavedPlan = (plan) => {
@@ -259,18 +274,33 @@ const App = () => {
       </div>
 
       <div className="space-y-6">
-        {/* API Key */}
+        {/* API Key 輸入區塊 (包含清除按鈕) */}
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-2xl border border-blue-100 shadow-inner">
-          <label className="block text-sm font-bold text-blue-800 mb-2">Gemini API Key (必填)</label>
+          <div className="flex justify-between items-center mb-2">
+            <label className="block text-sm font-bold text-blue-800 flex items-center gap-2">
+              <Key className="w-4 h-4" /> Gemini API Key (必填)
+            </label>
+            {apiKey && (
+              <button 
+                onClick={clearApiKey} 
+                className="text-xs text-red-500 hover:text-red-700 underline transition-colors"
+              >
+                清除儲存的 Key
+              </button>
+            )}
+          </div>
           <div className="relative">
              <input 
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="貼上您的 API Key 以啟動 AI..."
+              placeholder="貼上您的 API Key (將自動儲存在本機)"
               className="w-full pl-4 pr-4 py-3 bg-white border border-blue-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all shadow-sm"
             />
           </div>
+          <p className="text-xs text-blue-400 mt-2">
+            * 您的 API Key 會加密儲存在您的瀏覽器中，方便下次使用。請勿在公共電腦使用。
+          </p>
         </div>
 
         {/* 基本資訊區塊 */}
@@ -719,7 +749,7 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-slate-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100 via-slate-100 to-slate-200 p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900">
-      <div id="tailwind-injector"></div>
+      {/* 移除了自動注入的 div */}
       {step === 'input' && renderInputForm()}
       {step === 'loading' && renderLoading()}
       {step === 'result' && renderResult()}
