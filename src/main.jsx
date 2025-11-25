@@ -7,11 +7,11 @@ import {
   Trash2, ChevronDown, ChevronUp, Heart,
   List, ArrowLeft, BookOpen, Search, Key, 
   MessageSquare, Banknote, Share2, Download, Copy, Check,
-  FileJson, Upload // 新增 Icon
+  FileJson, Upload
 } from 'lucide-react';
 
-// 【已修復】取消註解以載入樣式，解決主頁 CSS 出錯問題
-import './index.css'; 
+// 【注意】在本地開發時，請取消下一行的註解以載入樣式
+// import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 const usePersistentState = (key, initialValue) => {
@@ -82,9 +82,7 @@ const App = () => {
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
 
-  // 用於 PDF 截圖的參照點
   const printRef = useRef();
-  // 用於檔案上傳的參照點
   const fileInputRef = useRef();
 
   useEffect(() => {
@@ -163,14 +161,13 @@ const App = () => {
     return savedPlans.some(p => p.created === itineraryData.created);
   };
 
-  // --- 匯出 JSON (分享規劃) ---
+  // --- 匯出 JSON ---
   const handleExportJSON = () => {
     if (!itineraryData) {
       alert('目前沒有可匯出的行程規劃');
       return;
     }
     
-    // 打包所有相關資料，確保對方載入後能看到完整的設定
     const dataToExport = {
       version: 1,
       timestamp: Date.now(),
@@ -192,7 +189,7 @@ const App = () => {
     document.body.removeChild(link);
   };
 
-  // --- 匯入 JSON (載入規劃) ---
+  // --- 匯入 JSON ---
   const handleImportJSON = (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -202,7 +199,6 @@ const App = () => {
       try {
         const imported = JSON.parse(e.target.result);
         
-        // 簡單的格式驗證
         if (imported.basicData && imported.itineraryData) {
           if (confirm(`確定要載入 "${imported.basicData.destinations}" 的行程嗎？當前的輸入將被覆蓋。`)) {
             setBasicData(imported.basicData);
@@ -220,7 +216,6 @@ const App = () => {
         console.error(err);
         alert('檔案讀取失敗，請確認檔案是否損毀');
       }
-      // 清空 input，確保下次選同一個檔案也能觸發
       event.target.value = '';
     };
     reader.readAsText(file);
@@ -230,7 +225,7 @@ const App = () => {
     window.print();
   };
 
-  // --- 使用 execCommand 的複製功能 ---
+  // --- 複製功能 ---
   const fallbackCopyTextToClipboard = (text) => {
     var textArea = document.createElement("textarea");
     textArea.value = text;
@@ -696,7 +691,7 @@ const App = () => {
                         </h4>
                       </div>
                       {/* Hide map button on print */}
-                      <a href="#" className="flex items-center gap-1 md:gap-2 text-blue-500 px-3 py-1.5 rounded-full bg-white border border-blue-100 shadow-sm text-xs md:text-sm print:hidden">
+                      <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 md:gap-2 text-blue-500 hover:text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-full bg-white border border-blue-100 shadow-sm text-xs md:text-sm print:hidden">
                         <Map className="w-3 h-3 md:w-4 md:h-4" /> <span className="font-bold">地圖</span>
                       </a>
                     </div>
