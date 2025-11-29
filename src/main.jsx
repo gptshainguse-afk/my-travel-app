@@ -42,8 +42,8 @@ const usePersistentState = (key, initialValue) => {
   return [state, setState];
 };
 
-// --- 簡單的 SVG 圓餅圖元件 (不依賴外部套件) ---
-const SimplePieChart = ({ data, title }) => {
+// --- 簡單的 SVG 圓餅圖元件 ---
+const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
   if (!data || data.length === 0) return <div className="text-center text-slate-400 text-sm py-4">尚無資料</div>;
   
   const total = data.reduce((acc, item) => acc + item.value, 0);
@@ -52,7 +52,6 @@ const SimplePieChart = ({ data, title }) => {
   let cumulativePercent = 0;
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1', '#84cc16'];
 
-  // 產生圓餅圖路徑
   const slices = data.map((item, index) => {
     const startPercent = cumulativePercent;
     const percent = item.value / total;
@@ -65,7 +64,10 @@ const SimplePieChart = ({ data, title }) => {
     const y2 = Math.sin(2 * Math.PI * endPercent);
 
     const largeArcFlag = percent > 0.5 ? 1 : 0;
-    const pathData = `M 0 0 L ${x1} ${y1} A 1 1 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
+    // 避免單一項目 100% 時路徑錯誤
+    const pathData = percent === 1 
+      ? `M 1 0 A 1 1 0 1 1 -1 0 A 1 1 0 1 1 1 0 Z`
+      : `M 0 0 L ${x1} ${y1} A 1 1 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
 
     return { path: pathData, color: colors[index % colors.length], label: item.label, value: item.value, percent };
   });
@@ -84,21 +86,21 @@ const SimplePieChart = ({ data, title }) => {
             <div key={i} className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full" style={{ backgroundColor: slice.color }}></span>
               <span className="text-slate-600 font-medium">{slice.label}</span>
-              <span className="text-slate-400">{(slice.percent * 100).toFixed(1)}% (${slice.value.toLocaleString()})</span>
+              <span className="text-slate-400">{(slice.percent * 100).toFixed(1)}% ({currencySymbol}{Math.round(slice.value).toLocaleString()})</span>
             </div>
           ))}
         </div>
       </div>
-      <div className="mt-2 text-sm font-bold text-slate-800">總計: ${total.toLocaleString()}</div>
+      <div className="mt-2 text-sm font-bold text-slate-800">總計: {currencySymbol}{Math.round(total).toLocaleString()}</div>
     </div>
   );
 };
 
 // --- 帳本分析元件 ---
-const LedgerSummary = ({ expenses, dayIndex = null, travelers }) => {
-  const [viewMode, setViewMode] = useState('category'); // 'category' | 'person'
+const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
+  const [viewMode, setViewMode] = useState('category'); 
+  const { symbol } = currencySettings;
 
-  // 過濾出相關的帳務
   const relevantExpenses = useMemo(() => {
     if (dayIndex !== null) {
       return expenses.filter(e => e.dayIndex === dayIndex);
@@ -106,7 +108,6 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers }) => {
     return expenses;
   }, [expenses, dayIndex]);
 
-  // 分類統計
   const categoryData = useMemo(() => {
     const map = {};
     relevantExpenses.forEach(e => {
@@ -115,10 +116,9 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers }) => {
     return Object.entries(map).map(([label, value]) => ({ label, value }));
   }, [relevantExpenses]);
 
-  // 個人支出統計 (分攤金額)
   const personData = useMemo(() => {
     const map = {};
-    travelers.forEach(t => map[t] = 0); // 初始化
+    travelers.forEach(t => map[t] = 0);
     relevantExpenses.forEach(e => {
       const splitAmount = Number(e.amount) / (e.splitters.length || 1);
       e.splitters.forEach(person => {
@@ -163,17 +163,106 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers }) => {
         <SimplePieChart 
           data={viewMode === 'category' ? categoryData : personData} 
           title={viewMode === 'category' ? '消費項目比例' : '各旅行者分攤比例'} 
+          currencySymbol={symbol}
         />
       </div>
     </div>
   );
 };
 
-// --- 獨立出的單日行程元件 ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintMode = false }) => {
-  const [editingItem, setEditingItem] = useState(null); // { timelineIndex }
+// --- 消費表單元件 (優化版) ---
+const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
+  const [form, setForm] = useState({
+    item: '', category: '美食', amount: '', payer: travelers[0] || '', splitters: travelers, note: ''
+  });
 
-  // 新增消費項目
+  const isGoDutch = form.payer === '各付各';
+
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+  
+  const handleSplitterChange = (name) => {
+    // 各付各模式下，分攤者預設全選且建議不更動，但這裡還是允許彈性
+    setForm(prev => {
+      const newSplitters = prev.splitters.includes(name) 
+        ? prev.splitters.filter(n => n !== name) 
+        : [...prev.splitters, name];
+      return { ...prev, splitters: newSplitters };
+    });
+  };
+
+  const handleSubmit = () => {
+    if (!form.item || !form.amount) return alert("請輸入項目名稱與金額");
+    
+    let finalAmount = Number(form.amount);
+    
+    // 邏輯 1: 如果是各付各，總金額 = 輸入金額(單價) * 分攤人數
+    if (isGoDutch) {
+       finalAmount = finalAmount * form.splitters.length;
+    }
+
+    onSave({
+      ...form,
+      amount: finalAmount,
+      // 如果是各付各，記錄下單價以便備註查看，或者直接存入
+      note: isGoDutch ? `${form.note} (各付各: 單價 ${form.amount} x ${form.splitters.length}人)` : form.note
+    });
+  };
+
+  return (
+    <div className="mt-3 bg-emerald-50/50 p-4 rounded-lg border border-emerald-100 text-sm animate-in fade-in slide-in-from-top-2">
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="col-span-2 md:col-span-1">
+           <input name="item" placeholder="消費項目 (如: 拉麵)" value={form.item} onChange={handleChange} className="w-full p-2 border rounded outline-none focus:border-emerald-500" />
+        </div>
+        <div className="col-span-2 md:col-span-1 relative">
+           <div className="absolute left-3 top-2 text-slate-400">{currencySettings.symbol}</div>
+           <input 
+             name="amount" 
+             type="number" 
+             placeholder={isGoDutch ? "每人金額 (單價)" : "總金額"} 
+             value={form.amount} 
+             onChange={handleChange} 
+             className="w-full pl-8 p-2 border rounded outline-none focus:border-emerald-500" 
+           />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <select name="category" value={form.category} onChange={handleChange} className="p-2 border rounded bg-white">
+          <option>美食</option><option>娛樂</option><option>門票</option><option>購物</option><option>交通</option><option>小費</option><option>其他</option>
+        </select>
+        <select name="payer" value={form.payer} onChange={handleChange} className="p-2 border rounded bg-white">
+          {travelers.map(t => <option key={t} value={t}>{t} 先付</option>)}
+          <option value="各付各">各付各 (Go Dutch)</option>
+        </select>
+      </div>
+      
+      <div className="mb-3 bg-white p-2 rounded border border-slate-100">
+        <div className="flex justify-between items-center mb-1">
+           <div className="text-xs text-slate-500">分攤者 (預設全員):</div>
+           {isGoDutch && <div className="text-xs text-emerald-600 font-bold">總金額將自動計算: {currencySettings.symbol}{Number(form.amount) * form.splitters.length}</div>}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {travelers.map(t => (
+            <label key={t} className="flex items-center gap-1 cursor-pointer px-2 py-1 rounded hover:bg-slate-50 select-none">
+              <input type="checkbox" checked={form.splitters.includes(t)} onChange={() => handleSplitterChange(t)} className="w-3 h-3 text-emerald-500 rounded" /> 
+              <span className="text-slate-700">{t}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-emerald-100/50">
+        <button onClick={onCancel} className="px-4 py-1.5 text-slate-500 hover:bg-slate-100 rounded text-xs font-medium">取消</button>
+        <button onClick={handleSubmit} className="px-4 py-1.5 bg-emerald-500 text-white rounded hover:bg-emerald-600 text-xs font-bold shadow-sm">新增記帳</button>
+      </div>
+    </div>
+  );
+};
+
+// --- 單日行程表元件 ---
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false }) => {
+  const [editingItem, setEditingItem] = useState(null); 
+
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
       id: Date.now().toString(),
@@ -184,11 +273,17 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
     setExpenses(prev => [...prev, newExpense]);
   };
 
-  // 刪除消費項目
   const removeExpense = (id) => {
     if(confirm("確定要刪除這筆帳務嗎？")) {
       setExpenses(prev => prev.filter(e => e.id !== id));
     }
+  };
+
+  // 匯率換算輔助函數
+  const convertToHomeCurrency = (amount) => {
+     if (!currencySettings.rate || currencySettings.rate === 0) return '';
+     const homeAmount = Math.round(amount * currencySettings.rate);
+     return `(≈ NT$${homeAmount.toLocaleString()})`;
   };
 
   return (
@@ -256,7 +351,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
               <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 
                 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
                 
-                {/* Content Header */}
                 <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                   <div>
                     <div className={`inline-flex items-center gap-2 bg-slate-100 text-slate-600 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-xs font-bold mb-2 ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`}>
@@ -291,7 +385,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
                   {item.description}
                 </div>
 
-                {/* ... (Transport, Warnings, Menu - 省略以節省長度，邏輯不變) ... */}
+                {/* Transport, Warnings, Menu */}
                 {item.transport_detail && (
                   <div className={`bg-slate-50 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 border border-slate-100 ${isPrintMode ? 'bg-transparent border border-slate-300' : ''}`}>
                     <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><Train className="w-4 h-4 text-slate-500" /></div>
@@ -306,7 +400,33 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
                   </div>
                 )}
 
-                {/* --- 分帳功能區塊 (新增) --- */}
+                {item.menu_recommendations && (
+                  <div className={`mt-4 md:mt-6 border-t border-slate-100 pt-3 md:pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}>
+                    <h5 className="text-xs md:text-sm font-bold text-orange-600 mb-2 md:mb-3 flex items-center gap-2"><Globe className={`w-4 h-4 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5>
+                    <div className={`bg-orange-50/50 rounded-xl overflow-hidden border border-orange-100 overflow-x-auto ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}>
+                      <table className="w-full text-xs md:text-sm text-left min-w-[300px]">
+                        <thead className={`bg-orange-100 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}>
+                          <tr>
+                            <th className="p-2 md:p-3 pl-3 md:pl-4 font-bold">當地菜名</th>
+                            <th className="p-2 md:p-3 font-bold">中文</th>
+                            <th className="p-2 md:p-3 font-bold">預估價格</th>
+                          </tr>
+                        </thead>
+                        <tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>
+                          {item.menu_recommendations.map((menu, mIdx) => (
+                            <tr key={mIdx} className={`hover:bg-orange-50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}>
+                              <td className="p-2 md:p-3 pl-3 md:pl-4 font-medium text-orange-900">{menu.local}</td>
+                              <td className="p-2 md:p-3">{menu.cn}</td>
+                              <td className="p-2 md:p-3 text-slate-500 font-mono">{menu.price}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* --- 分帳功能區塊 --- */}
                 {!isPrintMode && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                      <div className="flex items-center justify-between mb-2">
@@ -316,26 +436,30 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
                        </button>
                      </div>
 
-                     {/* 既有的消費列表 */}
                      <div className="space-y-2">
                        {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
                          <div key={expense.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded border border-slate-100">
                            <div className="flex flex-col">
                              <span className="font-bold text-slate-700">{expense.item} ({expense.category})</span>
                              <span className="text-slate-500">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
+                             {expense.note && <span className="text-slate-400 italic scale-90 origin-left">{expense.note}</span>}
                            </div>
-                           <div className="flex items-center gap-3">
-                             <span className="font-mono font-bold text-slate-800">${expense.amount}</span>
-                             <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
+                           <div className="flex flex-col items-end gap-0.5">
+                             <div className="flex items-center gap-2">
+                               <span className="font-mono font-bold text-slate-800">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
+                               <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
+                             </div>
+                             {/* 顯示換算後金額 */}
+                             <span className="text-[10px] text-blue-500 font-medium">{convertToHomeCurrency(expense.amount)}</span>
                            </div>
                          </div>
                        ))}
                      </div>
 
-                     {/* 新增消費表單 */}
                      {editingItem === timelineIndex && (
                        <ExpenseForm 
                          travelers={travelers} 
+                         currencySettings={currencySettings}
                          onSave={(newItem) => {
                            addExpense(timelineIndex, newItem);
                            setEditingItem(null);
@@ -350,124 +474,73 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, isPrintM
           ))}
         </div>
         
-        {/* 當日帳本結算 */}
-        <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} />
+        <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
       </div>
     </div>
   );
 };
 
-// --- 新增消費表單元件 ---
-const ExpenseForm = ({ travelers, onSave, onCancel }) => {
-  const [form, setForm] = useState({
-    item: '', category: '美食', amount: '', payer: travelers[0] || '', splitters: travelers, note: ''
-  });
-
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
-  const handleSplitterChange = (name) => {
-    setForm(prev => {
-      const newSplitters = prev.splitters.includes(name) 
-        ? prev.splitters.filter(n => n !== name) 
-        : [...prev.splitters, name];
-      return { ...prev, splitters: newSplitters };
-    });
-  };
-
-  const handleSubmit = () => {
-    if (!form.item || !form.amount) return alert("請輸入項目名稱與金額");
-    onSave(form);
-  };
-
-  return (
-    <div className="mt-3 bg-emerald-50/50 p-3 rounded-lg border border-emerald-100 text-sm animate-in fade-in slide-in-from-top-2">
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <input name="item" placeholder="消費項目 (如: 拉麵)" value={form.item} onChange={handleChange} className="p-2 border rounded" />
-        <input name="amount" type="number" placeholder="金額" value={form.amount} onChange={handleChange} className="p-2 border rounded" />
-      </div>
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <select name="category" value={form.category} onChange={handleChange} className="p-2 border rounded bg-white">
-          <option>美食</option><option>娛樂</option><option>門票</option><option>購物</option><option>交通</option><option>小費</option><option>其他</option>
-        </select>
-        <select name="payer" value={form.payer} onChange={handleChange} className="p-2 border rounded bg-white">
-          {travelers.map(t => <option key={t} value={t}>{t} 先付</option>)}
-        </select>
-      </div>
-      <div className="mb-2">
-        <div className="text-xs text-slate-500 mb-1">分攤者:</div>
-        <div className="flex flex-wrap gap-2">
-          {travelers.map(t => (
-            <label key={t} className="flex items-center gap-1 cursor-pointer bg-white px-2 py-1 rounded border text-xs">
-              <input type="checkbox" checked={form.splitters.includes(t)} onChange={() => handleSplitterChange(t)} className="w-3 h-3" /> {t}
-            </label>
-          ))}
-        </div>
-      </div>
-      <div className="flex justify-end gap-2">
-        <button onClick={onCancel} className="px-3 py-1 text-slate-500 hover:bg-slate-100 rounded">取消</button>
-        <button onClick={handleSubmit} className="px-3 py-1 bg-emerald-500 text-white rounded hover:bg-emerald-600">新增</button>
-      </div>
-    </div>
-  );
-};
-
-// --- 貨幣換算 Modal ---
-const CurrencyModal = ({ onClose, defaultCurrency }) => {
+// --- 貨幣換算 Modal (連動全域設定) ---
+const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   const [amount, setAmount] = useState(1000);
-  const [rate, setRate] = useState(0.21); // 預設 JPY -> TWD
-  const [targetCurr, setTargetCurr] = useState('TWD');
-  const [baseCurr, setBaseCurr] = useState('JPY');
   
-  // 嘗試抓取匯率 (這裡用靜態模擬，實際可串接 API)
-  useEffect(() => {
-    // 這裡可以放 fetch('https://api.exchangerate-api.com/...')
-    // 目前先用模擬數據
-    if (baseCurr === 'JPY' && targetCurr === 'TWD') setRate(0.215);
-    if (baseCurr === 'KRW' && targetCurr === 'TWD') setRate(0.024);
-    if (baseCurr === 'USD' && targetCurr === 'TWD') setRate(31.5);
-  }, [baseCurr, targetCurr]);
+  const updateRate = (val) => {
+    setCurrencySettings(prev => ({ ...prev, rate: val }));
+  };
+
+  const updateSymbol = (val) => {
+    setCurrencySettings(prev => ({ ...prev, symbol: val }));
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-in zoom-in-95">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold flex items-center gap-2"><Coins className="w-5 h-5 text-yellow-500" /> 匯率換算</h3>
+          <h3 className="text-lg font-bold flex items-center gap-2"><Coins className="w-5 h-5 text-yellow-500" /> 匯率與幣別設定</h3>
           <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
         </div>
         <div className="space-y-4">
-          <div className="flex items-end gap-2">
-            <div className="flex-1">
-              <label className="text-xs text-slate-500">外幣 (當地)</label>
-              <select value={baseCurr} onChange={(e) => setBaseCurr(e.target.value)} className="w-full p-2 border rounded bg-slate-50">
-                <option value="JPY">JPY 日圓</option>
-                <option value="KRW">KRW 韓元</option>
-                <option value="USD">USD 美金</option>
-                <option value="EUR">EUR 歐元</option>
-              </select>
-            </div>
-            <div className="flex-1">
-              <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full p-2 border rounded text-right font-mono text-lg" />
-            </div>
+          <div className="pt-2 bg-blue-50 p-3 rounded border border-blue-100">
+             <label className="text-xs text-blue-600 font-bold block mb-1">目前設定匯率 (1 外幣 = ? 台幣)</label>
+             <input 
+               type="number" 
+               value={currencySettings.rate} 
+               onChange={(e) => updateRate(e.target.value)} 
+               className="w-full p-2 border rounded text-sm font-mono text-center" 
+               step="0.001" 
+             />
+             <div className="flex gap-2 mt-2">
+               <input 
+                 placeholder="符號 (如 ¥)" 
+                 value={currencySettings.symbol}
+                 onChange={(e) => updateSymbol(e.target.value)}
+                 className="w-20 p-2 border rounded text-sm text-center"
+               />
+               <span className="text-xs text-slate-400 self-center flex-1">← 設定當地貨幣符號</span>
+             </div>
           </div>
-          
-          <div className="text-center text-slate-400 text-xs">x 匯率 {rate} =</div>
+
+          <hr className="border-slate-100" />
 
           <div className="flex items-end gap-2">
             <div className="flex-1">
-              <label className="text-xs text-slate-500">本幣 (台幣)</label>
-              <select value={targetCurr} onChange={(e) => setTargetCurr(e.target.value)} className="w-full p-2 border rounded bg-slate-50">
-                <option value="TWD">TWD 新台幣</option>
-              </select>
+              <label className="text-xs text-slate-500">當地貨幣</label>
+              <div className="w-full p-2 bg-slate-100 rounded text-center text-sm text-slate-500">
+                {currencySettings.symbol} {amount}
+              </div>
             </div>
+            <div className="text-center text-slate-400 text-xs pb-3">≈</div>
             <div className="flex-1">
-               <div className="w-full p-2 bg-slate-100 border rounded text-right font-mono text-xl font-bold text-blue-600">
-                 {Math.round(amount * rate).toLocaleString()}
+              <label className="text-xs text-slate-500">約合台幣</label>
+               <div className="w-full p-2 bg-slate-100 border rounded text-center font-mono text-lg font-bold text-blue-600">
+                 NT$ {Math.round(amount * currencySettings.rate).toLocaleString()}
                </div>
             </div>
           </div>
           
           <div className="pt-2">
-             <label className="text-xs text-slate-500">自訂匯率 (賣出價)</label>
-             <input type="number" value={rate} onChange={(e) => setRate(e.target.value)} className="w-full p-2 border rounded text-sm" step="0.001" />
+             <label className="text-xs text-slate-500">試算金額輸入</label>
+             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full p-2 border rounded text-sm" />
           </div>
         </div>
       </div>
@@ -546,11 +619,17 @@ const App = () => {
     }
   ]);
 
-  // 新增：旅行者姓名與記帳資料
+  // 旅行者與記帳
   const [travelerNames, setTravelerNames] = usePersistentState('traveler_names', ['旅伴 A', '旅伴 B']);
   const [expenses, setExpenses] = usePersistentState('travel_expenses', []);
   
-  // UI 控制狀態
+  // 全域匯率設定 (自動記憶)
+  const [currencySettings, setCurrencySettings] = usePersistentState('currency_settings', {
+    rate: 0.21, // 預設匯率
+    symbol: '$', // 預設符號
+    code: 'JPY'  // 預設幣別代碼 (可擴充)
+  });
+  
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
   const [isTravelerModalOpen, setIsTravelerModalOpen] = useState(false);
 
@@ -565,18 +644,13 @@ const App = () => {
   const printRef = useRef();
   const fileInputRef = useRef();
 
-  // 當人數變更時，同步更新旅行者名單陣列
   useEffect(() => {
     const count = Number(basicData.travelers);
     if (travelerNames.length !== count) {
       const newNames = [...travelerNames];
       if (count > newNames.length) {
-        // 補足
-        for (let i = newNames.length; i < count; i++) {
-          newNames.push(`旅伴 ${i + 1}`);
-        }
+        for (let i = newNames.length; i < count; i++) newNames.push(`旅伴 ${i + 1}`);
       } else {
-        // 截斷
         newNames.length = count;
       }
       setTravelerNames(newNames);
@@ -625,6 +699,7 @@ const App = () => {
       localStorage.removeItem('travel_accommodations');
       localStorage.removeItem('traveler_names');
       localStorage.removeItem('travel_expenses');
+      localStorage.removeItem('currency_settings');
       window.location.reload(); 
     }
   };
@@ -639,8 +714,9 @@ const App = () => {
       const planToSave = { 
         ...itineraryData, 
         basicInfo: basicData, 
-        expenses, // 連同記帳資料一起存
+        expenses, 
         travelerNames,
+        currencySettings, // 儲存當時的匯率設定
         created: itineraryData.created || Date.now() 
       };
       newPlans = [planToSave, ...savedPlans];
@@ -658,9 +734,9 @@ const App = () => {
   const loadSavedPlan = (plan) => {
     setItineraryData(plan);
     setBasicData(plan.basicInfo || basicData);
-    // 如果存檔有包含記帳與名單，也一併還原
     if (plan.expenses) setExpenses(plan.expenses);
     if (plan.travelerNames) setTravelerNames(plan.travelerNames);
+    if (plan.currencySettings) setCurrencySettings(plan.currencySettings);
     setStep('result');
     setActiveTab(0);
   };
@@ -670,22 +746,22 @@ const App = () => {
     return savedPlans.some(p => p.created === itineraryData.created);
   };
 
-  // --- 匯出 JSON ---
   const handleExportJSON = () => {
     if (!itineraryData) {
       alert('目前沒有可匯出的行程規劃');
       return;
     }
     const dataToExport = {
-      version: 2, // 版本升級
+      version: 2,
       timestamp: Date.now(),
       basicData,
       simpleFlights,
       multiFlights,
       accommodations,
       itineraryData,
-      travelerNames, // 新增
-      expenses       // 新增
+      travelerNames,
+      expenses,
+      currencySettings
     };
     const dataStr = JSON.stringify(dataToExport, null, 2);
     const blob = new Blob([dataStr], { type: "application/json" });
@@ -698,11 +774,9 @@ const App = () => {
     document.body.removeChild(link);
   };
 
-  // --- 匯入 JSON ---
   const handleImportJSON = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -714,9 +788,9 @@ const App = () => {
             setMultiFlights(imported.multiFlights);
             setAccommodations(imported.accommodations);
             setItineraryData(imported.itineraryData);
-            // 兼容舊版本 JSON (可能沒有 expenses)
             if (imported.travelerNames) setTravelerNames(imported.travelerNames);
             if (imported.expenses) setExpenses(imported.expenses);
+            if (imported.currencySettings) setCurrencySettings(imported.currencySettings);
             setStep('result');
             alert('行程載入成功！');
           }
@@ -732,9 +806,7 @@ const App = () => {
     reader.readAsText(file);
   };
 
-  const handleExportPDF = () => {
-    window.print();
-  };
+  const handleExportPDF = () => window.print();
 
   const fallbackCopyTextToClipboard = (text) => {
     var textArea = document.createElement("textarea");
@@ -838,11 +910,13 @@ const App = () => {
       2. Culture & History: detailed background story for historical sites.
       3. Food: Menu translation (Local | Chinese | Est. Price).
       4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
+      5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
       
       JSON Schema Structure:
       {
         "trip_summary": "String",
-        "currency_rate": "String",
+        "currency_rate": "String (e.g. '1 JPY = 0.21 TWD')",
+        "currency_code": "String (e.g. 'JPY')",
         "created": ${Date.now()}, 
         "days": [
           {
@@ -859,7 +933,7 @@ const App = () => {
                 "title": "Title",
                 "description": "Detailed description",
                 "location_query": "Google Maps Query",
-                "transport_detail": "Transport Info (include parking info if requested)",
+                "transport_detail": "Transport Info",
                 "price_level": "Low" | "Mid" | "High",
                 "warnings_tips": "Important tips",
                 "menu_recommendations": [{ "local": "", "cn": "", "price": "" }]
@@ -881,6 +955,25 @@ const App = () => {
       const resultText = data.candidates[0].content.parts[0].text;
       const parsedData = JSON.parse(resultText);
       if (!parsedData.created) parsedData.created = Date.now();
+      
+      // 嘗試解析匯率與幣別
+      if (parsedData.currency_code && parsedData.currency_rate) {
+        // 簡單的正則解析 "1 JPY = 0.21 TWD"
+        const rateMatch = parsedData.currency_rate.match(/=\s*([\d.]+)/);
+        const rate = rateMatch ? parseFloat(rateMatch[1]) : 0.21;
+        let symbol = '$';
+        if (parsedData.currency_code === 'JPY') symbol = '¥';
+        if (parsedData.currency_code === 'KRW') symbol = '₩';
+        if (parsedData.currency_code === 'EUR') symbol = '€';
+        if (parsedData.currency_code === 'GBP') symbol = '£';
+        
+        setCurrencySettings({
+           rate: rate,
+           symbol: symbol,
+           code: parsedData.currency_code
+        });
+      }
+
       setItineraryData(parsedData);
       setStep('result');
     } catch (error) {
@@ -893,8 +986,7 @@ const App = () => {
   // --- UI 元件 ---
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/90 backdrop-blur-md p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/20 print:hidden">
-      {/* ... (Input Form 內容與之前相同，省略重複部分，保持功能不變) ... */}
-      {/* 這裡的內容與您原本的代碼一致，為了縮短長度我只顯示關鍵部分，實際請貼上完整表單程式碼 */}
+      {/* ... (省略重複的 Header 區塊) ... */}
        <div className="text-center pb-6 border-b border-slate-100">
         <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
           <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
@@ -1180,7 +1272,7 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
-              {/* 新增：貨幣與旅伴設定按鈕 */}
+              {/* 貨幣與旅伴設定按鈕 */}
               <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
                 <button 
                   onClick={() => setIsCurrencyModalOpen(true)}
@@ -1262,6 +1354,7 @@ const App = () => {
              expenses={expenses}
              setExpenses={setExpenses}
              travelers={travelerNames}
+             currencySettings={currencySettings}
              isPrintMode={false} 
            />
         </div>
@@ -1276,6 +1369,7 @@ const App = () => {
                  expenses={expenses}
                  setExpenses={setExpenses}
                  travelers={travelerNames}
+                 currencySettings={currencySettings}
                  isPrintMode={true} 
                />
              </div>
@@ -1283,7 +1377,7 @@ const App = () => {
         </div>
         
         {/* 總旅程帳本結算 (在最後顯示) */}
-        <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} />
+        <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
       </div>
     );
   };
@@ -1295,7 +1389,7 @@ const App = () => {
       {step === 'result' && (
         <>
           {renderResult()}
-          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} />}
+          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
           {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
         </>
       )}
