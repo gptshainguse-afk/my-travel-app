@@ -125,10 +125,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-0 md:p-4 animate-in fade-in duration-200">
-      {/* 調整高度設定: 
-         - h-[85vh]: 避免手機瀏覽器工具列遮擋
-         - mb-safe: 避開 iPhone 底部橫條
-      */}
+      {/* 調整高度設定: h-[85vh] 避免手機瀏覽器工具列遮擋 */}
       <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
         
         {/* Header */}
