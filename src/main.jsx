@@ -1426,8 +1426,8 @@ const App = () => {
   };
 
   const renderInputForm = () => (
-    <div className="max-w-4xl mx-auto bg-white/90 backdrop-blur-md p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/20 print:hidden">
-       <div className="text-center pb-6 border-b border-slate-100">
+    <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
+        <div className="text-center pb-6 border-b border-slate-100/50">
         <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
           <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
           AI 智能旅程規劃師
@@ -1710,7 +1710,8 @@ const App = () => {
     return (
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
         {/* Header Card */}
-        <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
+        {/* --- 修改 className：增加透明感與邊框混合模式 --- */}
+        <div className="bg-white/75 backdrop-blur-xl p-5 md:p-8 rounded-3xl shadow-xl border border-white/60 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
             <div className="w-full">
@@ -1844,20 +1845,26 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100 via-slate-100 to-slate-200 p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0">
-      {step === 'input' && renderInputForm()}
-      {step === 'loading' && renderLoading()}
-      {step === 'result' && (
-        <>
-          {renderResult()}
-          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
-          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
-        </>
-      )}
-      {step === 'saved_list' && renderSavedList()}
-    </div>
-  );
-};
+    <div 
+    className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
+    style={{
+      // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
+      backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
+    }}
+  >
+  {/* --- 修改結束 --- */}
+    {step === 'input' && renderInputForm()}
+    {step === 'loading' && renderLoading()}
+    {step === 'result' && (
+      <>
+        {renderResult()}
+        {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
+        {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
+      </>
+    )}
+    {step === 'saved_list' && renderSavedList()}
+  </div>
+);
 
 const rootElement = document.getElementById('root');
 if (rootElement) {
