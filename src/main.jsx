@@ -11,7 +11,7 @@ import {
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
-  ExternalLink, MessageCircle
+  ExternalLink
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -85,6 +85,7 @@ const cleanJsonResult = (text) => {
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       return text.substring(firstBrace, lastBrace + 1);
     }
+    // 使用一般字串取代，避免正則表達式在某些環境下的編譯問題
     let cleaned = text;
     if (cleaned.includes('```json')) cleaned = cleaned.split('```json')[1];
     if (cleaned.includes('```')) cleaned = cleaned.split('```')[0];
@@ -447,84 +448,51 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   );
 };
 
-// --- City Guide (Updated with Toggle and Basic Phrases) ---
+// --- City Guide ---
 const CityGuide = ({ guideData, cities }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
-  const [isOpen, setIsOpen] = useState(false); // Default collapsed
   const currentGuide = guideData[selectedCity];
 
   if (!currentGuide) return null;
 
   return (
-    <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl mb-8 print:break-inside-avoid overflow-hidden transition-all duration-300">
-      <div 
-        onClick={() => setIsOpen(!isOpen)}
-        className="p-6 flex justify-between items-center cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition-colors"
-      >
+    <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 print:break-inside-avoid">
+      <div className="flex justify-between items-center mb-4">
         <h3 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
           <BookOpen className="w-6 h-6" /> 城市生存指南
         </h3>
-        <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-           <div className="relative">
-            <select 
-              value={selectedCity} 
-              onChange={(e) => setSelectedCity(e.target.value)}
-              className="appearance-none bg-white border border-indigo-200 text-indigo-700 py-2 pl-4 pr-10 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer text-sm"
-            >
-              {cities.map(city => <option key={city} value={city}>{city}</option>)}
-            </select>
-            <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-indigo-400 pointer-events-none" />
-          </div>
-          <button onClick={() => setIsOpen(!isOpen)} className="p-2 text-indigo-400 hover:text-indigo-600">
-            {isOpen ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-          </button>
+        <div className="relative">
+          <select 
+            value={selectedCity} 
+            onChange={(e) => setSelectedCity(e.target.value)}
+            className="appearance-none bg-white border border-indigo-200 text-indigo-700 py-2 pl-4 pr-10 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer"
+          >
+            {cities.map(city => <option key={city} value={city}>{city}</option>)}
+          </select>
+          <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-indigo-400 pointer-events-none" />
         </div>
       </div>
 
-      {isOpen && (
-        <div className="p-6 border-t border-indigo-100 animate-in slide-in-from-top-2 duration-200">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Basic Phrases Card */}
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-teal-100 md:col-span-2">
-              <h4 className="font-bold text-teal-700 mb-3 flex items-center gap-2">
-                <MessageCircle className="w-5 h-5" /> 在地用語小學堂
-              </h4>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                {currentGuide.basic_phrases && Array.isArray(currentGuide.basic_phrases) ? (
-                   currentGuide.basic_phrases.map((phrase, idx) => (
-                     <div key={idx} className="bg-teal-50 p-3 rounded-xl border border-teal-100">
-                       <div className="text-xs text-teal-600 font-bold mb-1">{phrase.label}</div>
-                       <div className="text-base font-bold text-slate-800">{phrase.local}</div>
-                       <div className="text-xs text-slate-400 font-mono italic">{phrase.roman}</div>
-                     </div>
-                   ))
-                ) : (
-                  <span className="text-slate-400 text-sm col-span-full">尚無資料 (請重新生成行程以獲取)</span>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
-              <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
-                <Globe className="w-4 h-4" /> 歷史人文
-              </h4>
-              <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.history_culture}</p>
-            </div>
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
-              <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
-                <Ticket className="w-4 h-4" /> 交通與票務
-              </h4>
-              <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.transport_tips}</p>
-            </div>
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50 md:col-span-2">
-              <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4" /> 治安與詐騙提醒
-              </h4>
-              <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.safety_scams}</p>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
+            <Globe className="w-4 h-4" /> 歷史人文
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.history_culture}</p>
         </div>
-      )}
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
+            <Ticket className="w-4 h-4" /> 交通與票務
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.transport_tips}</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4" /> 治安與詐騙提醒
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.safety_scams}</p>
+        </div>
+      </div>
     </div>
   );
 };
@@ -533,7 +501,7 @@ const CityGuide = ({ guideData, cities }) => {
 const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
-  const [activeDeepDive, setActiveDeepDive] = useState(null);
+  const [activeDeepDive, setActiveDeepDive] = useState(null); // 控制 AI 深度規劃彈窗
 
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
@@ -1075,7 +1043,6 @@ const App = () => {
 
   const handlePriceChange = (e) => {
     const { name, checked } = e.target;
-    // 確保 priceRanges 物件存在，防止舊資料結構導致錯誤
     setBasicData(prev => ({ 
       ...prev, 
       priceRanges: { 
@@ -1243,7 +1210,6 @@ const App = () => {
   const handleShareText = (mode = 'simple') => {
     if (!itineraryData) return;
     let text = `${basicData.destinations}\n`;
-    // 安全存取 days
     (itineraryData.days || []).forEach(day => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
@@ -1331,8 +1297,7 @@ const App = () => {
       4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
       5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
       6. **City Guide**: Provide a guide for each unique major city visited. Include keys: "history_culture", "transport_tips" (tickets, passes), "safety_scams" (areas to avoid, common scams).
-      7. **Basic Phrases**: Include 5 essential phrases (Hello, Thank you, Sorry, Excuse me, How much?) in local language with Romanization.
-
+      
       JSON Schema Structure:
       {
         "trip_summary": "String",
@@ -1342,10 +1307,7 @@ const App = () => {
            "CityName": {
              "history_culture": "...",
              "transport_tips": "...",
-             "safety_scams": "...",
-             "basic_phrases": [
-               { "label": "Hello", "local": "...", "roman": "..." }
-             ]
+             "safety_scams": "..."
            }
         },
         "created": ${Date.now()}, 
@@ -1643,6 +1605,215 @@ const App = () => {
         </button>
       </div>
       {errorMsg && <div className="p-4 bg-red-50 text-red-600 rounded-xl flex items-center gap-2 border border-red-100 animate-shake"><AlertTriangle className="w-5 h-5" />{errorMsg}</div>}
+    </div>
+  );
+
+  const renderLoading = () => (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] text-slate-600 space-y-8 animate-in fade-in duration-1000 print:hidden">
+      <div className="relative">
+        <div className="absolute inset-0 bg-blue-500 blur-xl opacity-20 rounded-full animate-pulse"></div>
+        <Loader2 className="w-24 h-24 animate-spin text-blue-600 relative z-10" />
+      </div>
+      <div className="text-center space-y-3">
+        <h2 className="text-3xl font-bold text-slate-800">AI 正在為您編織旅程...</h2>
+        <p className="text-lg text-slate-500">正在分析 {basicData.destinations} 的歷史文化與最佳動線</p>
+      </div>
+    </div>
+  );
+
+  const renderSavedList = () => (
+    <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-right-8 duration-500 print:hidden">
+      <div className="flex items-center gap-4">
+        <button onClick={() => setStep('input')} className="p-3 bg-white rounded-full shadow-lg hover:bg-slate-50 border border-slate-100 transition-transform hover:-translate-x-1"><ArrowLeft className="w-6 h-6 text-slate-700" /></button>
+        <h2 className="text-3xl font-bold text-slate-800">我的旅程記憶</h2>
+      </div>
+      {savedPlans.length === 0 ? (
+        <div className="text-center py-32 bg-white/80 backdrop-blur rounded-3xl shadow-sm border border-slate-200 text-slate-400">
+          <BookOpen className="w-24 h-24 mx-auto mb-6 opacity-20" />
+          <p className="text-xl">目前沒有儲存的規劃</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {savedPlans.map((plan, idx) => (
+            <div key={idx} onClick={() => loadSavedPlan(plan)} className="group bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-200 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 relative overflow-hidden">
+              <div className="flex justify-between items-start mb-4 relative z-10">
+                <h3 className="font-bold text-xl text-slate-800 group-hover:text-blue-600 transition-colors line-clamp-1">{plan.basicInfo?.destinations || '旅程規劃'}</h3>
+                <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-mono">{new Date(plan.created).toLocaleDateString()}</span>
+              </div>
+              <p className="text-slate-500 text-sm line-clamp-3 mb-6 min-h-[4rem] leading-relaxed relative z-10">{plan.trip_summary}</p>
+              <div className="flex items-center gap-4 text-sm text-slate-400 border-t border-slate-50 pt-4">
+                <div className="flex items-center gap-1.5"><Calendar className="w-4 h-4 text-blue-400" /> {plan.days.length} 天</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderResult = () => {
+    if (!itineraryData || !Array.isArray(itineraryData.days) || itineraryData.days.length === 0) {
+      return (
+        <div className="p-8 text-center text-slate-500 bg-white rounded-xl shadow-sm">
+           <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-amber-400" />
+           <p className="text-lg font-bold">行程資料讀取異常</p>
+           <p className="text-sm">這可能是因為 AI 回傳的格式不完整或舊資料不相容。</p>
+           <button onClick={() => setStep('input')} className="mt-4 px-4 py-2 bg-slate-100 rounded-lg hover:bg-slate-200">返回重新規劃</button>
+        </div>
+      );
+    }
+
+    const currentDay = itineraryData.days[activeTab] || itineraryData.days[0];
+    const isSaved = isCurrentPlanSaved();
+
+    return (
+      <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
+        {/* Header Card */}
+        <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
+           <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
+           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
+            <div className="w-full">
+              <div className="flex flex-wrap items-center gap-3 mb-2">
+                <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 print:text-black">{basicData.destinations}</h2>
+                {basicData.hasTransitTour && <span className="text-xs font-bold bg-indigo-100 text-indigo-700 px-2 md:px-3 py-1 rounded-full flex items-center gap-1 print:hidden"><Plane className="w-3 h-3" /> 含轉機觀光</span>}
+              </div>
+              <p className="text-slate-600 max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
+            </div>
+            
+            <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
+              {/* 貨幣與旅伴設定按鈕 */}
+              <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
+                <button 
+                  onClick={() => setIsCurrencyModalOpen(true)}
+                  className="p-3 rounded-full bg-yellow-50 text-yellow-600 hover:bg-yellow-100 transition-colors shadow-sm" 
+                  title="匯率換算"
+                >
+                  <Coins className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={() => setIsTravelerModalOpen(true)}
+                  className="p-3 rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors shadow-sm" 
+                  title="設定旅伴"
+                >
+                  <UserCog className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="relative">
+                <button 
+                  onClick={() => setShowCopyMenu(!showCopyMenu)} 
+                  className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500 flex items-center gap-2" 
+                  title="複製文字分享"
+                >
+                  {copySuccess ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5" />}
+                </button>
+                
+                {showCopyMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-32 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
+                    <button 
+                      onClick={() => handleShareText('simple')}
+                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold border-b border-slate-50"
+                    >
+                      簡約內容
+                    </button>
+                    <button 
+                      onClick={() => handleShareText('detailed')}
+                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold"
+                    >
+                      詳細內容
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button onClick={handleExportPDF} disabled={isExporting} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 PDF (使用瀏覽器列印)">
+                {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+              </button>
+              <button onClick={handleExportJSON} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 JSON (分享規劃)">
+                <FileJson className="w-5 h-5" />
+              </button>
+              <button onClick={saveCurrentPlan} className={`p-3 md:p-4 rounded-full transition-all shadow-md ${isSaved ? 'bg-red-50 text-red-500' : 'bg-white text-slate-400'}`}>
+                <Heart className={`w-5 h-5 ${isSaved ? 'fill-current' : ''}`} />
+              </button>
+              <button onClick={() => setStep('input')} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors text-sm md:text-base">重新規劃</button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3 md:gap-6 text-sm text-slate-500 mt-4 md:mt-6 pt-4 md:pt-6 border-t border-slate-100 font-medium print:text-black">
+              <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><DollarSign className="w-4 h-4 text-emerald-500 print:text-black" /> 匯率: {itineraryData.currency_rate}</span>
+              <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><Calendar className="w-4 h-4 text-blue-500 print:text-black" /> {basicData.dates}</span>
+          </div>
+        </div>
+
+        {/* --- 功能 3: 城市指南區域 (如果有的話) --- */}
+        {itineraryData.city_guides && (
+          <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
+        )}
+
+        {/* Day Tabs (Hidden on Print) */}
+        <div className="flex overflow-x-auto pb-4 gap-3 md:gap-4 scrollbar-hide px-2 snap-x print:hidden">
+          {itineraryData.days.map((day, index) => (
+            <button key={index} onClick={() => setActiveTab(index)} className={`snap-center flex-shrink-0 px-6 py-3 md:px-8 md:py-4 rounded-2xl transition-all duration-300 border-2 relative overflow-hidden group ${activeTab === index ? 'bg-slate-800 text-white border-slate-800 shadow-xl scale-105' : 'bg-white text-slate-500 border-transparent hover:border-slate-200 hover:bg-slate-50'}`}>
+              <div className="text-[10px] md:text-xs opacity-60 uppercase tracking-wider mb-1 font-bold">Day {day.day_index}</div>
+              <div className="text-base md:text-lg font-bold">{day.city}</div>
+              <div className="text-[10px] md:text-xs mt-1 opacity-80">{day.date.slice(5)}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* Timeline Content (Normal View - Single Day) */}
+        <div className="print:hidden">
+           <DayTimeline 
+             day={currentDay} 
+             dayIndex={activeTab} 
+             expenses={expenses}
+             setExpenses={setExpenses}
+             travelers={travelerNames}
+             currencySettings={currencySettings}
+             isPrintMode={false} 
+             apiKey={apiKey}
+             updateItineraryItem={updateItineraryItem}
+             onSavePlan={saveCurrentPlan}
+           />
+        </div>
+
+        {/* Printable View (All Days) */}
+        <div className="hidden print:block">
+           {itineraryData.days.map((day, idx) => (
+             <div key={idx} className="break-before-page">
+               <DayTimeline 
+                 day={day} 
+                 dayIndex={idx}
+                 expenses={expenses}
+                 setExpenses={setExpenses}
+                 travelers={travelerNames}
+                 currencySettings={currencySettings}
+                 isPrintMode={true} 
+                 apiKey={apiKey}
+                 updateItineraryItem={updateItineraryItem}
+                 onSavePlan={saveCurrentPlan}
+               />
+             </div>
+           ))}
+        </div>
+        
+        {/* 總旅程帳本結算 (在最後顯示) */}
+        <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100 via-slate-100 to-slate-200 p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0">
+      {step === 'input' && renderInputForm()}
+      {step === 'loading' && renderLoading()}
+      {step === 'result' && (
+        <>
+          {renderResult()}
+          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
+          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
+        </>
+      )}
+      {step === 'saved_list' && renderSavedList()}
     </div>
   );
 };
