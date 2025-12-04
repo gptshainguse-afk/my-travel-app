@@ -18,6 +18,21 @@ import {
 import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
+const deepMerge = (target, source) => {
+  const result = { ...target };
+  if (source && typeof source === 'object') {
+    Object.keys(source).forEach(key => {
+      // 如果是物件且不是陣列，則遞迴合併
+      if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+        result[key] = deepMerge(result[key] || {}, source[key]);
+      } else {
+        // 否則直接覆蓋 (保留用戶的輸入)
+        result[key] = source[key];
+      }
+    });
+  }
+  return result;
+};
 const usePersistentState = (key, initialValue) => {
   const [state, setState] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -25,9 +40,9 @@ const usePersistentState = (key, initialValue) => {
         const item = window.localStorage.getItem(key);
         if (item) {
           const parsed = JSON.parse(item);
-          // 簡單的合併邏輯：確保新加入的欄位 (如 priceRanges) 存在於舊資料中
+          // 使用深度合併，確保新舊資料結構相容
           if (typeof initialValue === 'object' && !Array.isArray(initialValue) && initialValue !== null && parsed !== null) {
-            return { ...initialValue, ...parsed };
+            return deepMerge(initialValue, parsed);
           }
           return parsed !== null ? parsed : initialValue;
         }
