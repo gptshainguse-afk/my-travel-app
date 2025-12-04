@@ -1693,13 +1693,14 @@ const App = () => {
   );
 
   const renderResult = () => {
+    // 1. 防呆檢查：如果資料讀取錯誤，顯示錯誤訊息而不是白畫面
     if (!itineraryData || !Array.isArray(itineraryData.days) || itineraryData.days.length === 0) {
       return (
-        <div className="p-8 text-center text-slate-500 bg-white rounded-xl shadow-sm">
+        <div className="p-8 text-center text-slate-500 bg-white rounded-xl shadow-sm mt-10">
            <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-amber-400" />
            <p className="text-lg font-bold">行程資料讀取異常</p>
-           <p className="text-sm">這可能是因為 AI 回傳的格式不完整或舊資料不相容。</p>
-           <button onClick={() => setStep('input')} className="mt-4 px-4 py-2 bg-slate-100 rounded-lg hover:bg-slate-200">返回重新規劃</button>
+           <p className="text-sm mb-4">這可能是因為 AI 回傳的格式不完整或舊資料不相容。</p>
+           <button onClick={() => setStep('input')} className="px-4 py-2 bg-slate-100 rounded-lg hover:bg-slate-200 font-bold text-slate-600">返回重新規劃</button>
         </div>
       );
     }
@@ -1710,8 +1711,7 @@ const App = () => {
     return (
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
         {/* Header Card */}
-        {/* --- 修改 className：增加透明感與邊框混合模式 --- */}
-        <div className="bg-white/75 backdrop-blur-xl p-5 md:p-8 rounded-3xl shadow-xl border border-white/60 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
+        <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
             <div className="w-full">
@@ -1723,7 +1723,6 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
-              {/* 貨幣與旅伴設定按鈕 */}
               <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
                 <button 
                   onClick={() => setIsCurrencyModalOpen(true)}
@@ -1786,12 +1785,12 @@ const App = () => {
           </div>
         </div>
 
-        {/* --- 功能 3: 城市指南區域 (如果有的話) --- */}
+        {/* --- 功能 3: 城市指南區域 --- */}
         {itineraryData.city_guides && (
           <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
         )}
 
-        {/* Day Tabs (Hidden on Print) */}
+        {/* Day Tabs */}
         <div className="flex overflow-x-auto pb-4 gap-3 md:gap-4 scrollbar-hide px-2 snap-x print:hidden">
           {itineraryData.days.map((day, index) => (
             <button key={index} onClick={() => setActiveTab(index)} className={`snap-center flex-shrink-0 px-6 py-3 md:px-8 md:py-4 rounded-2xl transition-all duration-300 border-2 relative overflow-hidden group ${activeTab === index ? 'bg-slate-800 text-white border-slate-800 shadow-xl scale-105' : 'bg-white text-slate-500 border-transparent hover:border-slate-200 hover:bg-slate-50'}`}>
@@ -1802,7 +1801,7 @@ const App = () => {
           ))}
         </div>
 
-        {/* Timeline Content (Normal View - Single Day) */}
+        {/* Timeline Content */}
         <div className="print:hidden">
            <DayTimeline 
              day={currentDay} 
@@ -1818,7 +1817,7 @@ const App = () => {
            />
         </div>
 
-        {/* Printable View (All Days) */}
+        {/* Printable View */}
         <div className="hidden print:block">
            {itineraryData.days.map((day, idx) => (
              <div key={idx} className="break-before-page">
@@ -1838,8 +1837,9 @@ const App = () => {
            ))}
         </div>
         
-        {/* 總旅程帳本結算 (在最後顯示) */}
         <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
+        
+        {/* 注意：這裡移除了原本錯誤的 <DeepDiveModal /> 呼叫，解決了 ReferenceError */}
       </div>
     );
   };
@@ -1853,18 +1853,19 @@ const App = () => {
       }}
     >
  
-    {step === 'input' && renderInputForm()}
-    {step === 'loading' && renderLoading()}
-    {step === 'result' && (
-      <>
-        {renderResult()}
-        {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
-        {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
-      </>
-    )}
-    {step === 'saved_list' && renderSavedList()}
-  </div>
-);
+      {step === 'input' && renderInputForm()}
+      {step === 'loading' && renderLoading()}
+      {step === 'result' && (
+        <>
+          {renderResult()}
+          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
+          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
+        </>
+      )}
+      {step === 'saved_list' && renderSavedList()}
+    </div>
+  );
+};
 
 const rootElement = document.getElementById('root');
 if (rootElement) {
