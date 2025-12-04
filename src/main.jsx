@@ -1329,7 +1329,18 @@ const App = () => {
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
       const resultText = data.candidates[0].content.parts[0].text;
-      const parsedData = JSON.parse(resultText);
+      
+      // Use cleanJsonResult to ensure the JSON is parseable, removing any markdown code blocks
+      const cleanedText = cleanJsonResult(resultText);
+      let parsedData;
+      
+      try {
+        parsedData = JSON.parse(cleanedText);
+      } catch (parseError) {
+        console.error("JSON Parse Error:", parseError);
+        throw new Error("無法解析 AI 回傳的行程資料格式");
+      }
+
       if (!parsedData.created) parsedData.created = Date.now();
       
       if (parsedData.currency_code && parsedData.currency_rate) {
@@ -1627,6 +1638,7 @@ const App = () => {
 
     return (
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
+        {/* Header Card */}
         <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
@@ -1639,6 +1651,7 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
+              {/* 貨幣與旅伴設定按鈕 */}
               <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
                 <button 
                   onClick={() => setIsCurrencyModalOpen(true)}
@@ -1701,10 +1714,12 @@ const App = () => {
           </div>
         </div>
 
+        {/* --- 功能 3: 城市指南區域 (如果有的話) --- */}
         {itineraryData.city_guides && (
           <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
         )}
 
+        {/* Day Tabs (Hidden on Print) */}
         <div className="flex overflow-x-auto pb-4 gap-3 md:gap-4 scrollbar-hide px-2 snap-x print:hidden">
           {itineraryData.days.map((day, index) => (
             <button key={index} onClick={() => setActiveTab(index)} className={`snap-center flex-shrink-0 px-6 py-3 md:px-8 md:py-4 rounded-2xl transition-all duration-300 border-2 relative overflow-hidden group ${activeTab === index ? 'bg-slate-800 text-white border-slate-800 shadow-xl scale-105' : 'bg-white text-slate-500 border-transparent hover:border-slate-200 hover:bg-slate-50'}`}>
@@ -1715,6 +1730,7 @@ const App = () => {
           ))}
         </div>
 
+        {/* Timeline Content (Normal View - Single Day) */}
         <div className="print:hidden">
            <DayTimeline 
              day={currentDay} 
@@ -1730,6 +1746,7 @@ const App = () => {
            />
         </div>
 
+        {/* Printable View (All Days) */}
         <div className="hidden print:block">
            {itineraryData.days.map((day, idx) => (
              <div key={idx} className="break-before-page">
@@ -1749,8 +1766,10 @@ const App = () => {
            ))}
         </div>
         
+        {/* 總旅程帳本結算 (在最後顯示) */}
         <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
 
+        {/* --- Deep Dive Modal --- */}
         <DeepDiveModal 
            isOpen={activeDeepDive !== null}
            onClose={() => setActiveDeepDive(null)}
