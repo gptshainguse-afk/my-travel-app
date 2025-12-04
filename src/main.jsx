@@ -67,71 +67,61 @@ const compressImage = (file) => {
   });
 };
 
-// --- JSON 清理工具 (防止白畫面與解析錯誤) ---
+// --- JSON 清理工具 (使用 new RegExp 避免編譯錯誤) ---
 const cleanJsonResult = (text) => {
   if (!text) return "{}";
   try {
-    // 嘗試抓取第一個 { 和最後一個 } 之間的內容
     const firstBrace = text.indexOf('{');
     const lastBrace = text.lastIndexOf('}');
     
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       return text.substring(firstBrace, lastBrace + 1);
     }
-    // 如果找不到括號，嘗試移除 markdown code blocks
-    return text.replace(/```json/g, '').replace(/```/g, '').trim();
+    // 使用建構式建立正則，避免與 JSX 語法衝突
+    return text.replace(new RegExp('```json', 'g'), '').replace(new RegExp('```', 'g'), '').trim();
   } catch (e) {
     console.error("JSON Clean Error", e);
     return text;
   }
 };
 
-// --- 安全渲染文字的輔助函數 (修正 [object Object] 問題) ---
+// --- 安全渲染文字的輔助函數 ---
 const safeRender = (content) => {
   if (content === null || content === undefined) return '';
   if (typeof content === 'string') return content;
   if (typeof content === 'number') return String(content);
   
-  // 處理陣列 (包含字串陣列或物件陣列)
   if (Array.isArray(content)) {
     return content.map(item => {
       if (typeof item === 'string') return item;
       if (typeof item === 'object' && item !== null) {
-        // 嘗試取得物件中的所有值並串接
         const values = Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number');
         if (values.length > 0) return `• ${values.join(': ')}`;
-        return JSON.stringify(item); // 真的沒辦法解析才轉 JSON 字串
+        return JSON.stringify(item); 
       }
       return String(item);
     }).join('\n');
   }
   
-  // 處理單一物件 (當 AI 回傳結構不如預期時的防呆)
   if (typeof content === 'object') {
-     // 嘗試提取常見的鍵值
      const text = content['description'] || content['text'] || content['content'] || content['desc'];
      if (text) return text;
-     
-     // 否則列出所有值
-     const values = Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number');
+     const values = Object.values(content).filter(v => typeof v === 'string' || typeof v === 'number');
      if (values.length > 0) return values.join(', ');
-     
      return JSON.stringify(content);
   }
   
   return String(content);
 };
 
-// --- AI 深度規劃彈窗元件 (使用 Portal 修復置頂問題，並增加地圖跳轉) ---
+// --- AI 深度規劃彈窗元件 (使用 Portal) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
 
-  const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(itemTitle)}&travelmode=walking`;
+  const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(itemTitle || '')}&travelmode=walking`;
 
-  // 使用 createPortal 將彈窗渲染到 body 層級，避免被父層 transform 屬性影響定位
   return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-0 md:p-4 animate-in fade-in duration-200">
-      {/* 調整高度設定: h-[85vh] 避免手機瀏覽器工具列遮擋 */}
       <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
         
         {/* Header */}
@@ -147,7 +137,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
           </button>
         </div>
 
-        {/* Content (Scrollable) */}
+        {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-50 overscroll-contain">
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-4 text-slate-500">
@@ -184,7 +174,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                  </div>
                </div>
 
-               {/* 點擊跳轉地圖功能 */}
+               {/* Map Link */}
                <a 
                  href={mapUrl} 
                  target="_blank" 
@@ -211,7 +201,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
           )}
         </div>
 
-        {/* Footer (Fixed at bottom) */}
+        {/* Footer */}
         <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0 pb-8 md:pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
           <button 
             onClick={onClose} 
@@ -230,11 +220,11 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
         </div>
       </div>
     </div>,
-    document.body // Portal 目標
+    document.body
   );
 };
 
-// --- 簡單的 SVG 圓餅圖元件 ---
+// --- Simple Pie Chart ---
 const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
   if (!data || data.length === 0) return <div className="text-center text-slate-400 text-sm py-4">尚無資料</div>;
   
@@ -287,7 +277,7 @@ const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
   );
 };
 
-// --- 帳本分析元件 ---
+// --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
   const [viewMode, setViewMode] = useState('category'); 
   const { symbol } = currencySettings;
@@ -361,7 +351,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
   );
 };
 
-// --- 消費表單元件 ---
+// --- Expense Form ---
 const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   const [form, setForm] = useState({
     item: '', category: '美食', amount: '', payer: travelers[0] || '', splitters: travelers, note: ''
@@ -447,7 +437,7 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   );
 };
 
-// --- 功能 3: 城市指南元件 ---
+// --- City Guide ---
 const CityGuide = ({ guideData, cities }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
   const currentGuide = guideData[selectedCity];
@@ -496,11 +486,11 @@ const CityGuide = ({ guideData, cities }) => {
   );
 };
 
-// --- 單日行程表元件 (包含 功能 1, 2, 4) ---
+// --- Day Timeline ---
 const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
-  const [activeNote, setActiveNote] = useState(null); // 功能 2: 備註開關
-  const [activeDeepDive, setActiveDeepDive] = useState(null); // 控制 AI 深度規劃彈窗 { timelineIndex, isLoading, data, title }
+  const [activeNote, setActiveNote] = useState(null); 
+  const [activeDeepDive, setActiveDeepDive] = useState(null);
 
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
@@ -518,7 +508,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     }
   };
 
-  // 功能 1: 照片上傳處理
   const handlePhotoUpload = async (e, timelineIndex) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -542,14 +531,11 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
   };
 
-  // 功能 2: 備註處理
   const handleNoteChange = (timelineIndex, text) => {
     updateItineraryItem(dayIndex, timelineIndex, { user_notes: text });
   };
 
-  // 功能 4: AI 細項規劃 (更新版 - 解決白畫面與新增彈窗)
   const handleDeepDive = async (timelineIndex, item) => {
-    // 如果已經有資料，直接打開彈窗
     if (item.ai_details) {
       setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
       return;
@@ -557,7 +543,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
     if (!apiKey) return alert("需要 API Key 才能使用此功能");
     
-    // 設定 Loading 狀態並打開彈窗
     setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
 
     const prompt = `
@@ -579,7 +564,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       });
       const data = await response.json();
       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      const cleanedText = cleanJsonResult(rawText); // 修正白畫面關鍵
+      const cleanedText = cleanJsonResult(rawText);
       let aiResult = {};
       
       try {
@@ -589,15 +574,13 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         throw new Error("AI 回傳格式無法解析");
       }
 
-      // 更新行程資料
       updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
       
-      // 更新彈窗狀態顯示結果
       setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
     } catch (error) {
       console.error(error);
       alert("AI 分析失敗: " + error.message);
-      setActiveDeepDive(null); // 關閉彈窗
+      setActiveDeepDive(null);
     }
   };
 
@@ -693,7 +676,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                     </h4>
                   </div>
                   
-                  {/* Action Bar (Map, Note, Photo, AI) */}
+                  {/* Action Bar */}
                   <div className={`flex items-center gap-2 ${isPrintMode ? 'hidden' : ''}`}>
                      <a 
                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} 
@@ -732,7 +715,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                   {item.description}
                 </div>
 
-                {/* --- 功能 2: 使用者備註區塊 --- */}
+                {/* User Notes */}
                 {(activeNote === timelineIndex || item.user_notes) && (
                    <div className={`mb-4 ${!activeNote && item.user_notes ? 'block' : activeNote === timelineIndex ? 'block' : 'hidden'}`}>
                       <textarea 
@@ -744,7 +727,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                    </div>
                 )}
 
-                {/* --- 功能 1: 照片展示牆 --- */}
+                {/* Photo Wall */}
                 {item.photos && item.photos.length > 0 && (
                    <div className="flex gap-3 overflow-x-auto pb-2 mb-4 scrollbar-hide">
                       {item.photos.map((photo, pIdx) => (
@@ -802,7 +785,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                   </div>
                 )}
 
-                {/* --- 分帳功能區塊 --- */}
+                {/* Ledger */}
                 {!isPrintMode && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                       <div className="flex items-center justify-between mb-2">
@@ -851,7 +834,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
 
-        {/* --- AI 深度規劃彈窗 --- */}
+        {/* --- Deep Dive Modal --- */}
         <DeepDiveModal 
            isOpen={activeDeepDive !== null}
            onClose={() => setActiveDeepDive(null)}
@@ -865,7 +848,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   );
 };
 
-// --- 貨幣換算 Modal (連動全域設定) ---
 const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   const [amount, setAmount] = useState(1000);
   
@@ -933,7 +915,6 @@ const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   );
 };
 
-// --- 旅行者設定 Modal ---
 const TravelerModal = ({ travelers, setTravelers, onClose }) => {
   const handleChange = (idx, val) => {
     const newT = [...travelers];
@@ -969,8 +950,6 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 const App = () => {
   const [step, setStep] = useState('input'); 
-  
-  // --- 狀態管理 ---
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
 
   const [basicData, setBasicData] = usePersistentState('travel_basic_data', {
@@ -1004,15 +983,13 @@ const App = () => {
     }
   ]);
 
-  // 旅行者與記帳
   const [travelerNames, setTravelerNames] = usePersistentState('traveler_names', ['旅伴 A', '旅伴 B']);
   const [expenses, setExpenses] = usePersistentState('travel_expenses', []);
   
-  // 全域匯率設定 (自動記憶)
   const [currencySettings, setCurrencySettings] = usePersistentState('currency_settings', {
-    rate: 0.21, // 預設匯率
-    symbol: '$', // 預設符號
-    code: 'JPY'  // 預設幣別代碼 (可擴充)
+    rate: 0.21,
+    symbol: '$',
+    code: 'JPY'
   });
   
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
@@ -1025,9 +1002,6 @@ const App = () => {
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
   const [showCopyMenu, setShowCopyMenu] = useState(false);
-
-  const printRef = useRef();
-  const fileInputRef = useRef();
 
   useEffect(() => {
     const count = Number(basicData.travelers);
@@ -1051,7 +1025,6 @@ const App = () => {
     }
   }, []);
 
-  // --- 操作處理函數 ---
   const handleBasicChange = (e) => {
     const { name, value, type, checked } = e.target;
     setBasicData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
@@ -1101,7 +1074,7 @@ const App = () => {
         basicInfo: basicData, 
         expenses, 
         travelerNames,
-        currencySettings, // 儲存當時的匯率設定
+        currencySettings,
         created: itineraryData.created || Date.now() 
       };
       newPlans = [planToSave, ...savedPlans];
@@ -1242,7 +1215,6 @@ const App = () => {
     setShowCopyMenu(false);
   };
 
-  // --- 更新行程資料 helper (用於照片、筆記、AI 結果更新) ---
   const updateItineraryItem = (dayIndex, timelineIndex, updates) => {
      setItineraryData(prev => {
         const newDays = [...prev.days];
@@ -1360,9 +1332,7 @@ const App = () => {
       const parsedData = JSON.parse(resultText);
       if (!parsedData.created) parsedData.created = Date.now();
       
-      // 嘗試解析匯率與幣別
       if (parsedData.currency_code && parsedData.currency_rate) {
-        // 簡單的正則解析 "1 JPY = 0.21 TWD"
         const rateMatch = parsedData.currency_rate.match(/=\s*([\d.]+)/);
         const rate = rateMatch ? parseFloat(rateMatch[1]) : 0.21;
         let symbol = '$';
@@ -1387,10 +1357,8 @@ const App = () => {
     }
   };
 
-  // --- UI 元件 ---
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/90 backdrop-blur-md p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/20 print:hidden">
-      {/* ... (省略重複的 Header 區塊) ... */}
        <div className="text-center pb-6 border-b border-slate-100">
         <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
           <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
@@ -1450,7 +1418,6 @@ const App = () => {
             </div>
           </div>
 
-          {/* 新增：交通方式與停車資訊 */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-600">交通偏好</label>
@@ -1485,7 +1452,6 @@ const App = () => {
 
         <hr className="border-slate-100" />
 
-        {/* 新增：特殊要求與價位 */}
         <section className="space-y-4">
           <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
             <span className="bg-purple-100 p-2 rounded-lg text-purple-600"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
@@ -1518,7 +1484,6 @@ const App = () => {
             <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Plane className="w-5 h-5" /></span>航班資訊</h3>
             
             <div className="flex items-center gap-4">
-               {/* 新增：無航班勾選 */}
                <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
                 <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500" />
                 <span className="text-sm font-bold text-slate-600">無 (不需航班)</span>
@@ -1533,7 +1498,6 @@ const App = () => {
             </div>
           </div>
           
-          {/* 根據 hasFlights 決定是否顯示航班輸入 */}
           {basicData.hasFlights && (
             !basicData.isMultiCityFlight ? (
             <div className="bg-slate-50/50 p-4 md:p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
@@ -1663,7 +1627,6 @@ const App = () => {
 
     return (
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
-        {/* Header Card */}
         <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
@@ -1676,7 +1639,6 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
-              {/* 貨幣與旅伴設定按鈕 */}
               <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
                 <button 
                   onClick={() => setIsCurrencyModalOpen(true)}
@@ -1739,12 +1701,10 @@ const App = () => {
           </div>
         </div>
 
-        {/* --- 功能 3: 城市指南區域 (如果有的話) --- */}
         {itineraryData.city_guides && (
           <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
         )}
 
-        {/* Day Tabs (Hidden on Print) */}
         <div className="flex overflow-x-auto pb-4 gap-3 md:gap-4 scrollbar-hide px-2 snap-x print:hidden">
           {itineraryData.days.map((day, index) => (
             <button key={index} onClick={() => setActiveTab(index)} className={`snap-center flex-shrink-0 px-6 py-3 md:px-8 md:py-4 rounded-2xl transition-all duration-300 border-2 relative overflow-hidden group ${activeTab === index ? 'bg-slate-800 text-white border-slate-800 shadow-xl scale-105' : 'bg-white text-slate-500 border-transparent hover:border-slate-200 hover:bg-slate-50'}`}>
@@ -1755,7 +1715,6 @@ const App = () => {
           ))}
         </div>
 
-        {/* Timeline Content (Normal View - Single Day) */}
         <div className="print:hidden">
            <DayTimeline 
              day={currentDay} 
@@ -1771,7 +1730,6 @@ const App = () => {
            />
         </div>
 
-        {/* Printable View (All Days) */}
         <div className="hidden print:block">
            {itineraryData.days.map((day, idx) => (
              <div key={idx} className="break-before-page">
@@ -1791,10 +1749,8 @@ const App = () => {
            ))}
         </div>
         
-        {/* 總旅程帳本結算 (在最後顯示) */}
         <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
 
-        {/* --- AI 深度規劃彈窗 --- */}
         <DeepDiveModal 
            isOpen={activeDeepDive !== null}
            onClose={() => setActiveDeepDive(null)}
@@ -1804,6 +1760,21 @@ const App = () => {
            onSavePlan={onSavePlan}
         />
       </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100 via-slate-100 to-slate-200 p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0">
+      {step === 'input' && renderInputForm()}
+      {step === 'loading' && renderLoading()}
+      {step === 'result' && (
+        <>
+          {renderResult()}
+          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
+          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
+        </>
+      )}
+      {step === 'saved_list' && renderSavedList()}
     </div>
   );
 };
