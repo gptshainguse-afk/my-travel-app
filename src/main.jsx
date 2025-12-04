@@ -23,7 +23,15 @@ const usePersistentState = (key, initialValue) => {
     if (typeof window !== 'undefined') {
       try {
         const item = window.localStorage.getItem(key);
-        return item ? JSON.parse(item) : initialValue;
+        if (item) {
+          const parsed = JSON.parse(item);
+          // 簡單的合併邏輯：確保新加入的欄位 (如 priceRanges) 存在於舊資料中
+          if (typeof initialValue === 'object' && !Array.isArray(initialValue) && initialValue !== null) {
+            return { ...initialValue, ...parsed };
+          }
+          return parsed;
+        }
+        return initialValue;
       } catch (error) {
         console.error(`Error reading localStorage key "${key}":`, error);
         return initialValue;
@@ -45,7 +53,7 @@ const usePersistentState = (key, initialValue) => {
   return [state, setState];
 };
 
-// --- 圖片壓縮工具 (避免 Base64 太大塞爆 LocalStorage) ---
+// --- 圖片壓縮工具 ---
 const compressImage = (file) => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -61,13 +69,13 @@ const compressImage = (file) => {
         canvas.height = img.height * scaleSize;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7)); // 壓縮品質 0.7
+        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
       };
     };
   });
 };
 
-// --- JSON 清理工具 (使用 new RegExp 避免編譯錯誤) ---
+// --- JSON 清理工具 ---
 const cleanJsonResult = (text) => {
   if (!text) return "{}";
   try {
@@ -77,7 +85,6 @@ const cleanJsonResult = (text) => {
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       return text.substring(firstBrace, lastBrace + 1);
     }
-    // 使用建構式建立正則，避免與 JSX 語法衝突
     return text.replace(new RegExp('```json', 'g'), '').replace(new RegExp('```', 'g'), '').trim();
   } catch (e) {
     console.error("JSON Clean Error", e);
@@ -85,7 +92,7 @@ const cleanJsonResult = (text) => {
   }
 };
 
-// --- 安全渲染文字的輔助函數 ---
+// --- 安全渲染文字 ---
 const safeRender = (content) => {
   if (content === null || content === undefined) return '';
   if (typeof content === 'string') return content;
@@ -114,7 +121,7 @@ const safeRender = (content) => {
   return String(content);
 };
 
-// --- AI 深度規劃彈窗元件 (使用 Portal) ---
+// --- AI 深度規劃彈窗 (Portal) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
 
@@ -1032,7 +1039,14 @@ const App = () => {
 
   const handlePriceChange = (e) => {
     const { name, checked } = e.target;
-    setBasicData(prev => ({ ...prev, priceRanges: { ...prev.priceRanges, [name]: checked } }));
+    // 確保 priceRanges 物件存在，防止舊資料結構導致錯誤
+    setBasicData(prev => ({ 
+      ...prev, 
+      priceRanges: { 
+        ...(prev.priceRanges || { high: false, medium: false, low: false }), 
+        [name]: checked 
+      } 
+    }));
   };
 
   const handleSimpleFlightChange = (key, field, value) => {
@@ -1193,7 +1207,8 @@ const App = () => {
   const handleShareText = (mode = 'simple') => {
     if (!itineraryData) return;
     let text = `${basicData.destinations}\n`;
-    itineraryData.days.forEach(day => {
+    // 安全存取 days
+    (itineraryData.days || []).forEach(day => {
       text += `\nDay ${day.day_index}\n`;
       day.timeline.forEach(item => {
         if (mode === 'simple') {
@@ -1245,9 +1260,9 @@ const App = () => {
     const accommodationString = accommodations.map(a => `住處:${a.name}(${a.type}) 地址:${a.address}`).join('\n');
 
     const selectedPrices = [];
-    if (basicData.priceRanges.high) selectedPrices.push("高 (1000 TWD+)");
-    if (basicData.priceRanges.medium) selectedPrices.push("中 (301-1000 TWD)");
-    if (basicData.priceRanges.low) selectedPrices.push("低 (<300 TWD)");
+    if (basicData.priceRanges?.high) selectedPrices.push("高 (1000 TWD+)");
+    if (basicData.priceRanges?.medium) selectedPrices.push("中 (301-1000 TWD)");
+    if (basicData.priceRanges?.low) selectedPrices.push("低 (<300 TWD)");
     const priceConstraint = selectedPrices.length > 0 ? selectedPrices.join(', ') : "無限制";
 
     const transportConstraint = basicData.transportMode === 'self_driving' 
@@ -1330,7 +1345,6 @@ const App = () => {
       if (data.error) throw new Error(data.error.message);
       const resultText = data.candidates[0].content.parts[0].text;
       
-      // Use cleanJsonResult to ensure the JSON is parseable, removing any markdown code blocks
       const cleanedText = cleanJsonResult(resultText);
       let parsedData;
       
@@ -1463,6 +1477,7 @@ const App = () => {
 
         <hr className="border-slate-100" />
 
+        {/* 新增：特殊要求與價位 */}
         <section className="space-y-4">
           <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
             <span className="bg-purple-100 p-2 rounded-lg text-purple-600"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
@@ -1480,7 +1495,8 @@ const App = () => {
                 { key: 'low', label: '低 (NT$300以下)' }
               ].map((price) => (
                 <label key={price.key} className="flex items-center gap-2 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors">
-                  <input type="checkbox" name={price.key} checked={basicData.priceRanges[price.key]} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
+                  {/* 使用 optional chaining 防止舊資料造成 crash */}
+                  <input type="checkbox" name={price.key} checked={basicData.priceRanges?.[price.key] || false} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
                   <span className="text-sm font-medium text-slate-700">{price.label}</span>
                 </label>
               ))}
@@ -1495,6 +1511,7 @@ const App = () => {
             <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Plane className="w-5 h-5" /></span>航班資訊</h3>
             
             <div className="flex items-center gap-4">
+               {/* 新增：無航班勾選 */}
                <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
                 <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500" />
                 <span className="text-sm font-bold text-slate-600">無 (不需航班)</span>
@@ -1509,6 +1526,7 @@ const App = () => {
             </div>
           </div>
           
+          {/* 根據 hasFlights 決定是否顯示航班輸入 */}
           {basicData.hasFlights && (
             !basicData.isMultiCityFlight ? (
             <div className="bg-slate-50/50 p-4 md:p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
@@ -1632,7 +1650,7 @@ const App = () => {
   );
 
   const renderResult = () => {
-    if (!itineraryData) return null;
+    if (!itineraryData || !itineraryData.days) return null; // 加入安全檢查，防止 AI 資料錯誤時白畫面
     const currentDay = itineraryData.days[activeTab];
     const isSaved = isCurrentPlanSaved();
 
