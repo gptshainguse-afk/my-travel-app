@@ -552,7 +552,7 @@ const CityGuide = ({ guideData, cities }) => {
 const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
-  const [activeDeepDive, setActiveDeepDive] = useState(null); // 控制 AI 深度規劃彈窗
+  const [activeDeepDive, setActiveDeepDive] = useState(null);
 
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
@@ -776,6 +776,21 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>
                   {item.description}
                 </div>
+
+                {/* --- 新增：列印模式下顯示 AI 深度規劃內容 (如果已生成) --- */}
+                {isPrintMode && item.ai_details && (
+                  <div className="mt-2 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm break-inside-avoid">
+                     <h5 className="font-bold text-slate-800 mb-2 flex items-center gap-2 border-b border-slate-200 pb-2">
+                        <Sparkles className="w-4 h-4 text-purple-600" /> AI 深度導遊情報
+                     </h5>
+                     <div className="space-y-2 text-slate-700">
+                        <div><span className="font-bold text-purple-700">📍 路線:</span> {safeRender(item.ai_details.route_guide)}</div>
+                        <div><span className="font-bold text-orange-700">🍽️ 必訪:</span> {safeRender(item.ai_details.must_visit_shops)}</div>
+                        <div><span className="font-bold text-red-700">🛡️ 安全:</span> {safeRender(item.ai_details.safety_alert)}</div>
+                        <div className="text-xs text-slate-500 pt-1"><span className="font-bold">🗺️ 地圖:</span> {safeRender(item.ai_details.mini_map_desc)}</div>
+                     </div>
+                  </div>
+                )}
 
                 {/* User Notes */}
                 {(activeNote === timelineIndex || item.user_notes) && (
