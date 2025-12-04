@@ -9,7 +9,7 @@ import {
   MessageSquare, Banknote, Share2, Download, Copy, Check,
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
-  Camera, FileText, Bot, Info, ShieldAlert, Ticket
+  Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -63,6 +63,99 @@ const compressImage = (file) => {
       };
     };
   });
+};
+
+// --- JSON 清理工具 (防止白畫面) ---
+const cleanJsonResult = (text) => {
+  if (!text) return "{}";
+  // 移除 markdown 標記 ```json ... ``` 或 ``` ... ```
+  let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+  return cleaned;
+};
+
+// --- AI 深度規劃彈窗元件 (新增) ---
+const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 flex justify-between items-center shrink-0">
+          <div className="text-white">
+            <div className="flex items-center gap-2 text-purple-200 text-sm font-bold mb-1">
+              <Sparkles className="w-4 h-4" /> AI 深度導遊
+            </div>
+            <h3 className="text-xl md:text-2xl font-bold truncate max-w-[200px] md:max-w-md">{itemTitle}</h3>
+          </div>
+          <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center h-64 space-y-4 text-slate-500">
+              <Loader2 className="w-12 h-12 animate-spin text-purple-600" />
+              <p className="animate-pulse font-medium">AI 正在實地考察中，請稍候...</p>
+            </div>
+          ) : data ? (
+            <div className="space-y-6">
+               <div className="bg-white p-5 rounded-2xl shadow-sm border border-purple-100">
+                  <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+                    <MapPin className="w-5 h-5 text-purple-500" /> 最佳路線指引
+                  </h4>
+                  <p className="text-slate-600 leading-relaxed text-base">{data.route_guide}</p>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-orange-100">
+                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+                      <Utensils className="w-5 h-5 text-orange-500" /> 周邊必吃/必逛
+                    </h4>
+                    <p className="text-slate-600 leading-relaxed text-sm">{data.must_visit_shops}</p>
+                 </div>
+                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-red-100">
+                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+                      <ShieldAlert className="w-5 h-5 text-red-500" /> 避雷與治安提示
+                    </h4>
+                    <p className="text-slate-600 leading-relaxed text-sm">{data.safety_alert}</p>
+                 </div>
+               </div>
+
+               <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
+                  <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2">
+                    <Map className="w-5 h-5" /> 迷你地圖導航
+                  </h4>
+                  <p className="text-blue-700 text-sm font-medium">{data.mini_map_desc}</p>
+               </div>
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 py-20">資料讀取失敗，請重試</div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0">
+          <button 
+            onClick={onClose} 
+            className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors flex items-center gap-2"
+          >
+            <ArrowLeft className="w-4 h-4" /> 返回行程
+          </button>
+          {!isLoading && data && (
+            <button 
+              onClick={() => { onSavePlan(); alert('規劃已儲存！'); }} 
+              className="px-5 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2"
+            >
+              <Save className="w-4 h-4" /> 儲存規劃
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // --- 簡單的 SVG 圓餅圖元件 ---
@@ -328,10 +421,10 @@ const CityGuide = ({ guideData, cities }) => {
 };
 
 // --- 單日行程表元件 (包含 功能 1, 2, 4) ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem }) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); // 功能 2: 備註開關
-  const [aiLoading, setAiLoading] = useState(null); // 功能 4: AI Loading 狀態
+  const [activeDeepDive, setActiveDeepDive] = useState(null); // 控制 AI 深度規劃彈窗 { timelineIndex, isLoading, data, title }
 
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
@@ -378,14 +471,22 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { user_notes: text });
   };
 
-  // 功能 4: AI 細項規劃
+  // 功能 4: AI 細項規劃 (更新版 - 解決白畫面與新增彈窗)
   const handleDeepDive = async (timelineIndex, item) => {
+    // 如果已經有資料，直接打開彈窗
+    if (item.ai_details) {
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
+      return;
+    }
+
     if (!apiKey) return alert("需要 API Key 才能使用此功能");
-    setAiLoading(timelineIndex);
+    
+    // 設定 Loading 狀態並打開彈窗
+    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
 
     const prompt = `
       針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
-      請以 JSON 格式回傳，不要有 Markdown 標記。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
       包含以下欄位:
       1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
       2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
@@ -400,15 +501,19 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
       });
       const data = await response.json();
-      const resultText = data.candidates[0].content.parts[0].text;
-      const aiResult = JSON.parse(resultText);
+      const rawText = data.candidates[0].content.parts[0].text;
+      const cleanedText = cleanJsonResult(rawText); // 修正白畫面關鍵
+      const aiResult = JSON.parse(cleanedText);
 
+      // 更新行程資料
       updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      
+      // 更新彈窗狀態顯示結果
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
     } catch (error) {
       console.error(error);
       alert("AI 分析失敗: " + error.message);
-    } finally {
-      setAiLoading(null);
+      setActiveDeepDive(null); // 關閉彈窗
     }
   };
 
@@ -531,11 +636,10 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
                      <button 
                        onClick={() => handleDeepDive(timelineIndex, item)}
-                       className="p-2 rounded-full hover:bg-purple-50 text-purple-500 transition-colors relative"
+                       className={`p-2 rounded-full hover:bg-purple-50 transition-colors relative ${item.ai_details ? 'text-purple-600 bg-purple-50' : 'text-purple-400'}`}
                        title="AI 深度規劃"
-                       disabled={aiLoading === timelineIndex}
                      >
-                        {aiLoading === timelineIndex ? <Loader2 className="w-5 h-5 animate-spin" /> : <Bot className="w-5 h-5" />}
+                        <Bot className="w-5 h-5" />
                      </button>
                   </div>
                 </div>
@@ -543,34 +647,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>
                   {item.description}
                 </div>
-
-                {/* --- 功能 4: AI 細項規劃結果顯示 --- */}
-                {item.ai_details && (
-                   <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-4 mb-4 animate-in fade-in">
-                      <div className="flex items-center gap-2 mb-3">
-                         <Bot className="w-5 h-5 text-purple-600" />
-                         <span className="font-bold text-purple-800 text-sm">AI 深度情報</span>
-                      </div>
-                      <div className="grid grid-cols-1 gap-3 text-sm">
-                         <div className="flex gap-2">
-                            <MapPin className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                            <div><span className="font-bold text-slate-700">路線指引:</span> <span className="text-slate-600">{item.ai_details.route_guide}</span></div>
-                         </div>
-                         <div className="flex gap-2">
-                            <Map className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                            <div><span className="font-bold text-slate-700">迷你地圖描述:</span> <span className="text-slate-600">{item.ai_details.mini_map_desc}</span></div>
-                         </div>
-                         <div className="flex gap-2">
-                            <Utensils className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                            <div><span className="font-bold text-slate-700">推薦周邊:</span> <span className="text-slate-600">{item.ai_details.must_visit_shops}</span></div>
-                         </div>
-                         <div className="flex gap-2">
-                            <ShieldAlert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                            <div><span className="font-bold text-red-700">安全注意:</span> <span className="text-red-600">{item.ai_details.safety_alert}</span></div>
-                         </div>
-                      </div>
-                   </div>
-                )}
 
                 {/* --- 功能 2: 使用者備註區塊 --- */}
                 {(activeNote === timelineIndex || item.user_notes) && (
@@ -690,6 +766,16 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         </div>
         
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
+
+        {/* --- AI 深度規劃彈窗 --- */}
+        <DeepDiveModal 
+           isOpen={activeDeepDive !== null}
+           onClose={() => setActiveDeepDive(null)}
+           data={activeDeepDive?.data}
+           isLoading={activeDeepDive?.isLoading}
+           itemTitle={activeDeepDive?.title}
+           onSavePlan={onSavePlan}
+        />
       </div>
     </div>
   );
@@ -1597,6 +1683,7 @@ const App = () => {
              isPrintMode={false} 
              apiKey={apiKey}
              updateItineraryItem={updateItineraryItem}
+             onSavePlan={saveCurrentPlan}
            />
         </div>
 
@@ -1614,6 +1701,7 @@ const App = () => {
                  isPrintMode={true} 
                  apiKey={apiKey}
                  updateItineraryItem={updateItineraryItem}
+                 onSavePlan={saveCurrentPlan}
                />
              </div>
            ))}
