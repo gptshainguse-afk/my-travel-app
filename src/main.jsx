@@ -8,7 +8,8 @@ import {
   List, ArrowLeft, BookOpen, Search, Key, 
   MessageSquare, Banknote, Share2, Download, Copy, Check,
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
-  Wallet, PieChart, Coins, MinusCircle, X, UserCog
+  Wallet, PieChart, Coins, MinusCircle, X, UserCog,
+  Camera, FileText, Bot, Info, ShieldAlert, Ticket
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -42,6 +43,28 @@ const usePersistentState = (key, initialValue) => {
   return [state, setState];
 };
 
+// --- 圖片壓縮工具 (避免 Base64 太大塞爆 LocalStorage) ---
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800;
+        const scaleSize = MAX_WIDTH / img.width;
+        canvas.width = MAX_WIDTH;
+        canvas.height = img.height * scaleSize;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7)); // 壓縮品質 0.7
+      };
+    };
+  });
+};
+
 // --- 簡單的 SVG 圓餅圖元件 ---
 const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
   if (!data || data.length === 0) return <div className="text-center text-slate-400 text-sm py-4">尚無資料</div>;
@@ -64,7 +87,6 @@ const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
     const y2 = Math.sin(2 * Math.PI * endPercent);
 
     const largeArcFlag = percent > 0.5 ? 1 : 0;
-    // 避免單一項目 100% 時路徑錯誤
     const pathData = percent === 1 
       ? `M 1 0 A 1 1 0 1 1 -1 0 A 1 1 0 1 1 1 0 Z`
       : `M 0 0 L ${x1} ${y1} A 1 1 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
@@ -170,7 +192,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
   );
 };
 
-// --- 消費表單元件 (優化版) ---
+// --- 消費表單元件 ---
 const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   const [form, setForm] = useState({
     item: '', category: '美食', amount: '', payer: travelers[0] || '', splitters: travelers, note: ''
@@ -181,7 +203,6 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
   
   const handleSplitterChange = (name) => {
-    // 各付各模式下，分攤者預設全選且建議不更動，但這裡還是允許彈性
     setForm(prev => {
       const newSplitters = prev.splitters.includes(name) 
         ? prev.splitters.filter(n => n !== name) 
@@ -195,7 +216,6 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     
     let finalAmount = Number(form.amount);
     
-    // 邏輯 1: 如果是各付各，總金額 = 輸入金額(單價) * 分攤人數
     if (isGoDutch) {
        finalAmount = finalAmount * form.splitters.length;
     }
@@ -203,7 +223,6 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     onSave({
       ...form,
       amount: finalAmount,
-      // 如果是各付各，記錄下單價以便備註查看，或者直接存入
       note: isGoDutch ? `${form.note} (各付各: 單價 ${form.amount} x ${form.splitters.length}人)` : form.note
     });
   };
@@ -259,9 +278,60 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   );
 };
 
-// --- 單日行程表元件 ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false }) => {
-  const [editingItem, setEditingItem] = useState(null); 
+// --- 功能 3: 城市指南元件 ---
+const CityGuide = ({ guideData, cities }) => {
+  const [selectedCity, setSelectedCity] = useState(cities[0]);
+  const currentGuide = guideData[selectedCity];
+
+  if (!currentGuide) return null;
+
+  return (
+    <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 print:break-inside-avoid">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
+          <BookOpen className="w-6 h-6" /> 城市生存指南
+        </h3>
+        <div className="relative">
+          <select 
+            value={selectedCity} 
+            onChange={(e) => setSelectedCity(e.target.value)}
+            className="appearance-none bg-white border border-indigo-200 text-indigo-700 py-2 pl-4 pr-10 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer"
+          >
+            {cities.map(city => <option key={city} value={city}>{city}</option>)}
+          </select>
+          <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-indigo-400 pointer-events-none" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
+            <Globe className="w-4 h-4" /> 歷史人文
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.history_culture}</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
+            <Ticket className="w-4 h-4" /> 交通與票務
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.transport_tips}</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+          <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4" /> 治安與詐騙提醒
+          </h4>
+          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.safety_scams}</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- 單日行程表元件 (包含 功能 1, 2, 4) ---
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem }) => {
+  const [editingExpense, setEditingExpense] = useState(null); 
+  const [activeNote, setActiveNote] = useState(null); // 功能 2: 備註開關
+  const [aiLoading, setAiLoading] = useState(null); // 功能 4: AI Loading 狀態
 
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
@@ -279,7 +349,69 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     }
   };
 
-  // 匯率換算輔助函數
+  // 功能 1: 照片上傳處理
+  const handlePhotoUpload = async (e, timelineIndex) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const base64 = await compressImage(file);
+      const currentItem = day.timeline[timelineIndex];
+      const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64];
+      
+      updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
+    } catch (error) {
+      console.error("Image upload failed", error);
+      alert("圖片處理失敗，請重試");
+    }
+  };
+
+  const removePhoto = (timelineIndex, photoIndex) => {
+    if(!confirm("刪除這張照片？")) return;
+    const currentItem = day.timeline[timelineIndex];
+    const newPhotos = currentItem.photos.filter((_, i) => i !== photoIndex);
+    updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
+  };
+
+  // 功能 2: 備註處理
+  const handleNoteChange = (timelineIndex, text) => {
+    updateItineraryItem(dayIndex, timelineIndex, { user_notes: text });
+  };
+
+  // 功能 4: AI 細項規劃
+  const handleDeepDive = async (timelineIndex, item) => {
+    if (!apiKey) return alert("需要 API Key 才能使用此功能");
+    setAiLoading(timelineIndex);
+
+    const prompt = `
+      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const data = await response.json();
+      const resultText = data.candidates[0].content.parts[0].text;
+      const aiResult = JSON.parse(resultText);
+
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+    } catch (error) {
+      console.error(error);
+      alert("AI 分析失敗: " + error.message);
+    } finally {
+      setAiLoading(null);
+    }
+  };
+
   const convertToHomeCurrency = (amount) => {
      if (!currencySettings.rate || currencySettings.rate === 0) return '';
      const homeAmount = Math.round(amount * currencySettings.rate);
@@ -348,7 +480,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
               </div>
 
-              <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 
+              <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform 
                 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
                 
                 <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
@@ -371,19 +503,103 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                       )}
                     </h4>
                   </div>
-                  <a 
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className={`flex items-center gap-1 md:gap-2 text-blue-500 hover:text-blue-600 hover:bg-blue-50 px-3 py-1.5 md:px-4 md:py-2 rounded-full transition-colors bg-white border border-blue-100 shadow-sm text-xs md:text-sm ${isPrintMode ? 'hidden' : ''}`}
-                  >
-                    <Map className="w-3 h-3 md:w-4 md:h-4" /> <span className="font-bold">地圖</span>
-                  </a>
+                  
+                  {/* Action Bar (Map, Note, Photo, AI) */}
+                  <div className={`flex items-center gap-2 ${isPrintMode ? 'hidden' : ''}`}>
+                     <a 
+                       href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} 
+                       target="_blank" 
+                       rel="noreferrer" 
+                       className="p-2 rounded-full hover:bg-blue-50 text-blue-500 transition-colors"
+                       title="Google Maps"
+                     >
+                       <Map className="w-5 h-5" />
+                     </a>
+                     
+                     <button 
+                       onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)}
+                       className={`p-2 rounded-full transition-colors ${item.user_notes ? 'bg-yellow-50 text-yellow-600' : 'hover:bg-slate-50 text-slate-400 hover:text-slate-600'}`}
+                       title="備註筆記"
+                     >
+                       <FileText className="w-5 h-5" />
+                     </button>
+
+                     <label className="p-2 rounded-full hover:bg-slate-50 text-slate-400 hover:text-slate-600 cursor-pointer transition-colors" title="上傳照片">
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoUpload(e, timelineIndex)} />
+                        <Camera className="w-5 h-5" />
+                     </label>
+
+                     <button 
+                       onClick={() => handleDeepDive(timelineIndex, item)}
+                       className="p-2 rounded-full hover:bg-purple-50 text-purple-500 transition-colors relative"
+                       title="AI 深度規劃"
+                       disabled={aiLoading === timelineIndex}
+                     >
+                        {aiLoading === timelineIndex ? <Loader2 className="w-5 h-5 animate-spin" /> : <Bot className="w-5 h-5" />}
+                     </button>
+                  </div>
                 </div>
                 
                 <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>
                   {item.description}
                 </div>
+
+                {/* --- 功能 4: AI 細項規劃結果顯示 --- */}
+                {item.ai_details && (
+                   <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-4 mb-4 animate-in fade-in">
+                      <div className="flex items-center gap-2 mb-3">
+                         <Bot className="w-5 h-5 text-purple-600" />
+                         <span className="font-bold text-purple-800 text-sm">AI 深度情報</span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 text-sm">
+                         <div className="flex gap-2">
+                            <MapPin className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                            <div><span className="font-bold text-slate-700">路線指引:</span> <span className="text-slate-600">{item.ai_details.route_guide}</span></div>
+                         </div>
+                         <div className="flex gap-2">
+                            <Map className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                            <div><span className="font-bold text-slate-700">迷你地圖描述:</span> <span className="text-slate-600">{item.ai_details.mini_map_desc}</span></div>
+                         </div>
+                         <div className="flex gap-2">
+                            <Utensils className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                            <div><span className="font-bold text-slate-700">推薦周邊:</span> <span className="text-slate-600">{item.ai_details.must_visit_shops}</span></div>
+                         </div>
+                         <div className="flex gap-2">
+                            <ShieldAlert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                            <div><span className="font-bold text-red-700">安全注意:</span> <span className="text-red-600">{item.ai_details.safety_alert}</span></div>
+                         </div>
+                      </div>
+                   </div>
+                )}
+
+                {/* --- 功能 2: 使用者備註區塊 --- */}
+                {(activeNote === timelineIndex || item.user_notes) && (
+                   <div className={`mb-4 ${!activeNote && item.user_notes ? 'block' : activeNote === timelineIndex ? 'block' : 'hidden'}`}>
+                      <textarea 
+                        value={item.user_notes || ''}
+                        onChange={(e) => handleNoteChange(timelineIndex, e.target.value)}
+                        placeholder="在此輸入筆記 (例如: 必買清單、訂位代號...)"
+                        className="w-full p-3 bg-yellow-50/50 border border-yellow-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400 outline-none resize-none min-h-[80px]"
+                      />
+                   </div>
+                )}
+
+                {/* --- 功能 1: 照片展示牆 --- */}
+                {item.photos && item.photos.length > 0 && (
+                   <div className="flex gap-3 overflow-x-auto pb-2 mb-4 scrollbar-hide">
+                      {item.photos.map((photo, pIdx) => (
+                        <div key={pIdx} className="relative group/photo shrink-0">
+                           <img src={photo} alt="user upload" className="h-24 w-24 object-cover rounded-lg shadow-sm border border-slate-100" />
+                           <button 
+                             onClick={() => removePhoto(timelineIndex, pIdx)}
+                             className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1 opacity-0 group-hover/photo:opacity-100 transition-opacity"
+                           >
+                              <X className="w-3 h-3" />
+                           </button>
+                        </div>
+                      ))}
+                   </div>
+                )}
 
                 {/* Transport, Warnings, Menu */}
                 {item.transport_detail && (
@@ -429,44 +645,43 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 {/* --- 分帳功能區塊 --- */}
                 {!isPrintMode && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
-                     <div className="flex items-center justify-between mb-2">
-                       <h5 className="text-sm font-bold text-slate-600 flex items-center gap-2"><Wallet className="w-4 h-4 text-emerald-500" /> 記帳小本本</h5>
-                       <button onClick={() => setEditingItem(editingItem === timelineIndex ? null : timelineIndex)} className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors flex items-center gap-1">
-                         {editingItem === timelineIndex ? <MinusCircle className="w-3 h-3" /> : <Plus className="w-3 h-3" />} {editingItem === timelineIndex ? '收起' : '新增消費'}
-                       </button>
-                     </div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h5 className="text-sm font-bold text-slate-600 flex items-center gap-2"><Wallet className="w-4 h-4 text-emerald-500" /> 記帳小本本</h5>
+                        <button onClick={() => setEditingExpense(editingExpense === timelineIndex ? null : timelineIndex)} className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors flex items-center gap-1">
+                          {editingExpense === timelineIndex ? <MinusCircle className="w-3 h-3" /> : <Plus className="w-3 h-3" />} {editingExpense === timelineIndex ? '收起' : '新增消費'}
+                        </button>
+                      </div>
 
-                     <div className="space-y-2">
-                       {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
-                         <div key={expense.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded border border-slate-100">
-                           <div className="flex flex-col">
-                             <span className="font-bold text-slate-700">{expense.item} ({expense.category})</span>
-                             <span className="text-slate-500">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
-                             {expense.note && <span className="text-slate-400 italic scale-90 origin-left">{expense.note}</span>}
-                           </div>
-                           <div className="flex flex-col items-end gap-0.5">
-                             <div className="flex items-center gap-2">
-                               <span className="font-mono font-bold text-slate-800">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
-                               <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
-                             </div>
-                             {/* 顯示換算後金額 */}
-                             <span className="text-[10px] text-blue-500 font-medium">{convertToHomeCurrency(expense.amount)}</span>
-                           </div>
-                         </div>
-                       ))}
-                     </div>
+                      <div className="space-y-2">
+                        {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
+                          <div key={expense.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded border border-slate-100">
+                            <div className="flex flex-col">
+                              <span className="font-bold text-slate-700">{expense.item} ({expense.category})</span>
+                              <span className="text-slate-500">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
+                              {expense.note && <span className="text-slate-400 italic scale-90 origin-left">{expense.note}</span>}
+                            </div>
+                            <div className="flex flex-col items-end gap-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-slate-800">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
+                                <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
+                              </div>
+                              <span className="text-[10px] text-blue-500 font-medium">{convertToHomeCurrency(expense.amount)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
 
-                     {editingItem === timelineIndex && (
-                       <ExpenseForm 
-                         travelers={travelers} 
-                         currencySettings={currencySettings}
-                         onSave={(newItem) => {
-                           addExpense(timelineIndex, newItem);
-                           setEditingItem(null);
-                         }} 
-                         onCancel={() => setEditingItem(null)}
-                       />
-                     )}
+                      {editingExpense === timelineIndex && (
+                        <ExpenseForm 
+                          travelers={travelers} 
+                          currencySettings={currencySettings}
+                          onSave={(newItem) => {
+                            addExpense(timelineIndex, newItem);
+                            setEditingExpense(null);
+                          }} 
+                          onCancel={() => setEditingExpense(null)}
+                        />
+                      )}
                   </div>
                 )}
               </div>
@@ -501,23 +716,23 @@ const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
         </div>
         <div className="space-y-4">
           <div className="pt-2 bg-blue-50 p-3 rounded border border-blue-100">
-             <label className="text-xs text-blue-600 font-bold block mb-1">目前設定匯率 (1 外幣 = ? 台幣)</label>
-             <input 
-               type="number" 
-               value={currencySettings.rate} 
-               onChange={(e) => updateRate(e.target.value)} 
-               className="w-full p-2 border rounded text-sm font-mono text-center" 
-               step="0.001" 
-             />
-             <div className="flex gap-2 mt-2">
-               <input 
-                 placeholder="符號 (如 ¥)" 
-                 value={currencySettings.symbol}
-                 onChange={(e) => updateSymbol(e.target.value)}
-                 className="w-20 p-2 border rounded text-sm text-center"
-               />
-               <span className="text-xs text-slate-400 self-center flex-1">← 設定當地貨幣符號</span>
-             </div>
+              <label className="text-xs text-blue-600 font-bold block mb-1">目前設定匯率 (1 外幣 = ? 台幣)</label>
+              <input 
+                type="number" 
+                value={currencySettings.rate} 
+                onChange={(e) => updateRate(e.target.value)} 
+                className="w-full p-2 border rounded text-sm font-mono text-center" 
+                step="0.001" 
+              />
+              <div className="flex gap-2 mt-2">
+                <input 
+                  placeholder="符號 (如 ¥)" 
+                  value={currencySettings.symbol}
+                  onChange={(e) => updateSymbol(e.target.value)}
+                  className="w-20 p-2 border rounded text-sm text-center"
+                />
+                <span className="text-xs text-slate-400 self-center flex-1">← 設定當地貨幣符號</span>
+              </div>
           </div>
 
           <hr className="border-slate-100" />
@@ -532,15 +747,15 @@ const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
             <div className="text-center text-slate-400 text-xs pb-3">≈</div>
             <div className="flex-1">
               <label className="text-xs text-slate-500">約合台幣</label>
-               <div className="w-full p-2 bg-slate-100 border rounded text-center font-mono text-lg font-bold text-blue-600">
-                 NT$ {Math.round(amount * currencySettings.rate).toLocaleString()}
-               </div>
+                <div className="w-full p-2 bg-slate-100 border rounded text-center font-mono text-lg font-bold text-blue-600">
+                  NT$ {Math.round(amount * currencySettings.rate).toLocaleString()}
+                </div>
             </div>
           </div>
           
           <div className="pt-2">
-             <label className="text-xs text-slate-500">試算金額輸入</label>
-             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full p-2 border rounded text-sm" />
+              <label className="text-xs text-slate-500">試算金額輸入</label>
+              <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full p-2 border rounded text-sm" />
           </div>
         </div>
       </div>
@@ -857,6 +1072,17 @@ const App = () => {
     setShowCopyMenu(false);
   };
 
+  // --- 更新行程資料 helper (用於照片、筆記、AI 結果更新) ---
+  const updateItineraryItem = (dayIndex, timelineIndex, updates) => {
+     setItineraryData(prev => {
+        const newDays = [...prev.days];
+        const newTimeline = [...newDays[dayIndex].timeline];
+        newTimeline[timelineIndex] = { ...newTimeline[timelineIndex], ...updates };
+        newDays[dayIndex].timeline = newTimeline;
+        return { ...prev, days: newDays };
+     });
+  };
+
   const generateItinerary = async () => {
     if (!apiKey) {
       alert("請輸入您的 Gemini API Key");
@@ -911,12 +1137,20 @@ const App = () => {
       3. Food: Menu translation (Local | Chinese | Est. Price).
       4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
       5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
+      6. **City Guide**: Provide a guide for each unique major city visited. Include keys: "history_culture", "transport_tips" (tickets, passes), "safety_scams" (areas to avoid, common scams).
       
       JSON Schema Structure:
       {
         "trip_summary": "String",
         "currency_rate": "String (e.g. '1 JPY = 0.21 TWD')",
         "currency_code": "String (e.g. 'JPY')",
+        "city_guides": {
+           "CityName": {
+             "history_culture": "...",
+             "transport_tips": "...",
+             "safety_scams": "..."
+           }
+        },
         "created": ${Date.now()}, 
         "days": [
           {
@@ -1167,8 +1401,8 @@ const App = () => {
           ))}
 
           <div className="flex items-center gap-3 pt-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
-             <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-             <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機入境觀光</label>
+              <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
+              <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機入境觀光</label>
           </div>
         </section>
 
@@ -1330,10 +1564,15 @@ const App = () => {
             </div>
           </div>
           <div className="flex flex-wrap gap-3 md:gap-6 text-sm text-slate-500 mt-4 md:mt-6 pt-4 md:pt-6 border-t border-slate-100 font-medium print:text-black">
-             <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><DollarSign className="w-4 h-4 text-emerald-500 print:text-black" /> 匯率: {itineraryData.currency_rate}</span>
-             <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><Calendar className="w-4 h-4 text-blue-500 print:text-black" /> {basicData.dates}</span>
+              <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><DollarSign className="w-4 h-4 text-emerald-500 print:text-black" /> 匯率: {itineraryData.currency_rate}</span>
+              <span className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-lg print:bg-transparent print:p-0"><Calendar className="w-4 h-4 text-blue-500 print:text-black" /> {basicData.dates}</span>
           </div>
         </div>
+
+        {/* --- 功能 3: 城市指南區域 (如果有的話) --- */}
+        {itineraryData.city_guides && (
+          <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
+        )}
 
         {/* Day Tabs (Hidden on Print) */}
         <div className="flex overflow-x-auto pb-4 gap-3 md:gap-4 scrollbar-hide px-2 snap-x print:hidden">
@@ -1356,6 +1595,8 @@ const App = () => {
              travelers={travelerNames}
              currencySettings={currencySettings}
              isPrintMode={false} 
+             apiKey={apiKey}
+             updateItineraryItem={updateItineraryItem}
            />
         </div>
 
@@ -1371,6 +1612,8 @@ const App = () => {
                  travelers={travelerNames}
                  currencySettings={currencySettings}
                  isPrintMode={true} 
+                 apiKey={apiKey}
+                 updateItineraryItem={updateItineraryItem}
                />
              </div>
            ))}
