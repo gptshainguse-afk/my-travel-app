@@ -11,11 +11,11 @@ import {
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
-  ExternalLink
+  ExternalLink, MessageCircle
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
-import './index.css'; 
+// import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 const usePersistentState = (key, initialValue) => {
@@ -449,54 +449,7 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
 };
 
 // --- City Guide ---
-const CityGuide = ({ guideData, cities }) => {
-  const [selectedCity, setSelectedCity] = useState(cities[0]);
-  const currentGuide = guideData[selectedCity];
-
-  if (!currentGuide) return null;
-
-  return (
-    <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl p-6 mb-8 print:break-inside-avoid">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
-          <BookOpen className="w-6 h-6" /> 城市生存指南
-        </h3>
-        <div className="relative">
-          <select 
-            value={selectedCity} 
-            onChange={(e) => setSelectedCity(e.target.value)}
-            className="appearance-none bg-white border border-indigo-200 text-indigo-700 py-2 pl-4 pr-10 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-indigo-300 cursor-pointer"
-          >
-            {cities.map(city => <option key={city} value={city}>{city}</option>)}
-          </select>
-          <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-indigo-400 pointer-events-none" />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
-          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
-            <Globe className="w-4 h-4" /> 歷史人文
-          </h4>
-          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.history_culture}</p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
-          <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
-            <Ticket className="w-4 h-4" /> 交通與票務
-          </h4>
-          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.transport_tips}</p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
-          <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4" /> 治安與詐騙提醒
-          </h4>
-          <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.safety_scams}</p>
-        </div>
-      </div>
-    </div>
-  );
-};
-
+CityGuide
 // --- Day Timeline ---
 const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
@@ -1297,7 +1250,8 @@ const App = () => {
       4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
       5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
       6. **City Guide**: Provide a guide for each unique major city visited. Include keys: "history_culture", "transport_tips" (tickets, passes), "safety_scams" (areas to avoid, common scams).
-      
+      7. **Basic Phrases**: Include 5 essential phrases (Hello, Thank you, Sorry, Excuse me, How much?) in local language with Romanization.
+
       JSON Schema Structure:
       {
         "trip_summary": "String",
@@ -1307,7 +1261,10 @@ const App = () => {
            "CityName": {
              "history_culture": "...",
              "transport_tips": "...",
-             "safety_scams": "..."
+             "safety_scams": "...",
+             "basic_phrases": [
+               { "label": "Hello", "local": "...", "roman": "..." }
+             ]
            }
         },
         "created": ${Date.now()}, 
