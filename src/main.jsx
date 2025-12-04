@@ -84,13 +84,39 @@ const cleanJsonResult = (text) => {
   }
 };
 
-// --- 安全渲染文字的輔助函數 (防止 Object 導致 React Crash) ---
+// --- 安全渲染文字的輔助函數 (核心修復: 防止 Object 導致 React Crash) ---
 const safeRender = (content) => {
+  if (content === null || content === undefined) return '';
   if (typeof content === 'string') return content;
   if (typeof content === 'number') return String(content);
-  if (Array.isArray(content)) return content.join(', ');
-  if (typeof content === 'object' && content !== null) return JSON.stringify(content); // 萬一 AI 回傳了巢狀物件
-  return '';
+  
+  // 處理陣列 (包含字串陣列或物件陣列)
+  if (Array.isArray(content)) {
+    return content.map(item => {
+      if (typeof item === 'string') return item;
+      if (typeof item === 'object' && item !== null) {
+        // 針對 AI 可能回傳的物件格式做處理 (名稱/特色)
+        const name = item['名稱'] || item['name'] || item['title'] || item['店名'];
+        const feature = item['特色'] || item['feature'] || item['description'] || item['desc'];
+        
+        if (name && feature) return `• ${name}: ${feature}`;
+        if (name) return `• ${name}`;
+        // 如果沒有特定鍵值，則將所有值串接
+        return `• ${Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number').join(' ')}`;
+      }
+      return String(item);
+    }).join('\n');
+  }
+  
+  // 處理單一物件
+  if (typeof content === 'object') {
+     // 嘗試提取描述性文字，避免直接 stringify
+     const text = content['description'] || content['text'] || content['content'];
+     if (text) return text;
+     return JSON.stringify(content, null, 2); 
+  }
+  
+  return String(content);
 };
 
 // --- AI 深度規劃彈窗元件 (修正手機版顯示與安全渲染) ---
@@ -99,8 +125,11 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-0 md:p-4 animate-in fade-in duration-200">
-      {/* 調整寬度與高度設定，適應手機全螢幕模式 */}
-      <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[90vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
+      {/* 調整高度設定: 
+         - h-[85vh]: 避免手機瀏覽器工具列遮擋
+         - mb-safe: 避開 iPhone 底部橫條
+      */}
+      <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-4 md:p-6 flex justify-between items-center shrink-0">
@@ -170,7 +199,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
         </div>
 
         {/* Footer (Fixed at bottom) */}
-        <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0 pb-safe md:pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
+        <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0 pb-8 md:pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
           <button 
             onClick={onClose} 
             className="px-4 py-2 md:px-5 md:py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm md:text-base"
@@ -1750,22 +1779,17 @@ const App = () => {
         
         {/* 總旅程帳本結算 (在最後顯示) */}
         <LedgerSummary expenses={expenses} dayIndex={null} travelers={travelerNames} currencySettings={currencySettings} />
-      </div>
-    );
-  };
 
-  return (
-    <div className="min-h-screen bg-slate-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-100 via-slate-100 to-slate-200 p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0">
-      {step === 'input' && renderInputForm()}
-      {step === 'loading' && renderLoading()}
-      {step === 'result' && (
-        <>
-          {renderResult()}
-          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
-          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
-        </>
-      )}
-      {step === 'saved_list' && renderSavedList()}
+        {/* --- AI 深度規劃彈窗 --- */}
+        <DeepDiveModal 
+           isOpen={activeDeepDive !== null}
+           onClose={() => setActiveDeepDive(null)}
+           data={activeDeepDive?.data}
+           isLoading={activeDeepDive?.isLoading}
+           itemTitle={activeDeepDive?.title}
+           onSavePlan={onSavePlan}
+        />
+      </div>
     </div>
   );
 };
