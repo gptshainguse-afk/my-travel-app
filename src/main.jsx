@@ -1846,13 +1846,12 @@ const App = () => {
 
   return (
     <div 
-      className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
-      style={{
-        // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
-        backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
+    className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
+    style={{
+      // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
+      backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
       }}
     >
- 
       {step === 'input' && renderInputForm()}
       {step === 'loading' && renderLoading()}
       {step === 'result' && (
