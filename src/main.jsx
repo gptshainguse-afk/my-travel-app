@@ -1427,7 +1427,7 @@ const App = () => {
 
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
-        <div className="text-center pb-6 border-b border-slate-100/50">
+      <div className="text-center pb-6 border-b border-slate-100/50">
         <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
           <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
           AI 智能旅程規劃師
@@ -1846,13 +1846,13 @@ const App = () => {
 
   return (
     <div 
-    className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
-    style={{
-      // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
-      backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
-    }}
-  >
-  {/* --- 修改結束 --- */}
+      className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
+      style={{
+        // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
+        backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
+      }}
+    >
+ 
     {step === 'input' && renderInputForm()}
     {step === 'loading' && renderLoading()}
     {step === 'result' && (
