@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { 
   Plane, Hotel, MapPin, Users, Calendar, 
   Utensils, AlertTriangle, Map, DollarSign, 
@@ -9,7 +10,8 @@ import {
   MessageSquare, Banknote, Share2, Download, Copy, Check,
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
-  Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save
+  Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
+  ExternalLink
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -84,7 +86,7 @@ const cleanJsonResult = (text) => {
   }
 };
 
-// --- 安全渲染文字的輔助函數 (核心修復: 防止 Object 導致 React Crash) ---
+// --- 安全渲染文字的輔助函數 (修正 [object Object] 問題) ---
 const safeRender = (content) => {
   if (content === null || content === undefined) return '';
   if (typeof content === 'string') return content;
@@ -95,36 +97,40 @@ const safeRender = (content) => {
     return content.map(item => {
       if (typeof item === 'string') return item;
       if (typeof item === 'object' && item !== null) {
-        // 針對 AI 可能回傳的物件格式做處理 (名稱/特色)
-        const name = item['名稱'] || item['name'] || item['title'] || item['店名'];
-        const feature = item['特色'] || item['feature'] || item['description'] || item['desc'];
-        
-        if (name && feature) return `• ${name}: ${feature}`;
-        if (name) return `• ${name}`;
-        // 如果沒有特定鍵值，則將所有值串接
-        return `• ${Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number').join(' ')}`;
+        // 嘗試取得物件中的所有值並串接
+        const values = Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number');
+        if (values.length > 0) return `• ${values.join(': ')}`;
+        return JSON.stringify(item); // 真的沒辦法解析才轉 JSON 字串
       }
       return String(item);
     }).join('\n');
   }
   
-  // 處理單一物件
+  // 處理單一物件 (當 AI 回傳結構不如預期時的防呆)
   if (typeof content === 'object') {
-     // 嘗試提取描述性文字，避免直接 stringify
-     const text = content['description'] || content['text'] || content['content'];
+     // 嘗試提取常見的鍵值
+     const text = content['description'] || content['text'] || content['content'] || content['desc'];
      if (text) return text;
-     return JSON.stringify(content, null, 2); 
+     
+     // 否則列出所有值
+     const values = Object.values(item).filter(v => typeof v === 'string' || typeof v === 'number');
+     if (values.length > 0) return values.join(', ');
+     
+     return JSON.stringify(content);
   }
   
   return String(content);
 };
 
-// --- AI 深度規劃彈窗元件 (修正手機版顯示與安全渲染) ---
+// --- AI 深度規劃彈窗元件 (使用 Portal 修復置頂問題，並增加地圖跳轉) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-0 md:p-4 animate-in fade-in duration-200">
+  const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(itemTitle)}&travelmode=walking`;
+
+  // 使用 createPortal 將彈窗渲染到 body 層級，避免被父層 transform 屬性影響定位
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-0 md:p-4 animate-in fade-in duration-200">
       {/* 調整高度設定: h-[85vh] 避免手機瀏覽器工具列遮擋 */}
       <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
         
@@ -178,14 +184,24 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                  </div>
                </div>
 
-               <div className="bg-blue-50/50 p-4 md:p-5 rounded-2xl border border-blue-100">
+               {/* 點擊跳轉地圖功能 */}
+               <a 
+                 href={mapUrl} 
+                 target="_blank" 
+                 rel="noreferrer"
+                 className="block bg-blue-50/50 p-4 md:p-5 rounded-2xl border border-blue-100 hover:bg-blue-100 transition-colors group cursor-pointer"
+               >
                   <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2 text-sm md:text-base">
                     <Map className="w-5 h-5" /> 迷你地圖導航
+                    <ExternalLink className="w-4 h-4 opacity-50 group-hover:opacity-100 transition-opacity ml-auto" />
                   </h4>
-                  <p className="text-blue-700 text-sm md:text-base font-medium whitespace-pre-wrap">
+                  <p className="text-blue-700 text-sm md:text-base font-medium whitespace-pre-wrap mb-2">
                     {safeRender(data.mini_map_desc)}
                   </p>
-               </div>
+                  <div className="text-xs text-blue-500 font-bold mt-2 flex items-center gap-1">
+                    點擊開啟 Google Maps 行走路線 <ArrowLeft className="w-3 h-3 rotate-180" />
+                  </div>
+               </a>
             </div>
           ) : (
             <div className="text-center text-slate-400 py-20 flex flex-col items-center">
@@ -213,7 +229,8 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body // Portal 目標
   );
 };
 
