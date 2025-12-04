@@ -65,91 +65,124 @@ const compressImage = (file) => {
   });
 };
 
-// --- JSON 清理工具 (防止白畫面) ---
+// --- JSON 清理工具 (防止白畫面與解析錯誤) ---
 const cleanJsonResult = (text) => {
   if (!text) return "{}";
-  // 移除 markdown 標記 ```json ... ``` 或 ``` ... ```
-  let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return cleaned;
+  try {
+    // 嘗試抓取第一個 { 和最後一個 } 之間的內容
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      return text.substring(firstBrace, lastBrace + 1);
+    }
+    // 如果找不到括號，嘗試移除 markdown code blocks
+    return text.replace(/```json/g, '').replace(/```/g, '').trim();
+  } catch (e) {
+    console.error("JSON Clean Error", e);
+    return text;
+  }
 };
 
-// --- AI 深度規劃彈窗元件 (新增) ---
+// --- 安全渲染文字的輔助函數 (防止 Object 導致 React Crash) ---
+const safeRender = (content) => {
+  if (typeof content === 'string') return content;
+  if (typeof content === 'number') return String(content);
+  if (Array.isArray(content)) return content.join(', ');
+  if (typeof content === 'object' && content !== null) return JSON.stringify(content); // 萬一 AI 回傳了巢狀物件
+  return '';
+};
+
+// --- AI 深度規劃彈窗元件 (修正手機版顯示與安全渲染) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-0 md:p-4 animate-in fade-in duration-200">
+      {/* 調整寬度與高度設定，適應手機全螢幕模式 */}
+      <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[90vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
+        
         {/* Header */}
-        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 flex justify-between items-center shrink-0">
-          <div className="text-white">
-            <div className="flex items-center gap-2 text-purple-200 text-sm font-bold mb-1">
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-4 md:p-6 flex justify-between items-center shrink-0">
+          <div className="text-white overflow-hidden">
+            <div className="flex items-center gap-2 text-purple-200 text-xs md:text-sm font-bold mb-1">
               <Sparkles className="w-4 h-4" /> AI 深度導遊
             </div>
-            <h3 className="text-xl md:text-2xl font-bold truncate max-w-[200px] md:max-w-md">{itemTitle}</h3>
+            <h3 className="text-lg md:text-2xl font-bold truncate pr-2">{itemTitle}</h3>
           </div>
-          <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors">
-            <X className="w-6 h-6" />
+          <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors shrink-0">
+            <X className="w-5 h-5 md:w-6 md:h-6" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+        {/* Content (Scrollable) */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-50 overscroll-contain">
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center h-64 space-y-4 text-slate-500">
-              <Loader2 className="w-12 h-12 animate-spin text-purple-600" />
-              <p className="animate-pulse font-medium">AI 正在實地考察中，請稍候...</p>
+            <div className="flex flex-col items-center justify-center h-full space-y-4 text-slate-500">
+              <Loader2 className="w-10 h-10 md:w-12 md:h-12 animate-spin text-purple-600" />
+              <p className="animate-pulse font-medium text-sm md:text-base">AI 正在實地考察中，請稍候...</p>
             </div>
           ) : data ? (
-            <div className="space-y-6">
-               <div className="bg-white p-5 rounded-2xl shadow-sm border border-purple-100">
-                  <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+            <div className="space-y-4 md:space-y-6 pb-4">
+               <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-purple-100">
+                  <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
                     <MapPin className="w-5 h-5 text-purple-500" /> 最佳路線指引
                   </h4>
-                  <p className="text-slate-600 leading-relaxed text-base">{data.route_guide}</p>
+                  <p className="text-slate-600 leading-relaxed text-sm md:text-base whitespace-pre-wrap">
+                    {safeRender(data.route_guide)}
+                  </p>
                </div>
 
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-orange-100">
-                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+                 <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-orange-100">
+                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
                       <Utensils className="w-5 h-5 text-orange-500" /> 周邊必吃/必逛
                     </h4>
-                    <p className="text-slate-600 leading-relaxed text-sm">{data.must_visit_shops}</p>
+                    <p className="text-slate-600 leading-relaxed text-sm md:text-base whitespace-pre-wrap">
+                      {safeRender(data.must_visit_shops)}
+                    </p>
                  </div>
-                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-red-100">
-                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-3 text-lg border-b border-slate-100 pb-2">
+                 <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-red-100">
+                    <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
                       <ShieldAlert className="w-5 h-5 text-red-500" /> 避雷與治安提示
                     </h4>
-                    <p className="text-slate-600 leading-relaxed text-sm">{data.safety_alert}</p>
+                    <p className="text-slate-600 leading-relaxed text-sm md:text-base whitespace-pre-wrap">
+                      {safeRender(data.safety_alert)}
+                    </p>
                  </div>
                </div>
 
-               <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100">
-                  <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2">
+               <div className="bg-blue-50/50 p-4 md:p-5 rounded-2xl border border-blue-100">
+                  <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2 text-sm md:text-base">
                     <Map className="w-5 h-5" /> 迷你地圖導航
                   </h4>
-                  <p className="text-blue-700 text-sm font-medium">{data.mini_map_desc}</p>
+                  <p className="text-blue-700 text-sm md:text-base font-medium whitespace-pre-wrap">
+                    {safeRender(data.mini_map_desc)}
+                  </p>
                </div>
             </div>
           ) : (
-            <div className="text-center text-slate-400 py-20">資料讀取失敗，請重試</div>
+            <div className="text-center text-slate-400 py-20 flex flex-col items-center">
+              <AlertTriangle className="w-12 h-12 mb-2 text-slate-300" />
+              <p>資料讀取失敗，請重試</p>
+            </div>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0">
+        {/* Footer (Fixed at bottom) */}
+        <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0 pb-safe md:pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
           <button 
             onClick={onClose} 
-            className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors flex items-center gap-2"
+            className="px-4 py-2 md:px-5 md:py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm md:text-base"
           >
-            <ArrowLeft className="w-4 h-4" /> 返回行程
+            <ArrowLeft className="w-4 h-4" /> <span className="hidden md:inline">返回行程</span><span className="md:hidden">返回</span>
           </button>
           {!isLoading && data && (
             <button 
               onClick={() => { onSavePlan(); alert('規劃已儲存！'); }} 
-              className="px-5 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2"
+              className="px-4 py-2 md:px-5 md:py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2 text-sm md:text-base"
             >
-              <Save className="w-4 h-4" /> 儲存規劃
+              <Save className="w-4 h-4" /> <span className="hidden md:inline">儲存規劃</span><span className="md:hidden">儲存</span>
             </button>
           )}
         </div>
@@ -487,6 +520,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     const prompt = `
       針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
       請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
       包含以下欄位:
       1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
       2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
@@ -501,9 +535,16 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
       });
       const data = await response.json();
-      const rawText = data.candidates[0].content.parts[0].text;
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
       const cleanedText = cleanJsonResult(rawText); // 修正白畫面關鍵
-      const aiResult = JSON.parse(cleanedText);
+      let aiResult = {};
+      
+      try {
+        aiResult = JSON.parse(cleanedText);
+      } catch (parseError) {
+        console.error("Parse Error", parseError);
+        throw new Error("AI 回傳格式無法解析");
+      }
 
       // 更新行程資料
       updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
