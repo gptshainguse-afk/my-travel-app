@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
-// import './index.css'; 
+import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 const usePersistentState = (key, initialValue) => {
