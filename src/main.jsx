@@ -1334,7 +1334,8 @@ const App = () => {
       5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
       6. **City Guide**: Provide a guide for each unique major city visited. Include keys: "history_culture", "transport_tips" (tickets, passes), "safety_scams" (areas to avoid, common scams).
       7. **Basic Phrases**: Include 5 essential phrases (Hello, Thank you, Sorry, Excuse me, How much?) in local language with Romanization.
-
+      8. Output Language: Traditional Chinese (Taiwan)""Output Language: Traditional Chinese (Taiwan).
+      
       JSON Schema Structure:
       {
         "trip_summary": "String",
