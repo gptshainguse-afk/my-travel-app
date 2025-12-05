@@ -18,6 +18,7 @@ import {
 import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
+const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
 const ISSUING_COUNTRIES = [
   { code: 'TW', name: '台灣 (Taiwan)' },
   { code: 'JP', name: '日本 (Japan)' },
@@ -593,7 +594,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
 
     setIsAnalyzing(true);
     setAnalysisResult(null); // 清空舊結果以顯示讀取狀態
-    
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';    
     const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
       我來自 ${countryName} (代碼: ${issuingCountry})，即將前往 "${city}" 旅遊。
@@ -611,21 +612,35 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
       });
       const data = await response.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      const cleanedText = cleanJsonResult(rawText);
-      const result = JSON.parse(cleanedText);
-      setAnalysisResult(result);
       
-      // 自動呼叫儲存，或者讓用戶手動存，這裡我做成手動按鈕比較保險，但也可以在這裡直接 onSave(result)
+      // 這裡也可以加降級機制，或者直接拋出錯誤讓使用者知道 2.5 無法使用
+      if (data.error) {
+         // 簡單的降級嘗試
+         console.warn("2.5 模型失敗，嘗試 1.5 Pro");
+         const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+         });
+         const fallbackData = await fallbackResp.json();
+         if (fallbackData.error) throw new Error(fallbackData.error.message);
+         
+         const rawText = fallbackData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+         setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
+      } else {
+         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+         setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
+      }
+      
     } catch (e) {
       console.error(e);
-      alert("分析失敗，請稍後再試");
+      alert("分析失敗: " + e.message);
     } finally {
       setIsAnalyzing(false);
     }
@@ -761,10 +776,11 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
   );
 };
 // --- City Guide ---
-const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnalysis }) => {
+const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnalysis, modelType }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
   const [isOpen, setIsOpen] = useState(false);
   const currentGuide = guideData[selectedCity];
+  
 
   if (!currentGuide) return null;
 
@@ -871,6 +887,7 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
                 apiKey={apiKey}
                 savedAnalysis={currentGuide.credit_card_analysis} // 傳入已儲存的資料
                 onSave={(analysis) => onSaveCreditCardAnalysis(selectedCity, analysis)} // 處理儲存
+                modelType={modelType}
              />
           )}
 
@@ -1677,6 +1694,8 @@ const App = () => {
       ? "Include nearby parking lot recommendations with estimated prices for each stop (Activity/Meal)."
       : "";
     const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    console.log("Current Model Strategy:", TARGET_MODEL);
     const systemPrompt = `
       You are an expert AI Travel Planner API. Respond with valid JSON only.
       User Constraints:
@@ -1699,14 +1718,10 @@ const App = () => {
       3. Food: Menu translation.
       4. Weather: Temp range & clothing.
       5. Currency: Local currency code & rate to TWD.
-      6. **City Guide**: For each major city, include:
-         - "history_culture": History text.
-         - "transport_tips": Tickets/Passes.
-         - "safety_scams": Safety info.
-         - "subsidies": Information on any travel subsidies available for tourists (local government or from ${selectedCountryName}).
-         - "tax_refund": Guide on how/where to claim tax refund and important notes.
-         - "major_banks_list": An array of strings listing 15-20 major consumer banks/credit card issuers in ${selectedCountryName} (The user's home country). This is for a checkbox list later.
-      7. Basic Phrases: 5 essential phrases.
+      6. **City Guide**: For each major city, include history, transport, safety, subsidies, tax_refund, and major_banks_list.
+      7. **Basic Phrases (MANDATORY)**: You MUST generate an array of EXACTLY 5 objects for "basic_phrases". 
+         Structure: { "label": "Meaning in TW Chinese", "local": "Local Script", "roman": "Pronunciation" }.
+         Do not return an empty array.
       8. Output Language: Traditional Chinese (Taiwan).
       
       JSON Schema Structure:
@@ -1716,13 +1731,19 @@ const App = () => {
         "currency_code": "String",
         "city_guides": {
            "CityName": {
-             "history_culture": "...",
-             "transport_tips": "...",
-             "safety_scams": "...",
-             "subsidies": "...",
-             "tax_refund": "...",
-             "major_banks_list": ["Bank A", "Bank B", ...],
-             "basic_phrases": [ ... ]
+             "history_culture": "String",
+             "transport_tips": "String",
+             "safety_scams": "String",
+             "subsidies": "String",
+             "tax_refund": "String",
+             "major_banks_list": ["Bank A", "Bank B"],
+             "basic_phrases": [ 
+                { "label": "你好", "local": "...", "roman": "..." },
+                { "label": "謝謝", "local": "...", "roman": "..." },
+                { "label": "對不起", "local": "...", "roman": "..." },
+                { "label": "請問", "local": "...", "roman": "..." },
+                { "label": "多少錢", "local": "...", "roman": "..." }
+             ]
            }
         },
         "created": ${Date.now()}, 
@@ -1753,14 +1774,32 @@ const App = () => {
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-      const resultText = data.candidates[0].content.parts[0].text;
+      // 使用選擇的模型代碼進行請求
+      // 注意：目前 Google 尚未正式公開 2.5 端點，如果您的 Key 有權限則會成功，否則會報錯
+      // 這裡加入了自動降級機制：如果 2.5 失敗，會嘗試用 1.5 Pro 救場
+      
+      const fetchWithModel = async (modelId) => {
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
+         });
+         const resData = await response.json();
+         if (resData.error) throw new Error(resData.error.message);
+         return resData;
+      };
+
+      let data;
+      try {
+         console.log(`嘗試使用模型: ${TARGET_MODEL}`);
+         data = await fetchWithModel(TARGET_MODEL);
+      } catch (err) {
+         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-1.5-pro...`, err);
+         // 如果使用者選的 2.5 失敗，自動用 1.5 Pro 墊底，確保程式不崩潰
+         data = await fetchWithModel('gemini-2.5-flash-preview-09-2025');
+      }
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 回傳內容為空");
       
       const cleanedText = cleanJsonResult(resultText);
       let parsedData;
@@ -1790,11 +1829,12 @@ const App = () => {
         });
       }
 
-      setItineraryData(parsedData);
+      setItineraryData(JSON.parse(cleanedText));
       setStep('result');
+
     } catch (error) {
       console.error(error);
-      setErrorMsg("生成失敗: " + error.message);
+      setErrorMsg(`生成失敗: ${error.message} (請確認 API Key 或模型權限)`);
       setStep('input');
     }
   };
@@ -1840,8 +1880,52 @@ const App = () => {
           <div className="relative">
              <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="貼上您的 API Key (將自動儲存在本機)" className="w-full pl-4 pr-4 py-3 bg-white border border-blue-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all shadow-sm text-sm md:text-base" />
           </div>
+          <div className="bg-white/60 p-3 rounded-xl border border-blue-100/50">
+            <div className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">
+              <Bot className="w-3 h-3" /> 選擇 AI 模型引擎
+            </div>
+            <div className="flex flex-col md:flex-row gap-3">
+              {/* 2.5 Pro 選項 */}
+              <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'pro' ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                <div className="flex items-start gap-3">
+                  <input 
+                    type="radio" 
+                    name="modelType" 
+                    value="pro" 
+                    checked={modelType === 'pro'} 
+                    onChange={() => setModelType('pro')}
+                    className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                  />
+                  <div>
+                    <span className="block text-sm font-bold text-slate-800">使用 2.5 Pro (完整版)</span>
+                    <span className="block text-xs text-slate-500 mt-1">輸出慢但更完整，適合複雜規劃。</span>
+                    <span className="block text-[10px] text-amber-600 mt-0.5 font-mono">限制: ~2次/分</span>
+                  </div>
+                </div>
+              </label>
+  
+              {/* 2.5 Flash 選項 */}
+              <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'flash' ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                <div className="flex items-start gap-3">
+                  <input 
+                    type="radio" 
+                    name="modelType" 
+                    value="flash" 
+                    checked={modelType === 'flash'} 
+                    onChange={() => setModelType('flash')}
+                    className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                  />
+                  <div>
+                    <span className="block text-sm font-bold text-slate-800">使用 2.5 Flash (極速版)</span>
+                    <span className="block text-xs text-slate-500 mt-1">輸出快但可能會漏細節。</span>
+                    <span className="block text-[10px] text-amber-600 mt-0.5 font-mono">限制: ~3次/分</span>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
         </div>
-
+        
         <section className="space-y-4">
           <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-blue-100 p-2 rounded-lg text-blue-600"><MapPin className="w-5 h-5" /></span>基本行程</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2225,6 +2309,7 @@ const App = () => {
             basicData={basicData} 
             apiKey={apiKey}
             onSaveCreditCardAnalysis={handleUpdateCreditCardAnalysis}
+            modelType={modelType}
           />
         )}
 
