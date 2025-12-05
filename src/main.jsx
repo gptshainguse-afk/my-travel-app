@@ -593,8 +593,11 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     if (allBanks.length === 0 && !includeTop3) return alert("請至少選擇一家銀行、輸入其他銀行，或勾選推薦前三名");
 
     setIsAnalyzing(true);
-    setAnalysisResult(null); // 清空舊結果以顯示讀取狀態
+    setAnalysisResult(null); 
+    
+    // 設定目標模型 (使用者選擇的 2.5)
     const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';    
+    
     const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
       我來自 ${countryName} (代碼: ${issuingCountry})，即將前往 "${city}" 旅遊。
@@ -612,6 +615,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     `;
 
     try {
+      console.log(`正在嘗試主模型: ${TARGET_MODEL}...`);
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
