@@ -1724,6 +1724,7 @@ const App = () => {
          Structure: { "label": "Meaning in TW Chinese", "local": "Local Script", "roman": "Pronunciation" }.
          Do not return an empty array.
       8. Output Language: Traditional Chinese (Taiwan).
+      9. major_banks_list": [CRITICAL] An array of 15-20 major consumer banks located in "${selectedCountryName}" (User's Origin). DO NOT list banks from the destination city. This list represents the user's home bank accounts.
       
       JSON Schema Structure:
       {
