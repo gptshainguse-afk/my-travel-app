@@ -564,7 +564,7 @@ const FunLoading = ({ destination }) => {
     </div>
   );
 };
-const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis }) => {
+const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis,modelType }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedBanks, setSelectedBanks] = useState([]);
   const [otherBanks, setOtherBanks] = useState(''); // 新增：手動輸入其他銀行
