@@ -18,7 +18,7 @@ import {
 import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
-const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
+
 const ISSUING_COUNTRIES = [
   { code: 'TW', name: '台灣 (Taiwan)' },
   { code: 'JP', name: '日本 (Japan)' },
@@ -1375,6 +1375,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 };
 
 const App = () => {
+  const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
   const [step, setStep] = useState('input'); 
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
 
@@ -2176,7 +2177,7 @@ const App = () => {
 
   const renderLoading = () => (
       <FunLoading destination={basicData.destinations} />
-  );;
+  );
 
   const renderSavedList = () => (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-right-8 duration-500 print:hidden">
