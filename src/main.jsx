@@ -489,28 +489,40 @@ const FunLoading = ({ destination }) => {
     `正在計算最佳拉麵湯頭/美食比例...`,
     `正在幫您預測哪天會出大太陽...`,
     `正在跟 Google Maps 吵架找最佳路線...`,
-    `正在學習當地的搭訕用語 (開玩笑的)...`,
     `正在搜尋哪裡的廁所最乾淨...`,
     `AI 導遊正在繫緊鞋帶準備出發...`,
-    `正在幫您省下每一分冤枉錢...`
+    `正在幫您省下每一分冤枉錢...`,
+    `正在為了您的信用卡回饋精打細算...` 
   ];
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    // 立即執行一次，避免畫面剛出來是空白
+    const timer = setInterval(() => {
       setProgress(prev => {
-        // 快到 90% 時變慢，製造「最後衝刺」的感覺，等到資料回來會瞬間 100%
-        if (prev >= 90) return prev + 0.1; 
-        if (prev >= 70) return prev + 0.5;
-        return prev + 1.5;
+        // 優化後的進度條邏輯：
+        // 1. 0-30%: 快速衝刺 (啟動感)
+        // 2. 30-70%: 穩定前進 (處理感)
+        // 3. 70-85%: 變慢 (思考感)
+        // 4. 85%+: 極慢並卡在 95% (等待感，不會讓人覺得當機)
+        
+        if (prev >= 95) return 95; // 卡在 95%，等待 API 回傳
+        
+        let increment = 0;
+        if (prev < 30) increment = 2;       // 快
+        else if (prev < 70) increment = 0.5; // 中
+        else if (prev < 85) increment = 0.1; // 慢
+        else increment = 0.02;               // 龜速 (85%~95%)
+
+        return prev + increment;
       });
-    }, 100);
+    }, 50); // 更新頻率加快，動畫更流暢
 
     const msgInterval = setInterval(() => {
       setMessageIndex(prev => (prev + 1) % funMessages.length);
-    }, 2500); // 每 2.5 秒換一句話
+    }, 2500);
 
     return () => {
-      clearInterval(interval);
+      clearInterval(timer);
       clearInterval(msgInterval);
     };
   }, []);
@@ -536,7 +548,7 @@ const FunLoading = ({ destination }) => {
         <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner border border-slate-200 relative">
           <div 
             className="bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 h-full rounded-full transition-all duration-300 ease-out relative"
-            style={{ width: `${Math.min(progress, 100)}%` }}
+            style={{ width: `${progress}%` }}
           >
               <div className="absolute inset-0 bg-white/30 w-full h-full animate-[shimmer_2s_infinite] border-t border-white/20"></div>
           </div>
@@ -544,7 +556,7 @@ const FunLoading = ({ destination }) => {
         
         <div className="flex justify-between text-xs font-bold text-slate-400 font-mono">
           <span>START</span>
-          <span>{Math.floor(Math.min(progress, 99))}%</span>
+          <span>{Math.floor(progress)}%</span>
           <span>READY</span>
         </div>
       </div>
@@ -599,7 +611,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-pro-preview:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
@@ -939,7 +951,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-pro-preview:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
@@ -1741,7 +1753,7 @@ const App = () => {
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-pro-preview:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
