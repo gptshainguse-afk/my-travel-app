@@ -1262,7 +1262,7 @@ const App = () => {
     enableCreditCard: true, // 是否開啟信用卡推薦功能
     issuingCountry: 'TW',   // 預設發卡國家
     otherCountryName: ''    // 如果選其他，手填國家名
-});
+  });
 
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { date: '2025-12-08', time: '16:55', code: 'IT720', airport: 'FUK', type: '去程' },
