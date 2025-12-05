@@ -479,28 +479,110 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     </div>
   );
 };
-const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey }) => {
+const FunLoading = ({ destination }) => {
+  const [progress, setProgress] = useState(0);
+  const [messageIndex, setMessageIndex] = useState(0);
+
+  const funMessages = [
+    `正在打包 AI 的虛擬行李...`,
+    `正在與 ${destination} 的當地貓咪打好關係...`,
+    `正在計算最佳拉麵湯頭/美食比例...`,
+    `正在幫您預測哪天會出大太陽...`,
+    `正在跟 Google Maps 吵架找最佳路線...`,
+    `正在學習當地的搭訕用語 (開玩笑的)...`,
+    `正在搜尋哪裡的廁所最乾淨...`,
+    `AI 導遊正在繫緊鞋帶準備出發...`,
+    `正在幫您省下每一分冤枉錢...`
+  ];
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        // 快到 90% 時變慢，製造「最後衝刺」的感覺，等到資料回來會瞬間 100%
+        if (prev >= 90) return prev + 0.1; 
+        if (prev >= 70) return prev + 0.5;
+        return prev + 1.5;
+      });
+    }, 100);
+
+    const msgInterval = setInterval(() => {
+      setMessageIndex(prev => (prev + 1) % funMessages.length);
+    }, 2500); // 每 2.5 秒換一句話
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(msgInterval);
+    };
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-in fade-in duration-500">
+      <div className="w-full max-w-md space-y-6 text-center">
+        
+        {/* 動畫 Icon */}
+        <div className="relative inline-block">
+          <div className="absolute inset-0 bg-blue-400 blur-2xl opacity-20 rounded-full animate-pulse"></div>
+          <Plane className="w-16 h-16 text-blue-600 animate-bounce relative z-10" />
+        </div>
+
+        {/* 趣味文字 */}
+        <div className="h-16 flex items-center justify-center">
+             <h2 className="text-xl md:text-2xl font-bold text-slate-700 animate-in slide-in-from-bottom-2 fade-in duration-500 key={messageIndex}">
+               {funMessages[messageIndex]}
+             </h2>
+        </div>
+
+        {/* 進度條 */}
+        <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner border border-slate-200 relative">
+          <div 
+            className="bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 h-full rounded-full transition-all duration-300 ease-out relative"
+            style={{ width: `${Math.min(progress, 100)}%` }}
+          >
+              <div className="absolute inset-0 bg-white/30 w-full h-full animate-[shimmer_2s_infinite] border-t border-white/20"></div>
+          </div>
+        </div>
+        
+        <div className="flex justify-between text-xs font-bold text-slate-400 font-mono">
+          <span>START</span>
+          <span>{Math.floor(Math.min(progress, 99))}%</span>
+          <span>READY</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedBanks, setSelectedBanks] = useState([]);
+  const [otherBanks, setOtherBanks] = useState(''); // 新增：手動輸入其他銀行
   const [includeTop3, setIncludeTop3] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState(savedAnalysis || null); // 預設使用已儲存的資料
 
-  // 處理銀行勾選
+  // 如果父層傳入新的 savedAnalysis，更新本地狀態
+  useEffect(() => {
+    if (savedAnalysis) setAnalysisResult(savedAnalysis);
+  }, [savedAnalysis]);
+
   const toggleBank = (bank) => {
     setSelectedBanks(prev => 
       prev.includes(bank) ? prev.filter(b => b !== bank) : [...prev, bank]
     );
   };
 
-  // 呼叫 AI 生成回饋分析
   const handleAnalyze = async () => {
     if (!apiKey) return alert("需要 API Key 才能分析信用卡回饋");
-    if (selectedBanks.length === 0 && !includeTop3) return alert("請至少選擇一家銀行或勾選推薦前三名");
+    
+    // 合併勾選的銀行與手動輸入的銀行
+    const manualBanks = otherBanks.split(/[,，、]/).map(s => s.trim()).filter(s => s);
+    const allBanks = [...selectedBanks, ...manualBanks];
+
+    if (allBanks.length === 0 && !includeTop3) return alert("請至少選擇一家銀行、輸入其他銀行，或勾選推薦前三名");
 
     setIsAnalyzing(true);
+    setAnalysisResult(null); // 清空舊結果以顯示讀取狀態
     
-    const banksStr = selectedBanks.length > 0 ? selectedBanks.join(', ') : "不指定特定銀行";
+    const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
       我來自 ${countryName} (代碼: ${issuingCountry})，即將前往 "${city}" 旅遊。
       請針對以下條件進行信用卡回饋分析：
@@ -525,7 +607,10 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
       const data = await response.json();
       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
       const cleanedText = cleanJsonResult(rawText);
-      setAnalysisResult(JSON.parse(cleanedText));
+      const result = JSON.parse(cleanedText);
+      setAnalysisResult(result);
+      
+      // 自動呼叫儲存，或者讓用戶手動存，這裡我做成手動按鈕比較保險，但也可以在這裡直接 onSave(result)
     } catch (e) {
       console.error(e);
       alert("分析失敗，請稍後再試");
@@ -540,19 +625,19 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
         onClick={() => setIsOpen(!isOpen)}
         className="w-full p-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors text-blue-800 font-bold"
       >
-        <span className="flex items-center gap-2"><CreditCard className="w-5 h-5" /> 信用卡與支付回饋攻略</span>
+        <span className="flex items-center gap-2"><CreditCard className="w-5 h-5" /> 信用卡與支付回饋攻略 {analysisResult && <CheckCircle2 className="w-4 h-4 text-green-500" />}</span>
         {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
       </button>
 
       {isOpen && (
         <div className="p-4 md:p-6 animate-in slide-in-from-top-2">
-          {!analysisResult ? (
+          {!analysisResult && !isAnalyzing ? (
             <>
               <div className="mb-4">
                 <h5 className="font-bold text-slate-700 mb-2 flex items-center gap-2">
                   <Landmark className="w-4 h-4 text-slate-500" /> 選擇您持有的銀行 ({countryName})
                 </h5>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-slate-200">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-slate-200 mb-2">
                   {bankList && bankList.length > 0 ? bankList.map((bank, idx) => (
                     <label key={idx} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer text-sm">
                       <input 
@@ -563,8 +648,17 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
                       />
                       <span className="text-slate-700">{bank}</span>
                     </label>
-                  )) : <div className="col-span-full text-slate-400 text-sm">無可用銀行列表，請直接使用 Top 3 推薦</div>}
+                  )) : <div className="col-span-full text-slate-400 text-sm">AI 未提供預設清單，請直接手動輸入</div>}
                 </div>
+                
+                {/* 新增：手動輸入欄位 */}
+                <input 
+                  type="text"
+                  placeholder="其他銀行 (如: 渣打, 匯豐... 用逗號分隔)"
+                  value={otherBanks}
+                  onChange={(e) => setOtherBanks(e.target.value)}
+                  className="w-full p-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                />
               </div>
 
               <div className="mb-6 flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
@@ -582,16 +676,19 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
 
               <button 
                 onClick={handleAnalyze} 
-                disabled={isAnalyzing}
                 className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2"
               >
-                {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                {isAnalyzing ? 'AI 精算分析中...' : '生成最佳刷卡策略'}
+                <Sparkles className="w-5 h-5" /> 生成最佳刷卡策略
               </button>
             </>
+          ) : isAnalyzing ? (
+             <div className="py-10 text-center flex flex-col items-center justify-center space-y-3">
+                 <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+                 <p className="text-blue-600 font-bold animate-pulse">AI 正在計算現金回饋與里程轉換率...</p>
+             </div>
           ) : (
             <div className="space-y-6">
-              {/* Top 3 Section */}
+              {/* Result Display - Top 3 */}
               {analysisResult.top_3_general && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
                   <h5 className="font-bold text-yellow-800 mb-3 flex items-center gap-2 text-lg">
@@ -610,7 +707,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
                 </div>
               )}
 
-              {/* Bank Specific Section */}
+              {/* Result Display - Bank Recommendations */}
               {analysisResult.bank_recommendations && analysisResult.bank_recommendations.length > 0 && (
                 <div>
                   <h5 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
@@ -636,9 +733,14 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
                 </div>
               )}
               
-              <button onClick={() => setAnalysisResult(null)} className="w-full py-2 mt-4 text-slate-400 hover:text-slate-600 text-sm font-bold border border-slate-200 rounded-lg hover:bg-slate-50">
-                重新選擇銀行
-              </button>
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setAnalysisResult(null)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold transition-colors">
+                    重選銀行
+                </button>
+                <button onClick={() => { onSave(analysisResult); alert("信用卡攻略已儲存到本次行程！"); }} className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-md shadow-emerald-200 transition-colors flex items-center justify-center gap-2">
+                    <Save className="w-4 h-4" /> 儲存此攻略
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -647,7 +749,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
   );
 };
 // --- City Guide ---
-const CityGuide = ({ guideData, cities, basicData, apiKey }) => {
+const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnalysis }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
   const [isOpen, setIsOpen] = useState(false);
   const currentGuide = guideData[selectedCity];
@@ -755,6 +857,8 @@ const CityGuide = ({ guideData, cities, basicData, apiKey }) => {
                 countryName={countryName}
                 bankList={currentGuide.major_banks_list}
                 apiKey={apiKey}
+                savedAnalysis={currentGuide.credit_card_analysis} // 傳入已儲存的資料
+                onSave={(analysis) => onSaveCreditCardAnalysis(selectedCity, analysis)} // 處理儲存
              />
           )}
 
@@ -1683,6 +1787,23 @@ const App = () => {
     }
   };
 
+  const handleUpdateCreditCardAnalysis = (city, analysis) => {
+      setItineraryData(prev => {
+          if (!prev || !prev.city_guides || !prev.city_guides[city]) return prev;
+          
+          return {
+              ...prev,
+              city_guides: {
+                  ...prev.city_guides,
+                  [city]: {
+                      ...prev.city_guides[city],
+                      credit_card_analysis: analysis
+                  }
+              }
+          };
+      });
+  };
+
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
       <div className="text-center pb-6 border-b border-slate-100/50">
@@ -1958,17 +2079,8 @@ const App = () => {
   );
 
   const renderLoading = () => (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] text-slate-600 space-y-8 animate-in fade-in duration-1000 print:hidden">
-      <div className="relative">
-        <div className="absolute inset-0 bg-blue-500 blur-xl opacity-20 rounded-full animate-pulse"></div>
-        <Loader2 className="w-24 h-24 animate-spin text-blue-600 relative z-10" />
-      </div>
-      <div className="text-center space-y-3">
-        <h2 className="text-3xl font-bold text-slate-800">AI 正在為您編織旅程...</h2>
-        <p className="text-lg text-slate-500">正在分析 {basicData.destinations} 的歷史文化與最佳動線</p>
-      </div>
-    </div>
-  );
+      <FunLoading destination={basicData.destinations} />
+  );;
 
   const renderSavedList = () => (
     <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in slide-in-from-right-8 duration-500 print:hidden">
@@ -2100,6 +2212,7 @@ const App = () => {
             cities={Object.keys(itineraryData.city_guides)}
             basicData={basicData} 
             apiKey={apiKey}
+            onSaveCreditCardAnalysis={handleUpdateCreditCardAnalysis}
           />
         )}
 
