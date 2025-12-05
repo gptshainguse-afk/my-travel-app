@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { CreditCard, Landmark, Gift, CheckCircle2 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { 
@@ -18,6 +19,23 @@ import {
 import './index.css'; 
 
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
+const ISSUING_COUNTRIES = [
+  { code: 'TW', name: '台灣 (Taiwan)' },
+  { code: 'JP', name: '日本 (Japan)' },
+  { code: 'KR', name: '韓國 (South Korea)' },
+  { code: 'CN', name: '中國 (China)' },
+  { code: 'HK', name: '香港 (Hong Kong)' },
+  { code: 'SG', name: '新加坡 (Singapore)' },
+  { code: 'MY', name: '馬來西亞 (Malaysia)' },
+  { code: 'TH', name: '泰國 (Thailand)' },
+  { code: 'VN', name: '越南 (Vietnam)' },
+  { code: 'US', name: '美國 (USA)' },
+  { code: 'CA', name: '加拿大 (Canada)' },
+  { code: 'UK', name: '英國 (UK)' },
+  { code: 'AU', name: '澳洲 (Australia)' },
+  { code: 'EU', name: '歐洲 (Europe)' },
+  { code: 'OTHER', name: '其他 (Other)' }
+];
 const deepMerge = (target, source) => {
   const result = { ...target };
   if (source && typeof source === 'object') {
@@ -462,24 +480,193 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     </div>
   );
 };
+const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedBanks, setSelectedBanks] = useState([]);
+  const [includeTop3, setIncludeTop3] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState(null);
 
+  // 處理銀行勾選
+  const toggleBank = (bank) => {
+    setSelectedBanks(prev => 
+      prev.includes(bank) ? prev.filter(b => b !== bank) : [...prev, bank]
+    );
+  };
+
+  // 呼叫 AI 生成回饋分析
+  const handleAnalyze = async () => {
+    if (!apiKey) return alert("需要 API Key 才能分析信用卡回饋");
+    if (selectedBanks.length === 0 && !includeTop3) return alert("請至少選擇一家銀行或勾選推薦前三名");
+
+    setIsAnalyzing(true);
+    
+    const banksStr = selectedBanks.length > 0 ? selectedBanks.join(', ') : "不指定特定銀行";
+    const prompt = `
+      我來自 ${countryName} (代碼: ${issuingCountry})，即將前往 "${city}" 旅遊。
+      請針對以下條件進行信用卡回饋分析：
+      1. 使用者持有的銀行/發卡機構: ${banksStr}
+      2. 額外需求: 請推薦該國(${countryName})發行，在 "${city}" 最好用的 "前3名信用卡" (Top 3)。
+
+      請以 JSON 格式回傳，包含兩個陣列：
+      1. "bank_recommendations": 針對使用者勾選的銀行，列出該銀行最強的旅遊卡 (現金回饋 與 里程回饋 各一張，若無則略過)。
+         欄位: { "bank": "銀行名", "card_name": "卡名", "type": "現金/里程", "reward_desc": "回饋內容簡述", "condition": "簡單條件 (如: 需登錄/有上限)" }
+      2. "top_3_general": 不分銀行，推薦前三名最強卡片。
+         欄位: { "card_name": "卡名", "bank": "發行銀行", "type": "現金/里程", "reason": "推薦理由" }
+
+      純 JSON，不要 Markdown。
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      const cleanedText = cleanJsonResult(rawText);
+      setAnalysisResult(JSON.parse(cleanedText));
+    } catch (e) {
+      console.error(e);
+      alert("分析失敗，請稍後再試");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-blue-100 overflow-hidden">
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full p-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors text-blue-800 font-bold"
+      >
+        <span className="flex items-center gap-2"><CreditCard className="w-5 h-5" /> 信用卡與支付回饋攻略</span>
+        {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+      </button>
+
+      {isOpen && (
+        <div className="p-4 md:p-6 animate-in slide-in-from-top-2">
+          {!analysisResult ? (
+            <>
+              <div className="mb-4">
+                <h5 className="font-bold text-slate-700 mb-2 flex items-center gap-2">
+                  <Landmark className="w-4 h-4 text-slate-500" /> 選擇您持有的銀行 ({countryName})
+                </h5>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-slate-200">
+                  {bankList && bankList.length > 0 ? bankList.map((bank, idx) => (
+                    <label key={idx} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer text-sm">
+                      <input 
+                        type="checkbox" 
+                        checked={selectedBanks.includes(bank)} 
+                        onChange={() => toggleBank(bank)}
+                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <span className="text-slate-700">{bank}</span>
+                    </label>
+                  )) : <div className="col-span-full text-slate-400 text-sm">無可用銀行列表，請直接使用 Top 3 推薦</div>}
+                </div>
+              </div>
+
+              <div className="mb-6 flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
+                <input 
+                  type="checkbox" 
+                  id="top3"
+                  checked={includeTop3} 
+                  onChange={(e) => setIncludeTop3(e.target.checked)}
+                  className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                />
+                <label htmlFor="top3" className="font-bold text-slate-700 cursor-pointer text-sm md:text-base">
+                  同時推薦 {countryName} 該地區最強 Top 3 信用卡
+                </label>
+              </div>
+
+              <button 
+                onClick={handleAnalyze} 
+                disabled={isAnalyzing}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2"
+              >
+                {isAnalyzing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                {isAnalyzing ? 'AI 精算分析中...' : '生成最佳刷卡策略'}
+              </button>
+            </>
+          ) : (
+            <div className="space-y-6">
+              {/* Top 3 Section */}
+              {analysisResult.top_3_general && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                  <h5 className="font-bold text-yellow-800 mb-3 flex items-center gap-2 text-lg">
+                    <Gift className="w-5 h-5" /> {city} 必備 Top 3 神卡
+                  </h5>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {analysisResult.top_3_general.map((card, i) => (
+                      <div key={i} className="bg-white p-3 rounded-lg shadow-sm border border-yellow-100">
+                        <div className="text-xs text-yellow-600 font-bold mb-1">{card.bank}</div>
+                        <div className="font-bold text-slate-800 mb-1">{card.card_name}</div>
+                        <div className="text-xs bg-slate-100 inline-block px-1.5 py-0.5 rounded text-slate-500 mb-2">{card.type}</div>
+                        <div className="text-sm text-slate-600 leading-snug">{card.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Bank Specific Section */}
+              {analysisResult.bank_recommendations && analysisResult.bank_recommendations.length > 0 && (
+                <div>
+                  <h5 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" /> 您的持有銀行主力卡
+                  </h5>
+                  <div className="space-y-3">
+                    {analysisResult.bank_recommendations.map((item, i) => (
+                      <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm flex flex-col md:flex-row gap-3 md:items-center">
+                        <div className="shrink-0 md:w-32">
+                           <div className="text-xs text-slate-400 font-bold">{item.bank}</div>
+                           <div className="font-bold text-slate-700">{item.card_name}</div>
+                        </div>
+                        <div className="flex-1">
+                           <div className="flex items-center gap-2 mb-1">
+                             <span className={`text-xs px-2 py-0.5 rounded font-bold ${item.type.includes('現金') ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>{item.type}</span>
+                             <span className="text-sm font-bold text-blue-600">{item.reward_desc}</span>
+                           </div>
+                           <div className="text-xs text-slate-500">⚠️ {item.condition}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <button onClick={() => setAnalysisResult(null)} className="w-full py-2 mt-4 text-slate-400 hover:text-slate-600 text-sm font-bold border border-slate-200 rounded-lg hover:bg-slate-50">
+                重新選擇銀行
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 // --- City Guide ---
-const CityGuide = ({ guideData, cities }) => {
+const CityGuide = ({ guideData, cities, basicData, apiKey }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
-  const [isOpen, setIsOpen] = useState(false); // 預設為 false (收起)
+  const [isOpen, setIsOpen] = useState(false);
   const currentGuide = guideData[selectedCity];
 
   if (!currentGuide) return null;
 
+  // 取得國家的顯示名稱
+  const countryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
+
   return (
     <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl mb-8 print:break-inside-avoid overflow-hidden transition-all duration-300">
-      {/* 標題列：點擊可縮放 */}
+      {/* 標題列 (保持不變) */}
       <div 
         onClick={() => setIsOpen(!isOpen)}
         className="p-6 flex justify-between items-center cursor-pointer bg-indigo-50 hover:bg-indigo-100 transition-colors"
       >
         <h3 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
-          <BookOpen className="w-6 h-6" /> 城市生存指南
+          <BookOpen className="w-6 h-6" /> 城市生存指南 & 優惠情報
         </h3>
         <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
            <div className="relative">
@@ -498,12 +685,12 @@ const CityGuide = ({ guideData, cities }) => {
         </div>
       </div>
 
-      {/* 內容區塊：根據 isOpen 顯示 */}
+      {/* 內容區塊 */}
       {isOpen && (
         <div className="p-6 border-t border-indigo-100 animate-in slide-in-from-top-2 duration-200">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             
-            {/* 新增：在地用語小學堂 */}
+            {/* 在地用語 (保持不變) */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-teal-100 md:col-span-2">
               <h4 className="font-bold text-teal-700 mb-3 flex items-center gap-2">
                 <MessageCircle className="w-5 h-5" /> 在地用語小學堂
@@ -518,11 +705,29 @@ const CityGuide = ({ guideData, cities }) => {
                      </div>
                    ))
                 ) : (
-                  <span className="text-slate-400 text-sm col-span-full">尚無資料 (請重新生成行程以獲取)</span>
+                  <span className="text-slate-400 text-sm col-span-full">尚無資料</span>
                 )}
               </div>
             </div>
 
+            {/* 新增：旅遊補助與退稅 (新功能) */}
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-rose-100 md:col-span-2">
+                <h4 className="font-bold text-rose-700 mb-3 flex items-center gap-2">
+                    <Banknote className="w-5 h-5" /> 省錢情報：補助與退稅
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-rose-50/50 p-3 rounded-xl">
+                        <span className="block text-xs font-bold text-rose-500 mb-1">🎁 當地旅遊補助</span>
+                        <p className="text-sm text-slate-700 whitespace-pre-line">{safeRender(currentGuide.subsidies) || '無相關資訊'}</p>
+                    </div>
+                    <div className="bg-rose-50/50 p-3 rounded-xl">
+                        <span className="block text-xs font-bold text-rose-500 mb-1">💳 退稅攻略</span>
+                        <p className="text-sm text-slate-700 whitespace-pre-line">{safeRender(currentGuide.tax_refund) || '無相關資訊'}</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* 歷史與交通 (保持不變) */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
               <h4 className="font-bold text-indigo-800 mb-3 flex items-center gap-2">
                 <Globe className="w-4 h-4" /> 歷史人文
@@ -542,6 +747,18 @@ const CityGuide = ({ guideData, cities }) => {
               <p className="text-sm text-slate-600 leading-relaxed">{currentGuide.safety_scams}</p>
             </div>
           </div>
+
+          {/* 新增：信用卡回饋分析 (CreditCardPlanner) */}
+          {basicData.enableCreditCard && (
+             <CreditCardPlanner 
+                city={selectedCity}
+                issuingCountry={basicData.issuingCountry}
+                countryName={countryName}
+                bankList={currentGuide.major_banks_list}
+                apiKey={apiKey}
+             />
+          )}
+
         </div>
       )}
     </div>
@@ -1040,8 +1257,12 @@ const App = () => {
     transportMode: 'public', 
     needParking: false,
     specialRequests: '',
-    priceRanges: { high: false, medium: false, low: false }
-  });
+    priceRanges: { high: false, medium: false, low: false },
+    // --- 新增欄位 ---
+    enableCreditCard: true, // 是否開啟信用卡推薦功能
+    issuingCountry: 'TW',   // 預設發卡國家
+    otherCountryName: ''    // 如果選其他，手填國家名
+});
 
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { date: '2025-12-08', time: '16:55', code: 'IT720', airport: 'FUK', type: '去程' },
@@ -1340,7 +1561,7 @@ const App = () => {
     const parkingConstraint = (basicData.transportMode === 'self_driving' && basicData.needParking)
       ? "Include nearby parking lot recommendations with estimated prices for each stop (Activity/Meal)."
       : "";
-
+    const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
     const systemPrompt = `
       You are an expert AI Travel Planner API. Respond with valid JSON only.
       User Constraints:
@@ -1348,37 +1569,45 @@ const App = () => {
       - Dates: ${basicData.dates}
       - Type: ${basicData.type}
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka, TAE=Daegu)." : "(No flights involved)"}
+      - Flights: ${flightsString}
       - Transport Mode: ${transportConstraint}
       - Parking Info Needed: ${parkingConstraint}
       - Accommodation: ${accommodationString}
       - Transit Tour: ${basicData.hasTransitTour}
       - Special Requests: ${basicData.specialRequests || "None"}
       - Restaurant Budget: ${priceConstraint}
+      - User's Home Country (for Bank List): ${selectedCountryName}
       
       Requirements:
       1. Logistics: Realistic travel times + buffer.
-      2. Culture & History: detailed background story for historical sites.
-      3. Food: Menu translation (Local | Chinese | Est. Price).
-      4. Weather: Provide estimated temperature range (e.g., "10°C - 18°C") and specific clothing advice for the season/weather.
-      5. Currency: Identify the primary local currency code (e.g., "JPY") and an approximate exchange rate to TWD (e.g. "0.21").
-      6. **City Guide**: Provide a guide for each unique major city visited. Include keys: "history_culture", "transport_tips" (tickets, passes), "safety_scams" (areas to avoid, common scams).
-      7. **Basic Phrases**: Include 5 essential phrases (Hello, Thank you, Sorry, Excuse me, How much?) in local language with Romanization.
-      8. Output Language: Traditional Chinese (Taiwan)""Output Language: Traditional Chinese (Taiwan).
+      2. Culture & History: detailed background story.
+      3. Food: Menu translation.
+      4. Weather: Temp range & clothing.
+      5. Currency: Local currency code & rate to TWD.
+      6. **City Guide**: For each major city, include:
+         - "history_culture": History text.
+         - "transport_tips": Tickets/Passes.
+         - "safety_scams": Safety info.
+         - "subsidies": Information on any travel subsidies available for tourists (local government or from ${selectedCountryName}).
+         - "tax_refund": Guide on how/where to claim tax refund and important notes.
+         - "major_banks_list": An array of strings listing 15-20 major consumer banks/credit card issuers in ${selectedCountryName} (The user's home country). This is for a checkbox list later.
+      7. Basic Phrases: 5 essential phrases.
+      8. Output Language: Traditional Chinese (Taiwan).
       
       JSON Schema Structure:
       {
         "trip_summary": "String",
-        "currency_rate": "String (e.g. '1 JPY = 0.21 TWD')",
-        "currency_code": "String (e.g. 'JPY')",
+        "currency_rate": "String",
+        "currency_code": "String",
         "city_guides": {
            "CityName": {
              "history_culture": "...",
              "transport_tips": "...",
              "safety_scams": "...",
-             "basic_phrases": [
-               { "label": "Hello", "local": "...", "roman": "..." }
-             ]
+             "subsidies": "...",
+             "tax_refund": "...",
+             "major_banks_list": ["Bank A", "Bank B", ...],
+             "basic_phrases": [ ... ]
            }
         },
         "created": ${Date.now()}, 
@@ -1578,7 +1807,57 @@ const App = () => {
         </section>
 
         <hr className="border-slate-100" />
-
+        <section className="space-y-4">
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
+            <span className="bg-emerald-100 p-2 rounded-lg text-emerald-600"><CreditCard className="w-5 h-5" /></span>支付與回饋設定
+            </h3>
+            
+            <div className="space-y-2 flex items-center h-full">
+                <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-3 rounded-xl border border-slate-200 w-full hover:bg-slate-100 transition-colors">
+                    <input 
+                    type="checkbox" 
+                    name="enableCreditCard" 
+                    checked={basicData.enableCreditCard} 
+                    onChange={handleBasicChange} 
+                    className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500" 
+                    />
+                    <span className="text-sm font-semibold text-slate-700">
+                    開啟「信用卡回饋與優惠」推薦功能
+                    </span>
+                </label>
+            </div>
+        
+            {basicData.enableCreditCard && (
+                <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
+                    <label className="text-sm font-semibold text-slate-600">您的信用卡發卡國家/地區</label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="relative">
+                            <select 
+                                name="issuingCountry" 
+                                value={basicData.issuingCountry} 
+                                onChange={handleBasicChange} 
+                                className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all appearance-none text-sm md:text-base"
+                            >
+                                {ISSUEING_COUNTRIES && ISSUING_COUNTRIES.map(c => (
+                                    <option key={c.code} value={c.code}>{c.name}</option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-4 top-4 w-4 h-4 text-slate-400 pointer-events-none" />
+                        </div>
+                        {basicData.issuingCountry === 'OTHER' && (
+                            <input 
+                                name="otherCountryName" 
+                                placeholder="請輸入國家名稱" 
+                                value={basicData.otherCountryName} 
+                                onChange={handleBasicChange} 
+                                className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm" 
+                            />
+                        )}
+                    </div>
+                    <p className="text-xs text-slate-400 pl-1">AI 將根據此設定，列出您可能持有的銀行列表供後續勾選。</p>
+                </div>
+            )}
+        </section>
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Plane className="w-5 h-5" /></span>航班資訊</h3>
@@ -1817,7 +2096,12 @@ const App = () => {
 
         {/* --- 功能 3: 城市指南區域 --- */}
         {itineraryData.city_guides && (
-          <CityGuide guideData={itineraryData.city_guides} cities={Object.keys(itineraryData.city_guides)} />
+          <CityGuide 
+            guideData={itineraryData.city_guides} 
+            cities={Object.keys(itineraryData.city_guides)}
+            basicData={basicData} 
+            apiKey={apiKey}
+          />
         )}
 
         {/* Day Tabs */}
