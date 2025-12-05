@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { CreditCard, Landmark, Gift, CheckCircle2 } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { 
@@ -12,7 +11,7 @@ import {
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
-  ExternalLink, MessageCircle
+  ExternalLink, MessageCircle, CreditCard, Landmark, Gift, CheckCircle2
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -1838,7 +1837,7 @@ const App = () => {
                                 onChange={handleBasicChange} 
                                 className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all appearance-none text-sm md:text-base"
                             >
-                                {ISSUEING_COUNTRIES && ISSUING_COUNTRIES.map(c => (
+                                {ISSUING_COUNTRIES && ISSUING_COUNTRIES.map(c => (
                                     <option key={c.code} value={c.code}>{c.name}</option>
                                 ))}
                             </select>
