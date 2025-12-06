@@ -1491,6 +1491,102 @@ const DateRangePicker = ({ value, onChange, onClose }) => {
     </div>
   );
 };
+const SavedPlanItem = ({ plan, onLoad, onDelete }) => {
+  const [translateX, setTranslateX] = useState(0);
+  const startX = useRef(0);
+  const isDragging = useRef(false);
+
+  // 觸控開始：記錄起始點
+  const onTouchStart = (e) => {
+    startX.current = e.touches[0].clientX;
+    isDragging.current = true;
+  };
+
+  // 觸控移動：計算滑動距離
+  const onTouchMove = (e) => {
+    if (!isDragging.current) return;
+    const currentX = e.touches[0].clientX;
+    const diff = currentX - startX.current;
+
+    // 只允許向左滑 (diff < 0)，且限制最大滑動距離為 -100px
+    if (diff < 0 && diff > -120) {
+      setTranslateX(diff);
+    }
+  };
+
+  // 觸控結束：決定是彈回還是展開
+  const onTouchEnd = () => {
+    isDragging.current = false;
+    // 如果向左滑超過 60px，就固定在 -80px (展開刪除鍵)，否則彈回 0 (關閉)
+    if (translateX < -60) {
+      setTranslateX(-80);
+    } else {
+      setTranslateX(0);
+    }
+  };
+
+  return (
+    <div className="relative group overflow-hidden rounded-2xl shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-200 transition-all duration-300">
+      
+      {/* 1. 底層紅色刪除區塊 (左滑後露出) */}
+      <div className="absolute inset-y-0 right-0 w-24 bg-red-500 flex items-center justify-center z-0">
+        <button 
+          onClick={(e) => { e.stopPropagation(); onDelete(plan.created); }}
+          className="flex flex-col items-center text-white font-bold text-xs gap-1 w-full h-full justify-center active:bg-red-600"
+        >
+          <Trash2 className="w-6 h-6" />
+          <span>刪除</span>
+        </button>
+      </div>
+
+      {/* 2. 上層內容卡片 (可滑動) */}
+      <div 
+        className="relative z-10 bg-white p-6 cursor-pointer transition-transform duration-200 ease-out h-full"
+        style={{ transform: `translateX(${translateX}px)` }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onClick={() => {
+            // 如果已展開刪除鍵，點擊卡片則是"關閉刪除鍵"
+            if (translateX < 0) setTranslateX(0);
+            else onLoad(plan);
+        }}
+      >
+        <div className="flex justify-between items-start mb-4">
+          <h3 className="font-bold text-xl text-slate-800 line-clamp-1">{plan.basicInfo?.destinations || '旅程規劃'}</h3>
+          <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-mono shrink-0">
+            {new Date(plan.created).toLocaleDateString()}
+          </span>
+        </div>
+        
+        <p className="text-slate-500 text-sm line-clamp-3 mb-6 min-h-[4rem] leading-relaxed">
+           {plan.trip_summary}
+        </p>
+
+        <div className="flex items-center gap-4 text-sm text-slate-400 border-t border-slate-50 pt-4">
+          <div className="flex items-center gap-1.5">
+             <Calendar className="w-4 h-4 text-blue-400" /> {plan.days.length} 天
+          </div>
+          {/* 電腦版用的懸浮刪除按鈕 (手機版看不到) */}
+          <button 
+             onClick={(e) => { e.stopPropagation(); onDelete(plan.created); }}
+             className="ml-auto p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors md:block hidden"
+             title="刪除此規劃"
+          >
+             <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 手機版提示：左滑刪除 (僅在未滑動時顯示) */}
+        {translateX === 0 && (
+           <div className="absolute right-2 bottom-2 text-[10px] text-slate-300 md:hidden opacity-50 flex items-center gap-1">
+             <ArrowLeft className="w-3 h-3" /> 左滑管理
+           </div>
+        )}
+      </div>
+    </div>
+  );
+};
 const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   const [amount, setAmount] = useState(1000);
   
@@ -1767,7 +1863,17 @@ const App = () => {
     setStep('result');
     setActiveTab(0);
   };
-
+  const deletePlan = (createdTimestamp) => {
+    if (confirm('確定要刪除這個行程嗎？刪除後無法復原。')) {
+      const newPlans = savedPlans.filter(p => p.created !== createdTimestamp);
+      setSavedPlans(newPlans);
+      // usePersistentState 會自動同步到 localStorage，無需手動 setItem
+      // 但為了確保萬無一失 (因為 setSavedPlans 是非同步的)，我們這裡也可以顯式寫入
+      try {
+         localStorage.setItem('my_travel_plans', JSON.stringify(newPlans));
+      } catch (e) { console.error(e); }
+    }
+  };
   const isCurrentPlanSaved = () => {
     if (!itineraryData) return false;
     return savedPlans.some(p => p.created === itineraryData.created);
@@ -2572,6 +2678,7 @@ const App = () => {
         <button onClick={() => setStep('input')} className="p-3 bg-white rounded-full shadow-lg hover:bg-slate-50 border border-slate-100 transition-transform hover:-translate-x-1"><ArrowLeft className="w-6 h-6 text-slate-700" /></button>
         <h2 className="text-3xl font-bold text-slate-800">我的旅程記憶</h2>
       </div>
+      
       {savedPlans.length === 0 ? (
         <div className="text-center py-32 bg-white/80 backdrop-blur rounded-3xl shadow-sm border border-slate-200 text-slate-400">
           <BookOpen className="w-24 h-24 mx-auto mb-6 opacity-20" />
@@ -2579,23 +2686,20 @@ const App = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {savedPlans.map((plan, idx) => (
-            <div key={idx} onClick={() => loadSavedPlan(plan)} className="group bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-xl hover:border-blue-200 cursor-pointer transition-all duration-300 transform hover:-translate-y-1 relative overflow-hidden">
-              <div className="flex justify-between items-start mb-4 relative z-10">
-                <h3 className="font-bold text-xl text-slate-800 group-hover:text-blue-600 transition-colors line-clamp-1">{plan.basicInfo?.destinations || '旅程規劃'}</h3>
-                <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-mono">{new Date(plan.created).toLocaleDateString()}</span>
-              </div>
-              <p className="text-slate-500 text-sm line-clamp-3 mb-6 min-h-[4rem] leading-relaxed relative z-10">{plan.trip_summary}</p>
-              <div className="flex items-center gap-4 text-sm text-slate-400 border-t border-slate-50 pt-4">
-                <div className="flex items-center gap-1.5"><Calendar className="w-4 h-4 text-blue-400" /> {plan.days.length} 天</div>
-              </div>
-            </div>
+          {savedPlans.map((plan) => (
+            // 使用新組件，傳入 plan, onLoad, onDelete
+            <SavedPlanItem 
+               key={plan.created} 
+               plan={plan} 
+               onLoad={loadSavedPlan} 
+               onDelete={deletePlan} 
+            />
           ))}
         </div>
       )}
     </div>
   );
-
+  
   const renderResult = () => {
     // 1. 防呆檢查：如果資料讀取錯誤，顯示錯誤訊息而不是白畫面
     if (!itineraryData || !Array.isArray(itineraryData.days) || itineraryData.days.length === 0) {
