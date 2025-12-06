@@ -1364,6 +1364,123 @@ const TutorialModal = ({ isOpen, onClose, title, pages, storageKey }) => {
     document.body
   );
 };
+const DateRangePicker = ({ value, onChange, onClose }) => {
+  const [currentDate, setCurrentDate] = useState(new Date()); // 控制當前顯示的月份
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
+  const [hoverDate, setHoverDate] = useState(null);
+
+  // 初始化：解析傳入的字串 (e.g., "2025-12-08 to 2025-12-12")
+  useEffect(() => {
+    if (value) {
+      const [startStr, endStr] = value.split(' to ');
+      if (startStr) {
+        const s = new Date(startStr);
+        if (!isNaN(s)) {
+           setStartDate(s);
+           setCurrentDate(s); // 讓月曆跳到開始日期
+        }
+      }
+      if (endStr) {
+        const e = new Date(endStr);
+        if (!isNaN(e)) setEndDate(e);
+      }
+    }
+  }, []);
+
+  const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+  const daysInMonth = getDaysInMonth(year, month);
+  const firstDay = getFirstDayOfMonth(year, month);
+
+  const handlePrevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+  const handleNextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+
+  const handleDateClick = (day) => {
+    const clickedDate = new Date(year, month, day);
+    
+    // 邏輯：
+    // 1. 如果還沒選開始日期，或已經選完範圍(重新選) -> 設為開始日期
+    // 2. 如果選了開始日期，且點擊日期在開始日期之後 -> 設為結束日期
+    // 3. 如果選了開始日期，但點擊日期在開始日期之前 -> 重設為新的開始日期
+    if (!startDate || (startDate && endDate)) {
+      setStartDate(clickedDate);
+      setEndDate(null);
+    } else if (clickedDate > startDate) {
+      setEndDate(clickedDate);
+      // 選完自動回傳
+      const fmt = (d) => d.toISOString().split('T')[0];
+      onChange(`${fmt(startDate)} to ${fmt(clickedDate)}`);
+      setTimeout(onClose, 300); // 稍微延遲關閉讓用戶看到選取結果
+    } else {
+      setStartDate(clickedDate);
+    }
+  };
+
+  const isSelected = (day) => {
+    const target = new Date(year, month, day);
+    if (startDate && target.getTime() === startDate.getTime()) return 'start';
+    if (endDate && target.getTime() === endDate.getTime()) return 'end';
+    if (startDate && endDate && target > startDate && target < endDate) return 'range';
+    if (startDate && !endDate && hoverDate && target > startDate && target <= hoverDate) return 'hover';
+    return null;
+  };
+
+  return (
+    <div className="absolute top-full left-0 mt-2 z-50 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 w-80 animate-in zoom-in-95">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-4">
+        <button onClick={handlePrevMonth} className="p-1 hover:bg-slate-100 rounded-full"><ChevronDown className="w-5 h-5 rotate-90 text-slate-500" /></button>
+        <div className="font-bold text-slate-700">{year}年 {month + 1}月</div>
+        <button onClick={handleNextMonth} className="p-1 hover:bg-slate-100 rounded-full"><ChevronDown className="w-5 h-5 -rotate-90 text-slate-500" /></button>
+      </div>
+
+      {/* Week Days */}
+      <div className="grid grid-cols-7 mb-2 text-center">
+        {['日', '一', '二', '三', '四', '五', '六'].map(d => (
+          <div key={d} className="text-xs font-bold text-slate-400">{d}</div>
+        ))}
+      </div>
+
+      {/* Days Grid */}
+      <div className="grid grid-cols-7 gap-1 text-sm">
+        {Array.from({ length: firstDay }).map((_, i) => <div key={`empty-${i}`} />)}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const day = i + 1;
+          const status = isSelected(day);
+          
+          let bgClass = 'hover:bg-slate-100 text-slate-700';
+          if (status === 'start' || status === 'end') bgClass = 'bg-blue-600 text-white hover:bg-blue-700';
+          else if (status === 'range') bgClass = 'bg-blue-100 text-blue-700';
+          else if (status === 'hover') bgClass = 'bg-blue-50 text-blue-600';
+
+          return (
+            <button
+              key={day}
+              onClick={() => handleDateClick(day)}
+              onMouseEnter={() => setHoverDate(new Date(year, month, day))}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all font-medium ${bgClass}`}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+      
+      {/* Footer */}
+      <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
+        <button onClick={onClose} className="text-xs text-slate-400 hover:text-slate-600">取消</button>
+        <div className="text-xs font-bold text-blue-600">
+            {startDate ? startDate.toLocaleDateString() : '請選擇出發'} 
+            {endDate ? ` ➜ ${endDate.toLocaleDateString()}` : ''}
+        </div>
+      </div>
+    </div>
+  );
+};
 const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   const [amount, setAmount] = useState(1000);
   
@@ -1983,6 +2100,7 @@ const App = () => {
   };
 
   const renderInputForm = () => (
+    const [showCalendar, setShowCalendar] = useState(false);
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
       <TutorialModal 
          isOpen={showInputTutorial} 
@@ -2075,14 +2193,38 @@ const App = () => {
               <label className="text-sm font-semibold text-slate-600">目的城市</label>
               <input name="destinations" value={basicData.destinations} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 relative"> {/* 加上 relative 以便定位月曆 */}
               <label className="text-sm font-semibold text-slate-600">旅遊日期</label>
-              <div className="relative">
+              <div 
+                className="relative cursor-pointer"
+                onClick={() => setShowCalendar(!showCalendar)} // 點擊開啟/關閉
+              >
                 <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" />
-                <input name="dates" value={basicData.dates} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" />
+                <input 
+                  name="dates" 
+                  value={basicData.dates} 
+                  readOnly // 設定為唯讀，禁止手機跳出鍵盤
+                  className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base cursor-pointer" 
+                  placeholder="點擊選擇日期範圍"
+                />
               </div>
+              
+              {/* 顯示月曆組件 */}
+              {showCalendar && (
+                <>
+                  {/* 透明遮罩，點擊外部關閉 */}
+                  <div className="fixed inset-0 z-40" onClick={() => setShowCalendar(false)}></div>
+                  <DateRangePicker 
+                    value={basicData.dates}
+                    onChange={(newDates) => {
+                        setBasicData(prev => ({ ...prev, dates: newDates }));
+                        // 這裡不自動關閉，讓用戶確認一下，邏輯寫在組件內的 handleDateClick 比較順
+                    }}
+                    onClose={() => setShowCalendar(false)}
+                  />
+                </>
+              )}
             </div>
-          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-600">風格</label>
