@@ -2144,7 +2144,23 @@ const App = () => {
           </h3>
           <div className="space-y-2">
             <label className="text-sm font-semibold text-slate-600">特殊要求</label>
-            <textarea name="specialRequests" value={basicData.specialRequests} onChange={handleBasicChange} rows={2} className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" placeholder="例如：一定要吃燒肉、想在天神待久一點..." />
+           <textarea 
+              name="specialRequests" 
+              value={basicData.specialRequests} 
+              onChange={handleBasicChange} 
+              // 新增：自動長高邏輯
+              onInput={(e) => {
+                e.target.style.height = 'auto'; // 先重置高度以便縮小
+                e.target.style.height = `${e.target.scrollHeight}px`; // 再設定為內容高度
+              }}
+              rows={2} 
+              // 修改 className：
+              // 1. min-h-[80px]: 設定最小高度 (約 2-3 行)
+              // 2. max-h-[240px]: 設定最大高度 (約 8 行，超過會出現卷軸)
+              // 3. resize-none: 隱藏右下角手動拉伸的圖示，保持美觀
+              className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto" 
+              placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
+            />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-semibold text-slate-600 flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
