@@ -2226,19 +2226,27 @@ const App = () => {
            storageKey="tutorial_input_seen"
         />
 
-        <div className="text-center pb-6 border-b border-slate-100/50 relative"> 
-          {/* 左上角教學按鈕 */}
-          <button 
-            onClick={() => { localStorage.removeItem('tutorial_input_seen'); setShowInputTutorial(true); }}
-            className="absolute left-0 top-0 p-2 text-slate-400 hover:text-blue-600 transition-colors flex items-center gap-1 text-xs font-bold border border-slate-200 rounded-lg hover:bg-blue-50"
-          >
-             <Info className="w-4 h-4" /> 使用教學
-          </button>
-          <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
-            <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
-            AI 智能旅程規劃師
-          </h1>
-          <p className="text-slate-500 mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
+        {/* --- Header 區域開始 --- */}
+        <div className="pb-6 border-b border-slate-100/50">
+          
+          {/* 1. 上排：功能按鈕區 (獨立一行，靠左) */}
+          <div className="flex justify-start mb-4">
+            <button 
+              onClick={() => { localStorage.removeItem('tutorial_input_seen'); setShowInputTutorial(true); }}
+              className="px-3 py-2 text-slate-500 hover:text-blue-600 transition-colors flex items-center gap-2 text-sm font-bold border border-slate-200 rounded-xl hover:bg-blue-50 bg-white shadow-sm"
+            >
+               <Info className="w-4 h-4" /> 使用教學
+            </button>
+          </div>
+
+          {/* 2. 下排：標題區 (置中) */}
+          <div className="text-center">
+            <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3 flex-wrap">
+              <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
+              AI 智能旅程規劃師
+            </h1>
+            <p className="text-slate-500 mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
+          </div>
         </div>
 
         <div className="space-y-6">
