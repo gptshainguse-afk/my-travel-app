@@ -1470,6 +1470,15 @@ const App = () => {
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
+  const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
+    outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
+    transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
+    inbound:  { mode: 'flight', date: '2025-12-12', depTime: '22:40', arrTime: '00:30', code: 'TW663', station: 'TPE', type: '回程' },
+  });
+
+  const [multiFlights, setMultiFlights] = usePersistentState('travel_multi_flights', [
+    { id: 1, type: '移動', mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', isOpen: true }
+  ]);
   const [basicData, setBasicData] = usePersistentState('travel_basic_data', {
     destinations: '福岡',
     dates: '2025-12-08 to 2025-12-12',
@@ -1773,12 +1782,24 @@ const App = () => {
     setStep('loading');
     setErrorMsg('');
 
-    let flightsString = "No flights involved.";
+    let flightsString = "No flights/transport involved.";
     if (basicData.hasFlights) {
+      const fmtMode = (m) => m === 'train' ? '火車/高鐵' : '飛機';
+      
       if (basicData.isMultiCityFlight) {
-        flightsString = multiFlights.map(f => `${f.type} | 日期:${f.date} | 時間:${f.time} | 航班:${f.code} | 機場:${f.airport}`).join('\n');
+        flightsString = multiFlights.map(f => 
+          `${f.type} | 交通:${fmtMode(f.mode)} | 日期:${f.date} | 出發:${f.depTime} | 抵達:${f.arrTime} | 班次:${f.code} | 地點:${f.station}`
+        ).join('\n');
       } else {
-        flightsString = `去程 | 日期:${simpleFlights.outbound.date} | 時間:${simpleFlights.outbound.time} | 航班:${simpleFlights.outbound.code} | 機場:${simpleFlights.outbound.airport}\n中轉 | 日期:${simpleFlights.transit.date ? simpleFlights.transit.date : '無'} | 時間:${simpleFlights.transit.time} | 航班:${simpleFlights.transit.code} | 機場:${simpleFlights.transit.airport}\n回程 | 日期:${simpleFlights.inbound.date} | 時間:${simpleFlights.inbound.time} | 航班:${simpleFlights.inbound.code} | 機場:${simpleFlights.inbound.airport}`;
+        // 簡單往返
+        const renderLeg = (leg) => 
+          `${leg.type} | 交通:${fmtMode(leg.mode)} | 日期:${leg.date} | 出發:${leg.depTime} | 抵達:${leg.arrTime} | 班次:${leg.code} | 地點:${leg.station}`;
+
+        flightsString = [
+          renderLeg(simpleFlights.outbound),
+          simpleFlights.transit.date ? renderLeg(simpleFlights.transit) : null,
+          renderLeg(simpleFlights.inbound)
+        ].filter(Boolean).join('\n');
       }
     }
 
@@ -2197,35 +2218,84 @@ const App = () => {
         </section>
         <section className="space-y-4">
           <div className="flex justify-between items-center">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-indigo-100 p-2 rounded-lg text-indigo-600"><Plane className="w-5 h-5" /></span>航班資訊</h3>
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
+              <span className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                 {/* 動態顯示 Icon */}
+                 {simpleFlights.outbound.mode === 'train' ? <Train className="w-5 h-5" /> : <Plane className="w-5 h-5" />}
+              </span>
+              交通方式 (飛機/火車)
+            </h3>
             
             <div className="flex items-center gap-4">
-               {/* 新增：無航班勾選 */}
                <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
                 <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500" />
-                <span className="text-sm font-bold text-slate-600">無 (不需航班)</span>
+                <span className="text-sm font-bold text-slate-600">無 (不需安排)</span>
               </label>
 
               {basicData.hasFlights && (
                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
                   <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-                  <span className="text-sm font-bold text-slate-600">複雜航班</span>
+                  <span className="text-sm font-bold text-slate-600">多段/複雜行程</span>
                 </label>
               )}
             </div>
           </div>
+
+          {/* 提示語 */}
+          {basicData.hasFlights && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs md:text-sm text-amber-800 flex items-start gap-2">
+               <Info className="w-4 h-4 shrink-0 mt-0.5" />
+               <div>
+                 <span className="font-bold">精準規劃小撇步：</span>
+                 請務必填寫詳細的 <span className="font-bold text-amber-900">出發與抵達時間</span>。如果僅填寫班次/車次，AI 可能會抓不到最新的時刻表而導致行程安排錯誤。
+               </div>
+            </div>
+          )}
           
-          {/* 根據 hasFlights 決定是否顯示航班輸入 */}
           {basicData.hasFlights && (
             !basicData.isMultiCityFlight ? (
             <div className="bg-slate-50/50 p-4 md:p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
               {[ { label: '去程', key: 'outbound', color: 'text-emerald-600' }, { label: '中轉', key: 'transit', color: 'text-amber-600' }, { label: '回程', key: 'inbound', color: 'text-blue-600' } ].map((row) => (
-                <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                  <span className={`col-span-1 text-sm font-bold ${row.color} pt-2 md:pt-0`}>{row.label}</span>
-                  <div className="col-span-3"><input type="date" value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-sm" /></div>
-                  <div className="col-span-2"><input type="time" value={simpleFlights[row.key].time} onChange={(e) => handleSimpleFlightChange(row.key, 'time', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-sm" /></div>
-                  <div className="col-span-4"><input type="text" placeholder="航班" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-sm" /></div>
-                  <div className="col-span-2"><input type="text" placeholder="機場" value={simpleFlights[row.key].airport} onChange={(e) => handleSimpleFlightChange(row.key, 'airport', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-sm font-mono uppercase text-center" /></div>
+                <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                  
+                  {/* 標籤與模式切換 */}
+                  <div className="col-span-1 md:col-span-1 flex flex-col items-center justify-center gap-1">
+                    <span className={`text-sm font-bold ${row.color}`}>{row.label}</span>
+                    <button 
+                      onClick={() => handleSimpleFlightChange(row.key, 'mode', simpleFlights[row.key].mode === 'flight' ? 'train' : 'flight')}
+                      className="p-1.5 bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-600 rounded-lg transition-colors"
+                      title="切換 飛機/火車"
+                    >
+                      {simpleFlights[row.key].mode === 'train' ? <Train className="w-4 h-4" /> : <Plane className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {/* 日期 */}
+                  <div className="col-span-1 md:col-span-3">
+                    <label className="text-[10px] text-slate-400 pl-1 block">日期</label>
+                    <input type="date" value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-slate-700" />
+                  </div>
+
+                  {/* 時間 (拆分為出發/抵達) */}
+                  <div className="col-span-2 md:col-span-2">
+                     <label className="text-[10px] text-slate-400 pl-1 block">出發時間</label>
+                     <input type="time" value={simpleFlights[row.key].depTime} onChange={(e) => handleSimpleFlightChange(row.key, 'depTime', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                  </div>
+                  <div className="col-span-2 md:col-span-2 relative">
+                     <label className="text-[10px] text-slate-400 pl-1 block">抵達時間</label>
+                     <input type="time" value={simpleFlights[row.key].arrTime} onChange={(e) => handleSimpleFlightChange(row.key, 'arrTime', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                     <div className="absolute -left-2 top-8 text-slate-300 text-xs">➜</div>
+                  </div>
+
+                  {/* 班次與地點 */}
+                  <div className="col-span-2 md:col-span-2">
+                     <label className="text-[10px] text-slate-400 pl-1 block">班次/車次</label>
+                     <input type="text" placeholder="例如 IT202" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                  </div>
+                  <div className="col-span-2 md:col-span-2">
+                     <label className="text-[10px] text-slate-400 pl-1 block">機場/車站代碼</label>
+                     <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono uppercase text-center" />
+                  </div>
                 </div>
               ))}
             </div>
@@ -2234,27 +2304,59 @@ const App = () => {
               {multiFlights.map((flight) => (
                 <div key={flight.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   <div onClick={() => toggleMultiFlight(flight.id)} className="p-4 flex items-center justify-between cursor-pointer bg-slate-50/50 hover:bg-slate-100">
-                    <div className="flex items-center gap-3"><span className="font-bold text-slate-700 bg-white px-3 py-1 rounded-md border border-slate-200 text-sm shadow-sm">{flight.type}</span>{!flight.isOpen && <span className="text-sm text-slate-500">{flight.date} | {flight.code} | {flight.airport}</span>}</div>
+                    <div className="flex items-center gap-3">
+                      <span className={`font-bold text-slate-700 bg-white px-3 py-1 rounded-md border border-slate-200 text-sm shadow-sm flex items-center gap-2`}>
+                         {flight.mode === 'train' ? <Train className="w-3 h-3" /> : <Plane className="w-3 h-3" />}
+                         {flight.type}
+                      </span>
+                      {!flight.isOpen && <span className="text-sm text-slate-500">{flight.date} | {flight.depTime} ➜ {flight.arrTime} | {flight.station}</span>}
+                    </div>
                     <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeMultiFlight(flight.id); }} className="p-2 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{flight.isOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                   </div>
                   {flight.isOpen && (
-                    <div className="p-4 grid grid-cols-2 md:grid-cols-5 gap-4">
-                      <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="p-2.5 border rounded-lg text-sm" />
-                      <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="p-2.5 border rounded-lg text-sm" />
-                      <input type="time" value={flight.time} onChange={(e) => updateMultiFlight(flight.id, 'time', e.target.value)} className="p-2.5 border rounded-lg text-sm" />
-                      <input placeholder="航班" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="p-2.5 border rounded-lg text-sm" />
-                      <input placeholder="機場" value={flight.airport} onChange={(e) => updateMultiFlight(flight.id, 'airport', e.target.value)} className="p-2.5 border rounded-lg text-sm font-mono uppercase" />
+                    <div className="p-4 grid grid-cols-2 md:grid-cols-6 gap-4">
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">類型</label>
+                         <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                      </div>
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">交通工具</label>
+                         <select value={flight.mode} onChange={(e) => updateMultiFlight(flight.id, 'mode', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
+                           <option value="flight">飛機</option>
+                           <option value="train">火車</option>
+                         </select>
+                      </div>
+                      <div className="col-span-2 md:col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">日期</label>
+                         <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                      </div>
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">出發時間</label>
+                         <input type="time" value={flight.depTime} onChange={(e) => updateMultiFlight(flight.id, 'depTime', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                      </div>
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">抵達時間</label>
+                         <input type="time" value={flight.arrTime} onChange={(e) => updateMultiFlight(flight.id, 'arrTime', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                      </div>
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">班次</label>
+                         <input placeholder="班次" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                      </div>
+                      <div className="col-span-1">
+                         <label className="text-[10px] text-slate-400 block mb-1">地點代碼</label>
+                         <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border rounded-lg text-sm font-mono uppercase" />
+                      </div>
                     </div>
                   )}
                 </div>
               ))}
-              <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-400 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增航段</button>
+              <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-400 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
             </div>
           ))}
 
           <div className="flex items-center gap-3 pt-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
               <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-              <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機入境觀光</label>
+              <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機/中途入境觀光</label>
           </div>
         </section>
 
