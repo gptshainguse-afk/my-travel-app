@@ -1616,16 +1616,6 @@ const App = () => {
     otherCountryName: ''    // 如果選其他，手填國家名
   });
 
-  const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
-    outbound: { date: '2025-12-08', time: '16:55', code: 'IT720', airport: 'FUK', type: '去程' },
-    transit:  { date: '2025-12-12', time: '12:10', code: 'TW214', airport: 'TAE', type: '中轉' },
-    inbound:  { date: '2025-12-12', time: '22:40', code: 'TW663', airport: 'TPE', type: '回程' },
-  });
-
-  const [multiFlights, setMultiFlights] = usePersistentState('travel_multi_flights', [
-    { id: 1, type: '去程', date: '', time: '', code: '', airport: '', isOpen: true }
-  ]);
-
   const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', [
     { 
       id: 1, type: '飯店', source: 'Agoda', name: '博多站前飯店', 
