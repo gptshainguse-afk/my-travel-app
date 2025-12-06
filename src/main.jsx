@@ -1582,6 +1582,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 };
 
 const App = () => {
+  const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
   const [step, setStep] = useState('input'); 
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
@@ -2100,7 +2101,6 @@ const App = () => {
   };
 
   const renderInputForm = () => (
-    const [showCalendar, setShowCalendar] = useState(false);
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
       <TutorialModal 
          isOpen={showInputTutorial} 
