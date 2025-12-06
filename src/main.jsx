@@ -2765,6 +2765,10 @@ const App = () => {
           <button onClick={() => setStep('saved_list')} className="w-full bg-white border-2 border-slate-200 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-50 hover:border-slate-300 transition-all flex justify-center items-center gap-2">
             <List className="w-5 h-5" /> 查看已儲存的規劃 ({savedPlans.length})
           </button>
+          <label className="w-full bg-white border-2 border-dashed border-slate-300 text-slate-500 font-bold py-4 rounded-2xl hover:bg-slate-50 hover:border-blue-400 hover:text-blue-500 transition-all flex justify-center items-center gap-2 cursor-pointer">
+            <Upload className="w-5 h-5" /> 匯入 JSON
+            <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
+          </label>
         </div>
         {errorMsg && <div className="p-4 bg-red-50 text-red-600 rounded-xl flex items-center gap-2 border border-red-100 animate-shake"><AlertTriangle className="w-5 h-5" />{errorMsg}</div>}
       </div>
