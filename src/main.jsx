@@ -1411,8 +1411,18 @@ const DateRangePicker = ({ value, onChange, onClose }) => {
       setEndDate(null);
     } else if (clickedDate > startDate) {
       setEndDate(clickedDate);
-      // 選完自動回傳
-      const fmt = (d) => d.toISOString().split('T')[0];
+      
+      // --- 修正開始 ---
+      // 原本錯誤寫法: const fmt = (d) => d.toISOString().split('T')[0];
+      // 改用下方寫法，強制使用當地時間年月日，避免時區回推導致少一天
+      const fmt = (d) => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${dd}`;
+      };
+      // --- 修正結束 ---
+
       onChange(`${fmt(startDate)} to ${fmt(clickedDate)}`);
       setTimeout(onClose, 300); // 稍微延遲關閉讓用戶看到選取結果
     } else {
