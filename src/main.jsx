@@ -1588,6 +1588,7 @@ const App = () => {
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
+  const textareaRef = useRef(null);
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
     transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
@@ -1674,6 +1675,7 @@ const App = () => {
         newNames.length = count;
       }
       setTravelerNames(newNames);
+      
     }
   }, [basicData.travelers]);
 
@@ -2099,7 +2101,14 @@ const App = () => {
           };
       });
   };
-
+  useEffect(() => {
+    if (textareaRef.current) {
+      // 先重置高度為 auto，讓 scrollHeight 能夠正確計算縮小的情況
+      textareaRef.current.style.height = 'auto';
+      // 設定高度為內容高度 (scrollHeight)
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [basicData.specialRequests]); // 只要內容變了就觸發
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
       <TutorialModal 
@@ -2287,19 +2296,12 @@ const App = () => {
           <div className="space-y-2">
             <label className="text-sm font-semibold text-slate-600">特殊要求</label>
            <textarea 
+              ref={textareaRef} // 綁定 ref
               name="specialRequests" 
               value={basicData.specialRequests} 
               onChange={handleBasicChange} 
-              // 新增：自動長高邏輯
-              onInput={(e) => {
-                e.target.style.height = 'auto'; // 先重置高度以便縮小
-                e.target.style.height = `${e.target.scrollHeight}px`; // 再設定為內容高度
-              }}
               rows={2} 
-              // 修改 className：
-              // 1. min-h-[80px]: 設定最小高度 (約 2-3 行)
-              // 2. max-h-[240px]: 設定最大高度 (約 8 行，超過會出現卷軸)
-              // 3. resize-none: 隱藏右下角手動拉伸的圖示，保持美觀
+              // 移除 onInput (改由 useEffect 處理)
               className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto" 
               placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
             />
