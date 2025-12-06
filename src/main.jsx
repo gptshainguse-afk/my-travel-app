@@ -564,15 +564,14 @@ const FunLoading = ({ destination }) => {
     </div>
   );
 };
-const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis,modelType }) => {
+const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis, modelType }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedBanks, setSelectedBanks] = useState([]);
-  const [otherBanks, setOtherBanks] = useState(''); // 新增：手動輸入其他銀行
+  const [otherBanks, setOtherBanks] = useState(''); 
   const [includeTop3, setIncludeTop3] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(savedAnalysis || null); // 預設使用已儲存的資料
+  const [analysisResult, setAnalysisResult] = useState(savedAnalysis || null); 
 
-  // 如果父層傳入新的 savedAnalysis，更新本地狀態
   useEffect(() => {
     if (savedAnalysis) setAnalysisResult(savedAnalysis);
   }, [savedAnalysis]);
@@ -586,7 +585,6 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
   const handleAnalyze = async () => {
     if (!apiKey) return alert("需要 API Key 才能分析信用卡回饋");
     
-    // 合併勾選的銀行與手動輸入的銀行
     const manualBanks = otherBanks.split(/[,，、]/).map(s => s.trim()).filter(s => s);
     const allBanks = [...selectedBanks, ...manualBanks];
 
@@ -595,8 +593,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     setIsAnalyzing(true);
     setAnalysisResult(null); 
     
-    // 設定目標模型 (使用者選擇的 2.5)
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';    
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp';    
     
     const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
@@ -623,10 +620,8 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
       });
       const data = await response.json();
       
-      // 這裡也可以加降級機制，或者直接拋出錯誤讓使用者知道 2.5 無法使用
       if (data.error) {
-         // 簡單的降級嘗試
-         console.warn("2.5 模型失敗，嘗試 1.5 Pro");
+         console.warn(`主模型 ${TARGET_MODEL} 失敗，啟動自動修復 (2.5 Flash preview)...`);
          const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -634,14 +629,12 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
          });
          const fallbackData = await fallbackResp.json();
          if (fallbackData.error) throw new Error(fallbackData.error.message);
-         
          const rawText = fallbackData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
          setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
       } else {
          const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
          setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
       }
-      
     } catch (e) {
       console.error(e);
       alert("分析失敗: " + e.message);
@@ -651,20 +644,23 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
   };
 
   return (
-    <div className="mt-4 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-blue-100 overflow-hidden">
+    <div className="mt-4 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-blue-100 overflow-hidden print:border-none print:bg-white print:mt-8 print:break-inside-avoid">
+      {/* 列印時隱藏標題按鈕 */}
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors text-blue-800 font-bold"
+        className="w-full p-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors text-blue-800 font-bold print:hidden"
       >
         <span className="flex items-center gap-2"><CreditCard className="w-5 h-5" /> 信用卡與支付回饋攻略 {analysisResult && <CheckCircle2 className="w-4 h-4 text-green-500" />}</span>
         {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
       </button>
 
-      {isOpen && (
-        <div className="p-4 md:p-6 animate-in slide-in-from-top-2">
-          {!analysisResult && !isAnalyzing ? (
-            <>
-              <div className="mb-4">
+      {/* 列印時強制顯示內容 (如果 analysisResult 存在) */}
+      <div className={`p-4 md:p-6 animate-in slide-in-from-top-2 ${isOpen ? 'block' : 'hidden'} ${analysisResult ? 'print:block' : 'print:hidden'}`}>
+        {/* 只有在沒結果時顯示輸入表單，且列印時隱藏 */}
+        {!analysisResult && !isAnalyzing ? (
+          <div className="print:hidden">
+            {/* ... 輸入表單部分保持不變，省略以節省篇幅 ... */}
+            <div className="mb-4">
                 <h5 className="font-bold text-slate-700 mb-2 flex items-center gap-2">
                   <Landmark className="w-4 h-4 text-slate-500" /> 選擇您持有的銀行 ({countryName})
                 </h5>
@@ -681,8 +677,6 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
                     </label>
                   )) : <div className="col-span-full text-slate-400 text-sm">AI 未提供預設清單，請直接手動輸入</div>}
                 </div>
-                
-                {/* 新增：手動輸入欄位 */}
                 <input 
                   type="text"
                   placeholder="其他銀行 (如: 渣打, 匯豐... 用逗號分隔)"
@@ -690,92 +684,88 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
                   onChange={(e) => setOtherBanks(e.target.value)}
                   className="w-full p-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
                 />
-              </div>
-
-              <div className="mb-6 flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
-                <input 
-                  type="checkbox" 
-                  id="top3"
-                  checked={includeTop3} 
-                  onChange={(e) => setIncludeTop3(e.target.checked)}
-                  className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                />
-                <label htmlFor="top3" className="font-bold text-slate-700 cursor-pointer text-sm md:text-base">
-                  同時推薦 {countryName} 該地區最強 Top 3 信用卡
-                </label>
-              </div>
-
-              <button 
-                onClick={handleAnalyze} 
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2"
-              >
-                <Sparkles className="w-5 h-5" /> 生成最佳刷卡策略
-              </button>
-            </>
-          ) : isAnalyzing ? (
-             <div className="py-10 text-center flex flex-col items-center justify-center space-y-3">
-                 <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
-                 <p className="text-blue-600 font-bold animate-pulse">AI 正在計算現金回饋與里程轉換率...</p>
-             </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Result Display - Top 3 */}
-              {analysisResult.top_3_general && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-                  <h5 className="font-bold text-yellow-800 mb-3 flex items-center gap-2 text-lg">
-                    <Gift className="w-5 h-5" /> {city} 必備 Top 3 神卡
-                  </h5>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {analysisResult.top_3_general.map((card, i) => (
-                      <div key={i} className="bg-white p-3 rounded-lg shadow-sm border border-yellow-100">
-                        <div className="text-xs text-yellow-600 font-bold mb-1">{card.bank}</div>
-                        <div className="font-bold text-slate-800 mb-1">{card.card_name}</div>
-                        <div className="text-xs bg-slate-100 inline-block px-1.5 py-0.5 rounded text-slate-500 mb-2">{card.type}</div>
-                        <div className="text-sm text-slate-600 leading-snug">{card.reason}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Result Display - Bank Recommendations */}
-              {analysisResult.bank_recommendations && analysisResult.bank_recommendations.length > 0 && (
-                <div>
-                  <h5 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
-                    <CheckCircle2 className="w-5 h-5" /> 您的持有銀行主力卡
-                  </h5>
-                  <div className="space-y-3">
-                    {analysisResult.bank_recommendations.map((item, i) => (
-                      <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm flex flex-col md:flex-row gap-3 md:items-center">
-                        <div className="shrink-0 md:w-32">
-                           <div className="text-xs text-slate-400 font-bold">{item.bank}</div>
-                           <div className="font-bold text-slate-700">{item.card_name}</div>
-                        </div>
-                        <div className="flex-1">
-                           <div className="flex items-center gap-2 mb-1">
-                             <span className={`text-xs px-2 py-0.5 rounded font-bold ${item.type.includes('現金') ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>{item.type}</span>
-                             <span className="text-sm font-bold text-blue-600">{item.reward_desc}</span>
-                           </div>
-                           <div className="text-xs text-slate-500">⚠️ {item.condition}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              <div className="flex gap-3 pt-2">
-                <button onClick={() => setAnalysisResult(null)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold transition-colors">
-                    重選銀行
-                </button>
-                <button onClick={() => { onSave(analysisResult); alert("信用卡攻略已儲存到本次行程！"); }} className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-md shadow-emerald-200 transition-colors flex items-center justify-center gap-2">
-                    <Save className="w-4 h-4" /> 儲存此攻略
-                </button>
-              </div>
             </div>
-          )}
-        </div>
-      )}
+            <div className="mb-6 flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
+                <input type="checkbox" id="top3" checked={includeTop3} onChange={(e) => setIncludeTop3(e.target.checked)} className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" />
+                <label htmlFor="top3" className="font-bold text-slate-700 cursor-pointer text-sm md:text-base">同時推薦 {countryName} 該地區最強 Top 3 信用卡</label>
+            </div>
+            <button onClick={handleAnalyze} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2">
+              <Sparkles className="w-5 h-5" /> 生成最佳刷卡策略
+            </button>
+          </div>
+        ) : isAnalyzing ? (
+           <div className="py-10 text-center flex flex-col items-center justify-center space-y-3 print:hidden">
+               <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+               <p className="text-blue-600 font-bold animate-pulse">AI 正在計算現金回饋與里程轉換率...</p>
+           </div>
+        ) : (
+          <div className="space-y-6">
+            {/* 新增：列印時的標題 (因為按鈕被隱藏了) */}
+            <h4 className="hidden print:flex items-center gap-2 text-xl font-bold text-slate-800 mb-4 border-b border-slate-800 pb-2">
+               <CreditCard className="w-6 h-6" /> AI 信用卡回饋攻略 ({city})
+            </h4>
+
+            {/* Top 3 Section */}
+            {analysisResult.top_3_general && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 print:border-slate-300 print:bg-white">
+                <h5 className="font-bold text-yellow-800 mb-3 flex items-center gap-2 text-lg print:text-black">
+                  <Gift className="w-5 h-5" /> {city} 必備 Top 3 神卡
+                </h5>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {analysisResult.top_3_general.map((card, i) => (
+                    <div key={i} className="bg-white p-3 rounded-lg shadow-sm border border-yellow-100 print:border-slate-300">
+                      <div className="text-xs text-yellow-600 font-bold mb-1 print:text-slate-600">{card.bank}</div>
+                      <div className="font-bold text-slate-800 mb-1">{card.card_name}</div>
+                      <div className="text-xs bg-slate-100 inline-block px-1.5 py-0.5 rounded text-slate-500 mb-2 print:border print:border-slate-200">{card.type}</div>
+                      <div className="text-sm text-slate-600 leading-snug">{card.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Bank Specific Section */}
+            {analysisResult.bank_recommendations && analysisResult.bank_recommendations.length > 0 && (
+              <div>
+                <h5 className="font-bold text-blue-800 mb-3 flex items-center gap-2 print:text-black">
+                  <CheckCircle2 className="w-5 h-5" /> 您的持有銀行主力卡
+                </h5>
+                <div className="space-y-3">
+                  {analysisResult.bank_recommendations.map((item, i) => (
+                    <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm flex flex-col md:flex-row gap-3 md:items-center print:border-slate-300 print:break-inside-avoid">
+                      <div className="shrink-0 md:w-32">
+                         <div className="text-xs text-slate-400 font-bold">{item.bank}</div>
+                         <div className="font-bold text-slate-700">{item.card_name}</div>
+                      </div>
+                      <div className="flex-1">
+                         <div className="flex items-center gap-2 mb-1">
+                           <span className={`text-xs px-2 py-0.5 rounded font-bold ${item.type.includes('現金') ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'} print:border print:border-slate-300`}>{item.type}</span>
+                           <span className="text-sm font-bold text-blue-600 print:text-black">{item.reward_desc}</span>
+                         </div>
+                         <div className="text-xs text-slate-500">⚠️ {item.condition}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* 新增：列印時的免責聲明 */}
+            <div className="hidden print:block mt-4 p-2 text-[10px] text-slate-500 border-t border-slate-300 italic">
+               *此資訊由 AI 生成僅供參考，實際回饋規則與優惠請以各銀行官方公告為準。可能會漏掉部分快閃活動或最新異動。
+            </div>
+
+            <div className="flex gap-3 pt-2 print:hidden">
+              <button onClick={() => setAnalysisResult(null)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold transition-colors">
+                  重選銀行
+              </button>
+              <button onClick={() => { onSave(analysisResult); alert("信用卡攻略已儲存到本次行程！"); }} className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-md shadow-emerald-200 transition-colors flex items-center justify-center gap-2">
+                  <Save className="w-4 h-4" /> 儲存此攻略
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -1277,7 +1267,103 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     </div>
   );
 };
+const TutorialModal = ({ isOpen, onClose, title, pages, storageKey }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
 
+  // 當彈窗打開時，檢查是否曾經勾選「不再提醒」
+  useEffect(() => {
+    if (isOpen) {
+      const isHidden = localStorage.getItem(storageKey);
+      if (isHidden === 'true') {
+        onClose(); // 如果設定過不再提醒，直接關閉
+      }
+      setCurrentIndex(0); // 重置第一頁
+    }
+  }, [isOpen, storageKey]);
+
+  const handleClose = () => {
+    if (dontShowAgain) {
+      localStorage.setItem(storageKey, 'true');
+    }
+    onClose();
+  };
+
+  const nextSlide = () => {
+    if (currentIndex < pages.length - 1) setCurrentIndex(prev => prev + 1);
+  };
+
+  const prevSlide = () => {
+    if (currentIndex > 0) setCurrentIndex(prev => prev - 1);
+  };
+
+  if (!isOpen) return null;
+
+  // 如果 localStorage 已經有值且剛打開，會由 useEffect 關閉，這裡避免閃爍
+  if (localStorage.getItem(storageKey) === 'true') return null;
+
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[10000] p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden relative">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-600 to-teal-500 p-4 text-white font-bold flex justify-between items-center">
+          <span className="flex items-center gap-2"><Info className="w-5 h-5" /> {title}</span>
+          <div className="text-xs bg-white/20 px-2 py-1 rounded-full">
+             {currentIndex + 1} / {pages.length}
+          </div>
+        </div>
+
+        {/* Content (Carousel) */}
+        <div className="p-6 min-h-[200px] flex flex-col justify-center items-center text-center">
+          <div className="mb-4 text-6xl">{pages[currentIndex].icon}</div>
+          <h3 className="text-xl font-bold text-slate-800 mb-2">{pages[currentIndex].title}</h3>
+          <p className="text-slate-600 text-sm leading-relaxed">{pages[currentIndex].desc}</p>
+        </div>
+
+        {/* Navigation Dots & Arrows */}
+        <div className="px-6 pb-2 flex justify-between items-center">
+             <button onClick={prevSlide} disabled={currentIndex === 0} className="p-2 rounded-full hover:bg-slate-100 disabled:opacity-30 text-slate-500 transition-colors">
+                <ArrowLeft className="w-6 h-6" />
+             </button>
+
+             <div className="flex gap-2">
+               {pages.map((_, idx) => (
+                 <div 
+                   key={idx} 
+                   className={`w-2 h-2 rounded-full transition-all duration-300 ${idx === currentIndex ? 'bg-blue-500 w-4' : 'bg-slate-300'}`}
+                 />
+               ))}
+             </div>
+
+             <button onClick={nextSlide} disabled={currentIndex === pages.length - 1} className="p-2 rounded-full hover:bg-slate-100 disabled:opacity-30 text-slate-500 transition-colors">
+                <ArrowLeft className="w-6 h-6 rotate-180" />
+             </button>
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-500 hover:text-slate-700 select-none">
+            <input 
+              type="checkbox" 
+              checked={dontShowAgain} 
+              onChange={(e) => setDontShowAgain(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            不再提醒
+          </label>
+          <button 
+            onClick={handleClose}
+            className="px-5 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+          >
+            我知道了
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
 const CurrencyModal = ({ onClose, currencySettings, setCurrencySettings }) => {
   const [amount, setAmount] = useState(1000);
   
@@ -1382,7 +1468,8 @@ const App = () => {
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
   const [step, setStep] = useState('input'); 
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
-
+  const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
+  const [showResultTutorial, setShowResultTutorial] = useState(true);
   const [basicData, setBasicData] = usePersistentState('travel_basic_data', {
     destinations: '福岡',
     dates: '2025-12-08 to 2025-12-12',
@@ -1437,7 +1524,19 @@ const App = () => {
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
   const [showCopyMenu, setShowCopyMenu] = useState(false);
+  const inputTutorialPages = [
+    { icon: '🌍', title: '第一步：設定目的地與日期', desc: '輸入您想去的城市（如：東京、巴黎），並點擊日曆圖示選擇出發與回程日期。' },
+    { icon: '✈️', title: '第二步：航班與交通', desc: '如果需要 AI 安排航班，請勾選「需要航班」。若您是自駕遊，請在交通偏好選擇「自駕」，我們會提供停車建議。' },
+    { icon: '💰', title: '第三步：預算與信用卡', desc: '設定餐廳的價位偏好，並勾選「信用卡推薦」，AI 將根據您的發卡國家，計算最佳刷卡回饋攻略。' },
+    { icon: '✨', title: '第四步：一鍵生成', desc: '填妥後點擊下方按鈕，AI 將在幾秒內為您生成包含景點、美食、交通與預算的完整行程！' }
+  ];
 
+  const resultTutorialPages = [
+    { icon: '📅', title: '行程總覽', desc: '上方可切換 Day 1、Day 2... 標籤。左側是時間軸，右側是詳細的景點與交通說明。' },
+    { icon: '🤖', title: 'AI 深度導遊', desc: '看到紫色機器人按鈕了嗎？點擊它！AI 會針對該景點提供「步行路線」、「附近隱藏美食」與「治安提醒」。' },
+    { icon: '💵', title: '記帳小本本', desc: '每個景點下方都有「記帳」功能。輸入金額後，系統會自動生成圓餅圖，還能幫您算分帳 (Go Dutch)！' },
+    { icon: '💳', title: '省錢攻略', desc: '往下滑動到「城市生存指南」，這裡有最新的「信用卡回饋分析」與「退稅/補助」情報，記得列印出來帶著走！' }
+  ];
   useEffect(() => {
     const count = Number(basicData.travelers);
     if (travelerNames.length !== count) {
@@ -1864,7 +1963,23 @@ const App = () => {
 
   const renderInputForm = () => (
     <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
-      <div className="text-center pb-6 border-b border-slate-100/50">
+      <TutorialModal 
+         isOpen={showInputTutorial} 
+         onClose={() => setShowInputTutorial(false)} 
+         title="新手上路：如何規劃？"
+         pages={inputTutorialPages}
+         storageKey="tutorial_input_seen"
+      />
+
+      <div className="text-center pb-6 border-b border-slate-100/50 relative"> {/* 加上 relative 以定位按鈕 */}
+        
+        {/* 左上角教學按鈕 */}
+        <button 
+          onClick={() => { localStorage.removeItem('tutorial_input_seen'); setShowInputTutorial(true); }}
+          className="absolute left-0 top-0 p-2 text-slate-400 hover:text-blue-600 transition-colors flex items-center gap-1 text-xs font-bold border border-slate-200 rounded-lg hover:bg-blue-50"
+        >
+           <Info className="w-4 h-4" /> 使用教學
+        </button>
         <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3">
           <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
           AI 智能旅程規劃師
@@ -2232,6 +2347,13 @@ const App = () => {
 
     return (
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 pb-20">
+        <TutorialModal 
+           isOpen={showResultTutorial} 
+           onClose={() => setShowResultTutorial(false)} 
+           title="功能導覽：行程怎麼看？"
+           pages={resultTutorialPages}
+           storageKey="tutorial_result_seen"
+        />
         {/* Header Card */}
         <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
@@ -2245,6 +2367,12 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
+              <button 
+                onClick={() => { localStorage.removeItem('tutorial_result_seen'); setShowResultTutorial(true); }}
+                className="px-3 py-2 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-xl font-bold text-sm transition-colors shadow-sm flex items-center gap-2"
+              >
+                <Info className="w-4 h-4" /> 功能導覽
+              </button>
               <div className="flex gap-2 mr-2 border-r border-slate-200 pr-4">
                 <button 
                   onClick={() => setIsCurrencyModalOpen(true)}
