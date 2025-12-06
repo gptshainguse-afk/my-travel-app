@@ -2397,8 +2397,21 @@ const App = () => {
             <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-blue-100 p-2 rounded-lg text-blue-600"><MapPin className="w-5 h-5" /></span>基本行程</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600">目的城市</label>
-                <input name="destinations" value={basicData.destinations} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" />
+                <label className="text-sm font-semibold text-slate-600">
+                  目的城市 
+                  {/* ✅ 新增：小字的提示訊息 */}
+                  <span className="text-xs text-slate-400 font-normal ml-2">
+                    (多個城市請用逗號或空白隔開)
+                  </span>
+                </label>
+                <input 
+                  name="destinations" 
+                  value={basicData.destinations} 
+                  onChange={handleBasicChange} 
+                  // ✅ 新增：Placeholder 範例，讓使用者一看就懂
+                  placeholder="例如：福岡, 熊本, 由布院"
+                  className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" 
+                />
               </div>
               
               {/* 日期選擇 (含月曆) */}
