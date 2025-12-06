@@ -1267,6 +1267,76 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     </div>
   );
 };
+const ApiKeyTutorialModal = ({ isOpen, onClose }) => {
+  if (!isOpen) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[10001] p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95">
+        
+        <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-4 text-white font-bold flex justify-between items-center">
+          <span className="flex items-center gap-2"><Key className="w-5 h-5" /> 如何獲取免費 API Key？</span>
+          <button onClick={onClose} className="bg-white/20 hover:bg-white/30 rounded-full p-1 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <div className="flex items-start gap-4">
+            <div className="bg-amber-100 text-amber-700 w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0">1</div>
+            <div>
+              <h4 className="font-bold text-slate-800">前往 Google AI Studio</h4>
+              <p className="text-sm text-slate-600 mb-1">點擊下方連結開啟官網，並登入您的 Google 帳號。</p>
+              <a 
+                href="https://aistudio.google.com/apikey" 
+                target="_blank" 
+                rel="noreferrer"
+                className="text-blue-600 hover:text-blue-800 text-sm font-bold flex items-center gap-1 underline decoration-2 decoration-blue-200 hover:decoration-blue-600 transition-all"
+              >
+                https://aistudio.google.com/apikey <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-4">
+            <div className="bg-amber-100 text-amber-700 w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0">2</div>
+            <div>
+              <h4 className="font-bold text-slate-800">建立或複製金鑰</h4>
+              <p className="text-sm text-slate-600">
+                點擊藍色的 <span className="font-mono bg-slate-100 px-1 rounded border border-slate-300">Create API key</span> 按鈕。
+                <br/>
+                <span className="text-xs text-slate-400">(若已有 "Default..." 項目，直接點擊該項目即可)</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-4">
+            <div className="bg-amber-100 text-amber-700 w-8 h-8 rounded-full flex items-center justify-center font-bold shrink-0">3</div>
+            <div>
+              <h4 className="font-bold text-slate-800">複製並貼上</h4>
+              <p className="text-sm text-slate-600 mb-2">
+                複製那串以 <span className="font-mono font-bold text-red-500">AIza</span> 開頭的亂碼，貼回本 APP 的輸入欄位。
+              </p>
+              <div className="bg-slate-100 p-2 rounded text-xs font-mono text-slate-500 break-all border border-slate-200">
+                AIzaSyD... (範例)
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-6 py-2 bg-amber-500 text-white rounded-xl font-bold text-sm hover:bg-amber-600 transition-all shadow-md shadow-amber-200"
+          >
+            我知道了
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
 const TutorialModal = ({ isOpen, onClose, title, pages, storageKey }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [dontShowAgain, setDontShowAgain] = useState(false);
@@ -1695,6 +1765,7 @@ const App = () => {
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
   const textareaRef = useRef(null);
+  const [showApiKeyTutorial, setShowApiKeyTutorial] = useState(false);
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
     transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
@@ -2225,7 +2296,10 @@ const App = () => {
            pages={inputTutorialPages}
            storageKey="tutorial_input_seen"
         />
-
+        <ApiKeyTutorialModal 
+           isOpen={showApiKeyTutorial} 
+           onClose={() => setShowApiKeyTutorial(false)} 
+        />
         {/* --- Header 區域開始 --- */}
         <div className="pb-6 border-b border-slate-100/50">
           
@@ -2254,6 +2328,13 @@ const App = () => {
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-bold text-blue-800 flex items-center gap-2">
                 <Key className="w-4 h-4" /> Gemini API Key (必填)
+                {/* ✅ 新增：教學按鈕 */}
+                <button 
+                  onClick={() => setShowApiKeyTutorial(true)}
+                  className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full hover:bg-amber-200 transition-colors flex items-center gap-1 font-normal cursor-pointer"
+                >
+                  <Info className="w-3 h-3" /> 如何獲取?
+                </button>
               </label>
               <div className="flex gap-2">
                 <button onClick={resetForm} className="text-xs text-slate-500 hover:text-slate-700 underline transition-colors">重置所有欄位</button>
