@@ -2234,7 +2234,8 @@ const App = () => {
         throw new Error("無法解析 AI 回傳的行程資料格式");
       }
 
-      if (!parsedData.created) parsedData.created = Date.now();
+      // ✅ 修改：不管 AI 回傳什麼，一律強制設定為「現在這一刻」的時間
+      parsedData.created = Date.now();
       
       if (parsedData.currency_code && parsedData.currency_rate) {
         const rateMatch = parsedData.currency_rate.match(/=\s*([\d.]+)/);
