@@ -1900,24 +1900,51 @@ const App = () => {
 
   const saveCurrentPlan = () => {
     if (!itineraryData) return;
-    const existingIndex = savedPlans.findIndex(p => p.created === itineraryData.created);
+    
+    // 雖然 generateItinerary 有修正，但為了雙重保險，
+    // 我們以「按下儲存按鈕」的當下時間 (Date.now()) 為準，這樣絕對不會錯。
+    const currentTimestamp = Date.now();
+
+    // 檢查是否已存在 (用舊的 created 判斷可能會有誤，這裡改用內容判斷稍微複雜，
+    // 簡單解法：直接視為新的一筆，或者如果 id 一樣才覆蓋。
+    // 在此我們採用：如果是剛生成的，就視為新的一筆；如果載入舊的再存，視為更新)
+    
+    // 為了避免邏輯複雜導致錯誤，這裡採取「總是存入正確時間」的策略
+    const planToSave = { 
+      ...itineraryData, 
+      basicInfo: basicData, 
+      expenses, 
+      travelerNames,
+      currencySettings,
+      created: currentTimestamp // ✅ 強制覆寫：使用現在的時間 (毫秒)
+    };
+
+    // 檢查是否有相同 created 時間的舊資料 (針對編輯舊行程的情境)
+    // 如果 itineraryData.created 已經存在且有效，我們更新它；否則新增
     let newPlans;
+    const existingIndex = savedPlans.findIndex(p => p.created === itineraryData.created);
+    
     if (existingIndex >= 0) {
-      newPlans = savedPlans.filter((_, idx) => idx !== existingIndex);
+       // 更新舊資料 (保留舊的 created 時間，或者您可以決定要不要更新成現在)
+       // 這裡我們選擇：更新內容，但保留原始建立時間，以免順序亂跳
+       // 但如果您希望「編輯後置頂」，就用 planToSave.created
+       const updatedPlan = { ...planToSave, created: savedPlans[existingIndex].created };
+       newPlans = [...savedPlans];
+       newPlans[existingIndex] = updatedPlan;
     } else {
-      const planToSave = { 
-        ...itineraryData, 
-        basicInfo: basicData, 
-        expenses, 
-        travelerNames,
-        currencySettings,
-        created: itineraryData.created || Date.now() 
-      };
-      newPlans = [planToSave, ...savedPlans];
+       // 新增資料
+       newPlans = [planToSave, ...savedPlans];
     }
+
     setSavedPlans(newPlans);
     localStorage.setItem('my_travel_plans', JSON.stringify(newPlans));
-    if (!itineraryData.created) setItineraryData(prev => ({ ...prev, created: Date.now() }));
+    
+    // 更新當前狀態的 created，避免連續按儲存重複新增
+    if (existingIndex === -1) {
+        setItineraryData(prev => ({ ...prev, created: currentTimestamp }));
+    }
+    
+    alert('規劃已儲存！');
   };
 
   const clearApiKey = () => {
