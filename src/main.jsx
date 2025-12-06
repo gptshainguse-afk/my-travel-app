@@ -2253,7 +2253,7 @@ const App = () => {
         });
       }
 
-      setItineraryData(JSON.parse(cleanedText));
+      setItineraryData(parsedData);
       setStep('result');
 
     } catch (error) {
