@@ -1935,6 +1935,7 @@ const App = () => {
       localStorage.removeItem('traveler_names');
       localStorage.removeItem('travel_expenses');
       localStorage.removeItem('currency_settings');
+      setExpenses([]);
       window.location.reload(); 
     }
   };
@@ -1996,7 +1997,7 @@ const App = () => {
   const loadSavedPlan = (plan) => {
     setItineraryData(plan);
     setBasicData(plan.basicInfo || basicData);
-    if (plan.expenses) setExpenses(plan.expenses);
+    setExpenses(plan.expenses || []);
     if (plan.travelerNames) setTravelerNames(plan.travelerNames);
     if (plan.currencySettings) setCurrencySettings(plan.currencySettings);
     setStep('result');
@@ -2342,6 +2343,7 @@ const App = () => {
       }
 
       setItineraryData(parsedData);
+      etExpenses([]);
       setStep('result');
 
     } catch (error) {
