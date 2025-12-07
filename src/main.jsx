@@ -2282,7 +2282,7 @@ const App = () => {
          data = await fetchWithModel(TARGET_MODEL);
       } catch (err) {
          console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-1.5-pro...`, err);
-         data = await fetchWithModel('gemini-1.5-pro');
+         data = await fetchWithModel('gemini-2.5-flash-preview-09-2025');
       }
       const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!resultText) throw new Error("AI 回傳內容為空");
