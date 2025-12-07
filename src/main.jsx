@@ -1998,7 +1998,10 @@ const App = () => {
     setItineraryData(plan);
     setBasicData(plan.basicInfo || basicData);
     setExpenses(plan.expenses || []);
-    if (plan.travelerNames) setTravelerNames(plan.travelerNames);
+    const count = Number(plan.basicInfo?.travelers || 2);
+    // 如果存檔有名字就用存檔的，否則根據人數產生預設陣列 ['旅伴 1', '旅伴 2'...]
+    const defaultNames = Array.from({ length: count }, (_, i) => `旅伴 ${i + 1}`);
+    setTravelerNames(plan.travelerNames || defaultNames);
     if (plan.currencySettings) setCurrencySettings(plan.currencySettings);
     setStep('result');
     setActiveTab(0);
