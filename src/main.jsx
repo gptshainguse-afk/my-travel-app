@@ -161,6 +161,23 @@ const safeRender = (content) => {
 // --- AI 深度規劃彈窗 (Portal) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
+  const getMultiStopMapUrl = () => {
+    if (data?.walking_route && Array.isArray(data.walking_route) && data.walking_route.length > 0) {
+      // 1. 清理地點名稱 (移除 "起點:", "終點:" 等前綴，只留地名以便 Google 搜尋)
+      const cleanWaypoints = data.walking_route.map(pt => {
+         return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
+      });
+      
+      // 2. 組合 URL (使用 encodeURIComponent 確保中文正常)
+      const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
+      
+      // data=!4m2!4m1!3e2 強制開啟步行模式
+      return `https://www.google.com/maps/dir/${path}/data=!4m2!4m1!3e2`;
+    }
+    
+    // 降級備案：如果沒有多點資料，就導航到終點
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
+  };
 
   const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(itemTitle || '')}&travelmode=walking`;
 
@@ -197,6 +214,17 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                   <p className="text-slate-600 leading-relaxed text-sm md:text-base whitespace-pre-wrap">
                     {safeRender(data.route_guide)}
                   </p>
+                  {data.walking_route && (
+                    <div className="mt-3 flex flex-wrap gap-2 items-center text-xs md:text-sm text-slate-500 bg-slate-50 p-3 rounded-lg">
+                       <span className="font-bold text-purple-600">路線規劃：</span>
+                       {data.walking_route.map((pt, idx) => (
+                          <React.Fragment key={idx}>
+                             {idx > 0 && <span className="text-slate-300">➝</span>}
+                             <span className="bg-white border border-slate-200 px-2 py-1 rounded text-slate-700 shadow-sm">{pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '')}</span>
+                          </React.Fragment>
+                       ))}
+                    </div>
+                  )} 
                </div>
 
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -218,7 +246,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                  </div>
                </div>
 
-               {/* Map Link */}
+               {/* ✅ 修改 Map Link 區塊 */}
                <a 
                  href={mapUrl} 
                  target="_blank" 
@@ -226,14 +254,16 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                  className="block bg-blue-50/50 p-4 md:p-5 rounded-2xl border border-blue-100 hover:bg-blue-100 transition-colors group cursor-pointer"
                >
                   <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2 text-sm md:text-base">
-                    <Map className="w-5 h-5" /> 迷你地圖導航
+                    <Map className="w-5 h-5" /> 
+                    {/* 動態改變標題 */}
+                    {data.walking_route ? '開啟多點步行導航 (A➝B➝C)' : '迷你地圖導航'}
                     <ExternalLink className="w-4 h-4 opacity-50 group-hover:opacity-100 transition-opacity ml-auto" />
                   </h4>
                   <p className="text-blue-700 text-sm md:text-base font-medium whitespace-pre-wrap mb-2">
                     {safeRender(data.mini_map_desc)}
                   </p>
                   <div className="text-xs text-blue-500 font-bold mt-2 flex items-center gap-1">
-                    點擊開啟 Google Maps 行走路線 <ArrowLeft className="w-3 h-3 rotate-180" />
+                    點擊開啟 Google Maps {data.walking_route ? '查看完整路線' : '行走路線'} <ArrowLeft className="w-3 h-3 rotate-180" />
                   </div>
                </a>
             </div>
@@ -984,8 +1014,16 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
       3. "safety_alert": 針對此地的具體治安或避雷提示
       4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      
+      // ✅ 新增：要求 AI 提供 3-4 個具體的導航點 (起點 -> 途經 -> 終點)
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${item.title}" 
+         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
     `;
-
+    
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
