@@ -618,7 +618,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     setIsAnalyzing(true);
     setAnalysisResult(null); 
     
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp';    
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';    
     
     const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
@@ -2183,7 +2183,7 @@ const App = () => {
       : "";
     const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
     
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp';
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
     console.log("Current Model Strategy:", TARGET_MODEL);
 
     const systemPrompt = `
@@ -2281,7 +2281,7 @@ const App = () => {
          console.log(`嘗試使用模型: ${TARGET_MODEL}`);
          data = await fetchWithModel(TARGET_MODEL);
       } catch (err) {
-         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-1.5-pro...`, err);
+         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-2.5-flash-preview-09-2025...`, err);
          data = await fetchWithModel('gemini-2.5-flash-preview-09-2025');
       }
       const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
