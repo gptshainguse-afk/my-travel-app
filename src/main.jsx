@@ -2147,16 +2147,14 @@ const App = () => {
     setStep('loading');
     setErrorMsg('');
 
-    let flightsString = "No flights/transport involved.";
+    let flightsString = "No flights involved.";
     if (basicData.hasFlights) {
       const fmtMode = (m) => m === 'train' ? '火車/高鐵' : '飛機';
-      
       if (basicData.isMultiCityFlight) {
         flightsString = multiFlights.map(f => 
           `${f.type} | 交通:${fmtMode(f.mode)} | 日期:${f.date} | 出發:${f.depTime} | 抵達:${f.arrTime} | 班次:${f.code} | 地點:${f.station}`
         ).join('\n');
       } else {
-        // 簡單往返
         const renderLeg = (leg) => 
           `${leg.type} | 交通:${fmtMode(leg.mode)} | 日期:${leg.date} | 出發:${leg.depTime} | 抵達:${leg.arrTime} | 班次:${leg.code} | 地點:${leg.station}`;
 
@@ -2184,8 +2182,10 @@ const App = () => {
       ? "Include nearby parking lot recommendations with estimated prices for each stop (Activity/Meal)."
       : "";
     const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp';
     console.log("Current Model Strategy:", TARGET_MODEL);
+
     const systemPrompt = `
       You are an expert AI Travel Planner API. Respond with valid JSON only.
       User Constraints:
@@ -2210,16 +2210,16 @@ const App = () => {
       5. Currency: Local currency code & rate to TWD.
       6. **City Guide**: For each major city, include history, transport, safety, subsidies, tax_refund, and major_banks_list.
       7. **Basic Phrases (MANDATORY)**: You MUST generate an array of EXACTLY 5 objects for "basic_phrases". 
-         Structure: { "label": "Meaning in TW Chinese", "local": "Local Script", "roman": "Pronunciation" }.
-         Do not return an empty array.
       8. Output Language: Traditional Chinese (Taiwan).
-      9. major_banks_list: [CRITICAL] An array of 15-20 major consumer banks located in "${selectedCountryName}" (User's Origin). DO NOT list banks from the destination city. This list represents the user's home bank accounts.
+      9. major_banks_list: [CRITICAL] An array of 15-20 major consumer banks located in "${selectedCountryName}" (User's Origin). DO NOT list banks from the destination city.
+      10. **Currency Rate (MANDATORY)**: You MUST provide the numerical exchange rate in "currency_rate_val". Example: if 1 EUR = 34.5 TWD, value is 34.5.
       
       JSON Schema Structure:
       {
         "trip_summary": "String",
-        "currency_rate": "String",
-        "currency_code": "String",
+        "currency_rate": "String (e.g. '1 EUR ≈ 34.5 TWD')",
+        "currency_rate_val": Number, // CRITICAL: The raw number (e.g. 34.5) for calculation
+        "currency_code": "String (e.g. 'EUR')",
         "city_guides": {
            "CityName": {
              "history_culture": "String",
@@ -2265,10 +2265,6 @@ const App = () => {
     `;
 
     try {
-      // 使用選擇的模型代碼進行請求
-      // 注意：目前 Google 尚未正式公開 2.5 端點，如果您的 Key 有權限則會成功，否則會報錯
-      // 這裡加入了自動降級機制：如果 2.5 失敗，會嘗試用 1.5 Pro 救場
-      
       const fetchWithModel = async (modelId) => {
          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
             method: 'POST',
@@ -2286,8 +2282,7 @@ const App = () => {
          data = await fetchWithModel(TARGET_MODEL);
       } catch (err) {
          console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-1.5-pro...`, err);
-         // 如果使用者選的 2.5 失敗，自動用 1.5 Pro 墊底，確保程式不崩潰
-         data = await fetchWithModel('gemini-2.5-flash-preview-09-2025');
+         data = await fetchWithModel('gemini-1.5-pro');
       }
       const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!resultText) throw new Error("AI 回傳內容為空");
@@ -2302,22 +2297,47 @@ const App = () => {
         throw new Error("無法解析 AI 回傳的行程資料格式");
       }
 
-      // ✅ 修改：不管 AI 回傳什麼，一律強制設定為「現在這一刻」的時間
+      // 強制使用當下時間
       parsedData.created = Date.now();
       
-      if (parsedData.currency_code && parsedData.currency_rate) {
-        const rateMatch = parsedData.currency_rate.match(/=\s*([\d.]+)/);
-        const rate = rateMatch ? parseFloat(rateMatch[1]) : 0.21;
+      // --- 匯率解析邏輯優化 ---
+      if (parsedData.currency_code) {
+        let rate = 0.21; // 預設值 (以防萬一)
+        
+        // 1. 優先使用 AI 回傳的精準數值
+        if (parsedData.currency_rate_val && typeof parsedData.currency_rate_val === 'number') {
+            rate = parsedData.currency_rate_val;
+        } 
+        // 2. 如果沒有數值，嘗試解析字串 (支援 =, ≈, :)
+        else if (parsedData.currency_rate) {
+             // 嘗試抓取 TWD 前面的數字 (最準確)
+             const twdMatch = parsedData.currency_rate.match(/([\d.]+)\s*TWD/i);
+             if (twdMatch) {
+                 rate = parseFloat(twdMatch[1]);
+             } else {
+                 // 否則抓取任何看起來像匯率的數字 (排除前面的 1)
+                 const fallbackMatch = parsedData.currency_rate.match(/[=≈:]\s*([\d.]+)/);
+                 if (fallbackMatch) {
+                    rate = parseFloat(fallbackMatch[1]);
+                 }
+             }
+        }
+
         let symbol = '$';
-        if (parsedData.currency_code === 'JPY') symbol = '¥';
-        if (parsedData.currency_code === 'KRW') symbol = '₩';
-        if (parsedData.currency_code === 'EUR') symbol = '€';
-        if (parsedData.currency_code === 'GBP') symbol = '£';
+        const code = parsedData.currency_code.toUpperCase();
+        if (code === 'JPY') symbol = '¥';
+        if (code === 'KRW') symbol = '₩';
+        if (code === 'EUR') symbol = '€';
+        if (code === 'GBP') symbol = '£';
+        if (code === 'USD') symbol = '$';
+        if (code === 'CNY') symbol = '¥';
+        if (code === 'THB') symbol = '฿';
+        if (code === 'VND') symbol = '₫';
         
         setCurrencySettings({
            rate: rate,
            symbol: symbol,
-           code: parsedData.currency_code
+           code: code
         });
       }
 
@@ -2326,7 +2346,7 @@ const App = () => {
 
     } catch (error) {
       console.error(error);
-      setErrorMsg(`生成失敗: ${error.message} (請確認 API Key 或模型權限)`);
+      setErrorMsg(`生成失敗: ${error.message}`);
       setStep('input');
     }
   };
