@@ -269,11 +269,13 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
 };
 
 // --- Simple Pie Chart ---
-const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
+const SimplePieChart = ({ data, title, currencySettings }) => {
   if (!data || data.length === 0) return <div className="text-center text-slate-400 text-sm py-4">尚無資料</div>;
   
   const total = data.reduce((acc, item) => acc + item.value, 0);
   if (total === 0) return <div className="text-center text-slate-400 text-sm py-4">金額為 0</div>;
+
+  const { symbol, rate } = currencySettings; // 解構出符號與匯率
 
   let cumulativePercent = 0;
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1', '#84cc16'];
@@ -311,12 +313,23 @@ const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
             <div key={i} className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-full" style={{ backgroundColor: slice.color }}></span>
               <span className="text-slate-600 font-medium">{slice.label}</span>
-              <span className="text-slate-400">{(slice.percent * 100).toFixed(1)}% ({currencySymbol}{Math.round(slice.value).toLocaleString()})</span>
+              <span className="text-slate-400">{(slice.percent * 100).toFixed(1)}% ({symbol}{Math.round(slice.value).toLocaleString()})</span>
             </div>
           ))}
         </div>
       </div>
-      <div className="mt-2 text-sm font-bold text-slate-800">總計: {currencySymbol}{Math.round(total).toLocaleString()}</div>
+      
+      {/* 修改處：顯示總金額及台幣換算 */}
+      <div className="mt-3 flex flex-col items-center">
+        <div className="text-sm font-bold text-slate-800">
+           總計: {symbol}{Math.round(total).toLocaleString()}
+        </div>
+        {rate && rate > 0 && (
+           <div className="text-xs text-blue-500 font-medium mt-0.5">
+             (≈ NT$ {Math.round(total * rate).toLocaleString()})
+           </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -324,7 +337,7 @@ const SimplePieChart = ({ data, title, currencySymbol = '$' }) => {
 // --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
   const [viewMode, setViewMode] = useState('category'); 
-  const { symbol } = currencySettings;
+  // const { symbol } = currencySettings; // 這行可以拿掉，因為我們直接傳整包
 
   const relevantExpenses = useMemo(() => {
     if (dayIndex !== null) {
@@ -388,7 +401,8 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
         <SimplePieChart 
           data={viewMode === 'category' ? categoryData : personData} 
           title={viewMode === 'category' ? '消費項目比例' : '各旅行者分攤比例'} 
-          currencySymbol={symbol}
+          // ✅ 修改：這裡改傳 currencySettings
+          currencySettings={currencySettings}
         />
       </div>
     </div>
