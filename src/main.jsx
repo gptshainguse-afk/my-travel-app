@@ -2346,7 +2346,7 @@ const App = () => {
       }
 
       setItineraryData(parsedData);
-      etExpenses([]);
+      setExpenses([]);
       setStep('result');
 
     } catch (error) {
