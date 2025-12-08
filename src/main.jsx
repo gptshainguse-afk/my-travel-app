@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+
+ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { 
@@ -1823,7 +1824,8 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
-  const [step, setStep] = useState('input'); 
+  const [itineraryData, setItineraryData] = usePersistentState('current_itinerary_data', null);
+  const [step, setStep] = useState(() => itineraryData ? 'result' : 'input');
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
@@ -1874,8 +1876,6 @@ const App = () => {
   
   const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
   const [isTravelerModalOpen, setIsTravelerModalOpen] = useState(false);
-
-  const [itineraryData, setItineraryData] = useState(null);
   const [activeTab, setActiveTab] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedPlans, setSavedPlans] = useState([]);
@@ -1974,6 +1974,8 @@ const App = () => {
       localStorage.removeItem('travel_expenses');
       localStorage.removeItem('currency_settings');
       setExpenses([]);
+      localStorage.removeItem('current_itinerary_data'); 
+      setItineraryData(null); 
       window.location.reload(); 
     }
   };
