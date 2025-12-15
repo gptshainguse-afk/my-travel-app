@@ -2006,11 +2006,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
-  // ⚠️ 重要修正：目前 Google API 尚未開放 "gemini-2.5" 端點。
-  // 為了讓您能用，這裡強制指向目前官方最新的 "gemini-2.0-flash-exp" (效能等同於未來的 2.5 Flash)
-  // 如果是 Pro 模式，我們暫時使用 "gemini-1.5-pro" (這是目前最強的穩定版)
-  // 這樣保證不會出現 404 Model Not Found
-  const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp'; 
+  const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
   
   console.log(`[Debug] 正在請求模型: ${TARGET_MODEL}`); 
 
