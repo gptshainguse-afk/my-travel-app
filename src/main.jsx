@@ -1125,7 +1125,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
                 
                 {/* 👇👇👇 這就是您要加入的按鈕區塊 (請貼在這裡) 👇👇👇 */}
-                <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 p-1 rounded-lg shadow-sm z-20 print:hidden">
+                <div className="absolute top-2 right-2 flex items-center gap-1 bg-white/90 p-1 rounded-lg shadow-sm z-20 print:hidden border border-slate-100">
                   <button 
                     onClick={(e) => { 
                       e.stopPropagation(); 
@@ -3368,6 +3368,13 @@ const App = () => {
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
+              {/* ✅ 補回這裡：菜單幫手按鈕 */}
+              <button
+                onClick={() => setIsMenuModalOpen(true)}
+                className="px-3 py-2 text-white bg-orange-500 hover:bg-orange-600 rounded-xl font-bold text-sm transition-colors shadow-sm flex items-center gap-2"
+              >
+                <ChefHat className="w-4 h-4" /> 菜單幫手
+              </button>
               <button 
                 onClick={() => { localStorage.removeItem('tutorial_result_seen'); setShowResultTutorial(true); }}
                 className="px-3 py-2 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded-xl font-bold text-sm transition-colors shadow-sm flex items-center gap-2"
