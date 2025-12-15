@@ -378,8 +378,9 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
 
 // --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
-  // viewMode: 'category' | 'personal' (個人支出/消費) | 'shared' (代墊公款)
+  // viewMode: 'category' | 'personal' (個人支出) | 'shared' (代墊分攤)
   const [viewMode, setViewMode] = useState('category'); 
+  const { symbol, rate } = currencySettings;
 
   const relevantExpenses = useMemo(() => {
     if (dayIndex !== null) {
@@ -388,7 +389,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return expenses;
   }, [expenses, dayIndex]);
 
-  // 1. 消費分類 (保持不變)
+  // 1. 消費分類
   const categoryData = useMemo(() => {
     const map = {};
     relevantExpenses.forEach(e => {
@@ -397,7 +398,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return Object.entries(map).map(([label, value]) => ({ label, value }));
   }, [relevantExpenses]);
 
-  // 2. 個人支出 (保持不變：計算「消費」，即每個人實際吃了/用了多少錢)
+  // 2. 個人支出 (消費觀點)
   const personalData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
@@ -410,27 +411,93 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
   }, [relevantExpenses, travelers]);
 
-  // 3. 個人分攤/代墊 (新邏輯：計算「支付」，且排除獨享與各付各)
+  // 3. 代墊分攤 (支付觀點 - 用於圓餅圖顯示誰墊了多少錢)
   const sharedData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
-    
     relevantExpenses.forEach(e => {
-      // 篩選條件：
-      // 1. 多人分攤 (e.splitters.length > 1)：排除自己買給自己的私帳
-      // 2. 非各付各 (e.payer !== '各付各')：排除沒有代墊行為的項目
       if (e.splitters && e.splitters.length > 1 && e.payer !== '各付各') {
-          // ✅ 核心修改：金額不再除以人數分給 splitters
-          // 而是直接將「總金額」加給「付款人 (payer)」，代表他代墊了這筆錢
           const payer = e.payer;
           if (map[payer] !== undefined) {
              map[payer] += Number(e.amount);
           }
       }
     });
-    
     return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
   }, [relevantExpenses, travelers]);
+
+  // 4. ✅ 新增：自動結算建議 (Smart Settlement Logic)
+  const settlementSuggestions = useMemo(() => {
+    if (viewMode !== 'shared') return [];
+
+    // Step A: 計算每個人的「淨額 (Balance)」
+    // 正數 = 多付了 (要收錢)
+    // 負數 = 少付了 (要給錢)
+    const balances = {};
+    travelers.forEach(t => balances[t] = 0);
+
+    relevantExpenses.forEach(e => {
+       // 只計算有多人分攤且非各付各的項目
+       if (e.splitters && e.splitters.length > 1 && e.payer !== '各付各') {
+           const amount = Number(e.amount);
+           
+           // 付款人：+ 金額 (代表他對團體有貢獻)
+           if (balances[e.payer] !== undefined) balances[e.payer] += amount;
+
+           // 分攤人：- 應付金額 (代表他消耗了團體資源)
+           const splitAmount = amount / e.splitters.length;
+           e.splitters.forEach(p => {
+               if (balances[p] !== undefined) balances[p] -= splitAmount;
+           });
+       }
+    });
+
+    // Step B: 分類債務人與債權人
+    let debtors = [];   // 要給錢的人 (Balance < 0)
+    let creditors = []; // 要收錢的人 (Balance > 0)
+
+    Object.entries(balances).forEach(([name, amount]) => {
+        const val = Math.round(amount); // 四捨五入避免小數點誤差
+        if (val < -1) debtors.push({ name, amount: val }); // 寬容度設為 1 元
+        else if (val > 1) creditors.push({ name, amount: val });
+    });
+
+    // 排序：金額大的排前面 (貪婪演算法，減少交易次數)
+    debtors.sort((a, b) => a.amount - b.amount); // 負最多的排前面 (-500, -200...)
+    creditors.sort((a, b) => b.amount - a.amount); // 正最多的排前面 (500, 200...)
+
+    // Step C: 配對平帳
+    const suggestions = [];
+    let i = 0; // debtor index
+    let j = 0; // creditor index
+
+    while (i < debtors.length && j < creditors.length) {
+        const debtor = debtors[i];
+        const creditor = creditors[j];
+
+        // 交易金額 = min(債務人欠的錢, 債權人該收的錢)
+        const amountToSettle = Math.min(Math.abs(debtor.amount), creditor.amount);
+
+        if (amountToSettle > 0) {
+            suggestions.push({
+                from: debtor.name,
+                to: creditor.name,
+                amount: amountToSettle
+            });
+        }
+
+        // 更新餘額
+        debtor.amount += amountToSettle;
+        creditor.amount -= amountToSettle;
+
+        // 如果平帳了，移動指標
+        if (Math.abs(debtor.amount) < 1) i++;
+        if (creditor.amount < 1) j++;
+    }
+
+    return suggestions;
+  }, [relevantExpenses, travelers, viewMode]);
+
 
   // 根據模式選擇要顯示的資料
   const currentData = viewMode === 'category' ? categoryData 
@@ -440,7 +507,6 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
   const getTitle = () => {
       if (viewMode === 'category') return '消費項目比例';
       if (viewMode === 'personal') return '個人總消費 (含獨享)';
-      // 修改標題以符合新邏輯
       return '代墊公款總額 (誰先付了錢?)';
   };
 
@@ -490,10 +556,51 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
           title={getTitle()} 
           currencySettings={currencySettings}
         />
-        {/* 如果是個人分攤模式且沒有資料，顯示提示 */}
-        {viewMode === 'shared' && currentData.length === 0 && (
-            <div className="text-center text-xs text-slate-400 mt-2">
-                (目前沒有多人代墊款項)
+        
+        {/* ✅ 新增：如果是代墊模式，且有需要平帳的建議，就顯示出來 */}
+        {viewMode === 'shared' && (
+            <div className="mt-6 pt-4 border-t border-slate-100">
+                {settlementSuggestions.length > 0 ? (
+                    <div className="bg-blue-50/50 rounded-xl p-4 border border-blue-100">
+                        <h5 className="font-bold text-blue-800 text-sm mb-3 flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4" /> 結算建議 (誰該給誰錢?)
+                        </h5>
+                        <div className="space-y-2">
+                            {settlementSuggestions.map((item, idx) => (
+                                <div key={idx} className="flex justify-between items-center text-sm bg-white p-2 rounded-lg border border-blue-50 shadow-sm">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-slate-700">{item.from}</span>
+                                        <span className="text-slate-400 text-xs">➜ 應給 ➜</span>
+                                        <span className="font-bold text-blue-600">{item.to}</span>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="font-mono font-bold text-slate-800">
+                                            {symbol}{item.amount.toLocaleString()}
+                                        </div>
+                                        {rate && rate > 0 && (
+                                            <div className="text-[10px] text-slate-400">
+                                                (≈NT$ {Math.round(item.amount * rate).toLocaleString()})
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ) : (
+                    currentData.length > 0 && (
+                        <div className="text-center text-xs text-green-600 font-bold bg-green-50 p-2 rounded-lg border border-green-100">
+                            🎉 帳目已平衡，不需要互相轉帳！
+                        </div>
+                    )
+                )}
+                
+                {/* 若完全無資料 */}
+                {currentData.length === 0 && (
+                    <div className="text-center text-xs text-slate-400 mt-2">
+                        (目前沒有多人代墊款項)
+                    </div>
+                )}
             </div>
         )}
       </div>
