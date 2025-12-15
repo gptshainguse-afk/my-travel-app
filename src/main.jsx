@@ -1,5 +1,4 @@
-
- import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { 
@@ -12,7 +11,8 @@ import {
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
-  ExternalLink, MessageCircle, CreditCard, Landmark, Gift, CheckCircle2
+  ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
+  CheckCircle2, Image as ImageIcon, ChefHat, Edit3
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -948,7 +948,7 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan }) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
   const [activeDeepDive, setActiveDeepDive] = useState(null);
@@ -1121,8 +1121,35 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
               </div>
 
-              <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform 
+              <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform relative group 
                 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
+                
+                {/* 👇👇👇 這就是您要加入的按鈕區塊 (請貼在這裡) 👇👇👇 */}
+                <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 p-1 rounded-lg shadow-sm z-20 print:hidden">
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      // 注意：這裡使用 timelineIndex 而不是 index
+                      onEditClick(dayIndex, timelineIndex, item.title, day.city); 
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all"
+                    title="編輯此目的地"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      // 注意：這裡使用 timelineIndex
+                      onDeleteClick(dayIndex, timelineIndex); 
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-all"
+                    title="刪除此行程"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                {/* 👆👆👆 按鈕區塊結束 👆👆👆 */}
                 
                 <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                   <div>
@@ -1821,6 +1848,283 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
   );
 };
 
+// --- 新增 API 函數: 重新生成單一行程項目資料 ---
+async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
+  // 使用較快的模型，或者沿用當前設定
+  const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp'; 
+  
+  const prompt = `
+    你是一個旅遊行程資料補全助手。使用者將行程中的某個點更改為新的地點："${newTitle}" (位於城市: ${cityName})。
+    請針對這個新地點，生成符合現有行程資料結構的 JSON 物件。
+    
+    要求：
+    1. 只回傳一個 JSON 物件，不要有 Markdown 標記。
+    2. 物件必須包含以下欄位：
+       - "title": "${newTitle}" (固定不變)
+       - "description": 一段關於此地點的簡短吸引人描述 (50字內)。
+       - "location_query": 用於 Google Maps 搜尋的精確關鍵字 (例如："台北101觀景台")。
+       - "transport_detail": 若此點通常需要特定交通方式到達(如渡輪、纜車)，請簡述，否則留空字串。
+       - "suggested_duration": 建議停留時間 (例如: "1.5小時")。
+       - "type": 根據地點性質判斷，填入 "activity" 或 "meal" 或 "spot"。
+    3. 請確保資料真實準確。
+  `;
+
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+    });
+    const data = await response.json();
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    // 假設您有一個 cleanJsonResult 函數在作用域內
+    // const cleanedText = cleanJsonResult(resultText); 
+    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); // 暫時替代
+    return JSON.parse(cleanedText);
+  } catch (error) {
+    console.error("單點生成失敗:", error);
+    throw error;
+  }
+}
+
+
+// --- 輔助函數: 將檔案轉為 Base64 ---
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result.split(',')[1]); // 只取 base64 部分
+    reader.onerror = (error) => reject(error);
+  });
+};
+
+const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
+  const [selectedImages, setSelectedImages] = useState([]);
+  const [imagePreviews, setImagePreviews] = useState([]);
+  const [menuData, setMenuData] = useState(null); // 存放翻譯後的菜單資料
+  const [isAnalyzingMenu, setIsAnalyzingMenu] = useState(false);
+  
+  const [budget, setBudget] = useState('');
+  const [requests, setRequests] = useState('');
+  const [recommendation, setRecommendation] = useState(null);
+  const [isRecommending, setIsRecommending] = useState(false);
+
+  // 1. 處理圖片選擇
+  const handleImageSelect = (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    setSelectedImages([...selectedImages, ...files]);
+
+    // 建立預覽圖
+    const newPreviews = files.map(file => URL.createObjectURL(file));
+    setImagePreviews([...imagePreviews, ...newPreviews]);
+  };
+
+  // 2. 核心: 呼叫 AI 分析菜單圖片
+  const handleAnalyzeMenu = async () => {
+    if (selectedImages.length === 0) return alert("請先選擇菜單照片");
+    if (!apiKey) return alert("請輸入 API Key");
+
+    setIsAnalyzingMenu(true);
+    try {
+        // 準備圖片資料
+        const imageParts = await Promise.all(selectedImages.map(async (file) => ({
+            inlineData: {
+                data: await fileToBase64(file),
+                mimeType: file.type
+            }
+        })));
+
+        const prompt = `
+          你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
+          任務：
+          1. 辨識圖片中的所有菜色。
+          2. 將菜名翻譯成繁體中文。
+          3. 根據性質分類 (例如: 開胃菜, 主餐, 飲料, 甜點...)。
+          4. 找出價格，並區分含稅(tax_included)或不含稅(tax_excluded)。如果無法判斷，優先填入 tax_excluded。
+
+          請回傳一個純 JSON 物件 (不要 Markdown)，格式如下:
+          {
+            "categories": [
+              {
+                "name": "類別名稱 (如: 主餐)",
+                "items": [
+                  {
+                    "original_name": "原文菜名",
+                    "translated_name": "中文菜名",
+                    "description": "簡短描述成分或作法 (若有)",
+                    "price_tax_excluded": 數字或 null,
+                    "price_tax_included": 數字或 null
+                  }
+                ]
+              }
+            ]
+          }
+        `;
+        
+        // 注意：這裡要使用支援圖片的模型，例如 gemini-pro-vision 或最新的 flash
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{ text: prompt }, ...imageParts] // 文字 prompt + 圖片資料
+                }]
+            })
+        });
+        
+        const data = await response.json();
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim();
+        setMenuData(JSON.parse(cleanedText));
+
+    } catch (error) {
+        console.error(error);
+        alert("菜單分析失敗: " + error.message);
+    } finally {
+        setIsAnalyzingMenu(false);
+    }
+  };
+
+  // 3. 核心: 呼叫 AI 進行推薦
+  const handleRecommend = async () => {
+    if (!menuData) return;
+    if (!apiKey) return alert("請輸入 API Key");
+
+    setIsRecommending(true);
+    try {
+        const prompt = `
+           我有一份已整理好的菜單資料 (JSON): ${JSON.stringify(menuData)}
+           
+           我的需求如下:
+           - 預算限制: ${budget ? budget + currencySymbol : '無限制'}
+           - 特殊要求: ${requests || '無'}
+
+           請根據以上菜單與需求，擔任一位專業的點餐顧問。
+           請推薦一套組合 (或是幾樣單品)，並說明推薦理由，以及總共大約多少錢。
+           
+           請直接以一段人性化的繁體中文回答，像在對話一樣，不需要 JSON 格式。
+        `;
+
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await response.json();
+        setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
+
+    } catch (error) {
+        alert("推薦失敗: " + error.message);
+    } finally {
+        setIsRecommending(false);
+    }
+  };
+  
+  // --- UI 渲染部分 (簡化版) ---
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
+            <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
+            <button onClick={onClose}><X /></button>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1 space-y-8">
+            {/* 1. 圖片上傳區 */}
+            <div>
+                <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
+                    {imagePreviews.map((src, idx) => (
+                        <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
+                    ))}
+                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
+                        <Camera className="w-6 h-6 text-slate-400" />
+                        <span className="text-xs text-slate-500 mt-1">加入照片</span>
+                        <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
+                    </label>
+                </div>
+                <button 
+                    onClick={handleAnalyzeMenu} 
+                    disabled={isAnalyzingMenu || selectedImages.length === 0}
+                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
+                >
+                    {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
+                    {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
+                </button>
+            </div>
+
+            {/* 2. 菜單結果顯示區 */}
+            {menuData && (
+                <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                    {menuData.categories.map((cat, catIdx) => (
+                        <div key={catIdx}>
+                            <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
+                            <div className="space-y-3">
+                                {cat.items.map((item, itemIdx) => (
+                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
+                                        <div>
+                                            <div className="font-bold text-slate-800">{item.translated_name}</div>
+                                            <div className="text-xs text-slate-500">{item.original_name}</div>
+                                            {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
+                                        </div>
+                                        <div className="text-right font-mono font-bold text-orange-600">
+                                            {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
+                                             item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
+                                             '--'}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+        {/* 3. 底部推薦控制區 (只有在有菜單資料時顯示) */}
+        {menuData && (
+            <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
+                <div className="flex gap-3 mb-3">
+                    <input 
+                        type="number" 
+                        placeholder={`預算 (例如: 2000${currencySymbol})`}
+                        value={budget}
+                        onChange={e=>setBudget(e.target.value)}
+                        className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
+                    />
+                    <input 
+                        type="text" 
+                        placeholder="特殊要求 (例如: 不吃牛、要全熟、對蝦過敏)"
+                        value={requests}
+                        onChange={e=>setRequests(e.target.value)}
+                        className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
+                    />
+                    <button 
+                        onClick={handleRecommend}
+                        disabled={isRecommending}
+                        className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors"
+                    >
+                        {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
+                    </button>
+                </div>
+                {recommendation && (
+                    <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
+                        <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
+                        {recommendation}
+                    </div>
+                )}
+            </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default MenuHelperModal;
+
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
@@ -1831,6 +2135,9 @@ const App = () => {
   const [showResultTutorial, setShowResultTutorial] = useState(true);
   const textareaRef = useRef(null);
   const [showApiKeyTutorial, setShowApiKeyTutorial] = useState(false);
+  const [editModalData, setEditModalData] = useState(null); // 存放當前要編輯的項目資訊 { dayIndex, itemIndex, currentTitle, city }
+  const [isProcessingEdit, setIsProcessingEdit] = useState(false); // AI 處理中的 loading 狀態
+  const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
     transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
@@ -2420,6 +2727,89 @@ const App = () => {
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
     }
   }, [basicData.specialRequests]); // 只要內容變了就觸發
+
+  const handleDeleteItem = (dayIndex, itemIndex) => {
+    if (!window.confirm("確定要刪除這個行程嗎？刪除後無法復原。")) return;
+  
+    const newItinerary = { ...itineraryData };
+    const deletedItemTitle = newItinerary.days[dayIndex].timeline[itemIndex].title;
+  
+    // 1. 從時間軸中移除
+    newItinerary.days[dayIndex].timeline.splice(itemIndex, 1);
+    setItineraryData(newItinerary);
+  
+    // 2. (重要) 同步刪除關聯的記帳資料 (假設記帳是綁定地點名稱的)
+    const updatedExpenses = expenses.filter(exp => exp.location !== deletedItemTitle);
+    if (updatedExpenses.length !== expenses.length) {
+        setExpenses(updatedExpenses);
+        alert(`已刪除行程，並同步移除了 ${expenses.length - updatedExpenses.length} 筆關聯的記帳紀錄。`);
+    }
+  };
+  
+  // --- 核心邏輯：打開編輯對話框 ---
+  const openEditModal = (dayIndex, itemIndex, currentTitle, city) => {
+    setEditModalData({ dayIndex, itemIndex, currentTitle, newTitle: currentTitle, city });
+  };
+  
+  // --- 核心邏輯：執行編輯 (手動完成) ---
+  const handleManualEditComplete = () => {
+    const { dayIndex, itemIndex, newTitle, currentTitle } = editModalData;
+    if (!newTitle.trim() || newTitle === currentTitle) {
+      setEditModalData(null); return;
+    }
+  
+    const newItinerary = { ...itineraryData };
+    // 只更新標題，保留其他所有欄位 (包含使用者可能添加的備註等隱藏欄位)
+    newItinerary.days[dayIndex].timeline[itemIndex].title = newTitle;
+    // 更新搜尋關鍵字，讓地圖按鈕能運作
+    newItinerary.days[dayIndex].timeline[itemIndex].location_query = newTitle;
+    
+    setItineraryData(newItinerary);
+    updateRelatedExpenses(currentTitle, newTitle); // 同步更新記帳名稱
+    setEditModalData(null);
+  };
+  
+  // --- 核心邏輯：執行編輯 (AI 完成) ---
+  const handleAIEditComplete = async () => {
+    const { dayIndex, itemIndex, newTitle, currentTitle, city } = editModalData;
+    if (!newTitle.trim()) return alert("請輸入新的地點名稱");
+    if (!apiKey) return alert("需要 API Key 才能使用 AI 功能");
+  
+    setIsProcessingEdit(true);
+    try {
+      // 呼叫上面定義的 API 函數
+      const aiResult = await regenerateSingleItem(newTitle, city, apiKey, modelType);
+      
+      const newItinerary = { ...itineraryData };
+      const oldItemData = newItinerary.days[dayIndex].timeline[itemIndex];
+  
+      // 關鍵：合併資料。使用 AI 的新資料覆蓋舊資料，
+      // 但如果 oldItemData 有 AI 沒有回傳的欄位 (例如使用者手動加的 note)，會被保留下來。
+      newItinerary.days[dayIndex].timeline[itemIndex] = {
+          ...oldItemData, // 先展開舊資料
+          ...aiResult,    // 用 AI 新資料覆蓋 (description, query 等)
+          title: newTitle // 確保標題是新的
+      };
+  
+      setItineraryData(newItinerary);
+      updateRelatedExpenses(currentTitle, newTitle); // 同步更新記帳名稱
+      setEditModalData(null);
+    } catch (error) {
+      alert("AI 生成失敗: " + error.message);
+    } finally {
+      setIsProcessingEdit(false);
+    }
+  };
+  
+  // 輔助函數：同步更新記帳資料的地點名稱
+  const updateRelatedExpenses = (oldTitle, newTitle) => {
+      if (oldTitle === newTitle) return;
+      const updatedExpenses = expenses.map(exp => 
+          exp.location === oldTitle ? { ...exp, location: newTitle } : exp
+      );
+      setExpenses(updatedExpenses);
+  };
+ 
   const renderInputForm = () => {
     return (
       <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
@@ -3100,6 +3490,8 @@ const App = () => {
                  apiKey={apiKey}
                  updateItineraryItem={updateItineraryItem}
                  onSavePlan={saveCurrentPlan}
+                 onDeleteClick={handleDeleteItem} // 傳入刪除函數
+                 onEditClick={openEditModal}
                />
              </div>
            ))}
@@ -3130,6 +3522,65 @@ const App = () => {
         </>
       )}
       {step === 'saved_list' && renderSavedList()}
+      {/* ✅ 3. 新增：菜單助手 Modal (放在這裡，所有頁面都能吃到) */}
+      <MenuHelperModal 
+        isOpen={isMenuModalOpen}
+        onClose={() => setIsMenuModalOpen(false)}
+        apiKey={apiKey}
+        currencySymbol={currencySettings.symbol}
+      />
+
+      {/* 編輯行程 Modal (您原本已經加好的) */}
+      {editModalData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
+            <h3 className="text-lg font-bold text-slate-800 mb-4">更換目的地</h3>
+            <input
+              type="text"
+              value={editModalData.newTitle}
+              onChange={(e) => setEditModalData({ ...editModalData, newTitle: e.target.value })}
+              className="w-full p-3 border border-slate-300 rounded-lg mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="請輸入新的地點名稱..."
+              disabled={isProcessingEdit}
+            />
+            
+            {isProcessingEdit ? (
+               <div className="flex items-center justify-center gap-2 text-blue-600 py-4">
+                  <Loader2 className="w-5 h-5 animate-spin" /> <span className="font-bold animate-pulse">AI 正在蒐集新地點資料...</span>
+               </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <div className="flex gap-3">
+                   <button 
+                     onClick={handleManualEditComplete}
+                     className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-1"
+                   >
+                     {/* ⚠️ 注意：請確認上方 import 有加入 Edit3 */}
+                     <span className="font-bold">手動完成</span> <span className="text-xs">(僅改名)</span>
+                   </button>
+                   <button 
+                     onClick={handleAIEditComplete}
+                     className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-1"
+                   >
+                     <Sparkles className="w-4 h-4" /> AI 完成 (補充資料)
+                   </button>
+                </div>
+                <button 
+                  onClick={() => setEditModalData(null)}
+                  className="w-full py-2 border border-slate-300 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
+                >
+                  取消編輯
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* 👆👆👆 結束 👆👆👆 */}
+
+    </div>
+  );
+};
     </div>
   );
 };
