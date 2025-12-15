@@ -3038,7 +3038,7 @@ const App = () => {
           <div className="text-center">
             <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3 flex-wrap">
               <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
-              AI 智能旅程規劃師
+              AI 智能旅程規劃小幫手
             </h1>
             <p className="text-slate-500 mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
           </div>
