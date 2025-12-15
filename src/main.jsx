@@ -152,7 +152,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
          return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
       });
       
-      // 組合路徑：將地點用 '/' 連接
+      // 組合路徑：將地點用 '/' 連接 (例如: 地點A/地點B/地點C)
       const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
       
       // ✅ 修正：使用正確的 Google Maps Dir 網址，並補上 $ 符號
@@ -165,7 +165,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
   };
 
-  // 呼叫函數取得最終網址
+  // ✅ 修正：直接呼叫函數，不要再有額外的 const mapUrl = ... 定義
   const mapUrl = getMultiStopMapUrl();
 
   return createPortal(
@@ -233,7 +233,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                  </div>
                </div>
 
-               {/* ✅ 修改 Map Link 區塊 */}
+               {/* Map Link */}
                <a 
                  href={mapUrl} 
                  target="_blank" 
