@@ -1104,7 +1104,7 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick }) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onIconClick}) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
   const [activeDeepDive, setActiveDeepDive] = useState(null);
@@ -1263,13 +1263,20 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                 <div className="relative flex gap-4 md:gap-8 group break-inside-avoid">
                   
                   {/* Icon */}
-                  <div className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 ${isPrintMode ? 'hidden' : item.type === 'flight' ? 'bg-indigo-500 text-white' : item.type === 'meal' ? 'bg-orange-500 text-white' : item.type === 'transport' ? 'bg-slate-500 text-white' : item.type === 'activity' ? 'bg-pink-500 text-white' : 'bg-blue-500 text-white'}`}>
+                  <div 
+                    onClick={() => !isPrintMode && onIconClick(dayIndex, timelineIndex)} // 綁定點擊事件
+                    className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 cursor-pointer hover:ring-4 hover:ring-blue-100 ${isPrintMode ? 'hidden' : item.type === 'flight' ? 'bg-indigo-500 text-white' : item.type === 'meal' ? 'bg-orange-500 text-white' : item.type === 'transport' ? 'bg-slate-500 text-white' : item.type === 'activity' ? 'bg-pink-500 text-white' : item.type === 'shopping' ? 'bg-rose-500 text-white' : item.type === 'hotel' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white'}`}
+                    title="點擊更換圖示"
+                  >
+                    {/* Icon 內容顯示邏輯 (增加 shopping 的支援) */}
                     {item.type === 'flight' && <Plane className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'transport' && <Train className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'meal' && <Utensils className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'hotel' && <Hotel className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'spot' && <MapPin className="w-5 h-5 md:w-6 md:h-6" />}
+                    {item.type === 'shopping' && <Wallet className="w-5 h-5 md:w-6 md:h-6" />}
+                    {/* 預設 */}
+                    {(item.type === 'spot' || !['flight','transport','meal','hotel','activity','shopping'].includes(item.type)) && <MapPin className="w-5 h-5 md:w-6 md:h-6" />}
                   </div>
 
                   <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform relative group ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
@@ -3815,6 +3822,12 @@ const App = () => {
         </div>
       )}
       {/* 👆👆👆 結束 👆👆👆 */}
+      {/* ✅ 新增：圖示選擇器 */}
+      <IconSelectorModal 
+        isOpen={!!iconSelectModalData}
+        onClose={() => setIconSelectModalData(null)}
+        onSelect={handleIconUpdate}
+      />
       {addModalData && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
