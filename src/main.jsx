@@ -2007,7 +2007,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
   // 使用較快的模型，或者沿用當前設定
-  const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp'; 
+  const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
   
   const prompt = `
     你是一個旅遊行程資料補全助手。使用者將行程中的某個點更改為新的地點："${newTitle}" (位於城市: ${cityName})。
