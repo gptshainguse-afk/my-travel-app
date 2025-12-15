@@ -1107,7 +1107,77 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   const convertToHomeCurrency = (amount) => { if (!currencySettings.rate) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
   const handleWeatherClick = async () => { setIsRefreshingWeather(true); await onRefreshWeather(dayIndex, day.city, day.date); setIsRefreshingWeather(false); };
 
+  const handleDeepDive = async (timelineIndex, item) => {
+    // 如果已經有資料，直接顯示，不用再 call API
+    if (item.ai_details) {
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
+      return;
+    }
 
+    if (!apiKey) return alert("需要 API Key 才能使用此功能");
+    
+    // 設定 Loading 狀態
+    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
+
+    // 強制使用 gemini-2.5-flash (速度快且穩定)
+    const TARGET_MODEL = 'gemini-2.5-flash';
+
+    const prompt = `
+      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${item.title}" 
+         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      
+      const data = await response.json();
+      
+      if (data.error) throw new Error(data.error.message);
+
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應內容");
+
+      // 使用強化版清理函數
+      const cleanedText = cleanJsonResult(resultText);
+      console.log("DeepDive Cleaned JSON:", cleanedText); // Debug 用
+
+      let aiResult;
+      try {
+         aiResult = JSON.parse(cleanedText);
+      } catch (e) {
+         console.error("Parse Error Raw:", resultText);
+         throw new Error("AI 回傳格式錯誤，無法解析");
+      }
+
+      // 更新全域狀態 (存檔用)
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      
+      // 更新 Modal 狀態 (顯示用)
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
+
+    } catch (error) {
+      console.error(error);
+      alert("AI 分析失敗: " + error.message);
+      setActiveDeepDive(null); // 關閉視窗或顯示錯誤
+    }
+};
+  
   // 定義不同類型的可愛配色方案
   const typeColors = {
     flight: 'bg-sky-100 text-sky-500 ring-sky-200',
@@ -1364,76 +1434,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     </div>
   );
 };
-const handleDeepDive = async (timelineIndex, item) => {
-    // 如果已經有資料，直接顯示，不用再 call API
-    if (item.ai_details) {
-      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
-      return;
-    }
 
-    if (!apiKey) return alert("需要 API Key 才能使用此功能");
-    
-    // 設定 Loading 狀態
-    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
-
-    // 強制使用 gemini-2.5-flash (速度快且穩定)
-    const TARGET_MODEL = 'gemini-2.5-flash';
-
-    const prompt = `
-      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
-      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
-      請務必回傳合法的 JSON 物件，不要有其他文字。
-      包含以下欄位:
-      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
-      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
-      3. "safety_alert": 針對此地的具體治安或避雷提示
-      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
-      5. "walking_route": [
-           "起點: 建議的最近車站出口或地標",
-           "途經1: 沿途好逛或好拍的點",
-           "途經2: (選填)",
-           "終點: ${item.title}" 
-         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
-    `;
-
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      
-      const data = await response.json();
-      
-      if (data.error) throw new Error(data.error.message);
-
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!resultText) throw new Error("AI 無回應內容");
-
-      // 使用強化版清理函數
-      const cleanedText = cleanJsonResult(resultText);
-      console.log("DeepDive Cleaned JSON:", cleanedText); // Debug 用
-
-      let aiResult;
-      try {
-         aiResult = JSON.parse(cleanedText);
-      } catch (e) {
-         console.error("Parse Error Raw:", resultText);
-         throw new Error("AI 回傳格式錯誤，無法解析");
-      }
-
-      // 更新全域狀態 (存檔用)
-      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
-      
-      // 更新 Modal 狀態 (顯示用)
-      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
-
-    } catch (error) {
-      console.error(error);
-      alert("AI 分析失敗: " + error.message);
-      setActiveDeepDive(null); // 關閉視窗或顯示錯誤
-    }
-};
 const ApiKeyTutorialModal = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
