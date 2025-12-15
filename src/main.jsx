@@ -12,7 +12,8 @@ import {
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
   ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
-  CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw
+  CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw,
+  Palmtree, Whale, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, sun
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -1104,193 +1105,104 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather }) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather, onIconClick }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
   const [activeDeepDive, setActiveDeepDive] = useState(null);
   const [editingTimeId, setEditingTimeId] = useState(null);
-  
-  // ✅ 新增：控制天氣刷新的 Loading 狀態
   const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
 
-  // 1. 記帳功能函數
-  const addExpense = (timelineIndex, newItem) => {
-    const newExpense = {
-      id: Date.now().toString(),
-      dayIndex,
-      timelineIndex,
-      ...newItem
-    };
-    setExpenses(prev => [...prev, newExpense]);
-  };
+  // ... (保留所有原本的輔助函數：addExpense, removeExpense, handlePhotoUpload, removePhoto, handleNoteChange, handleDeepDive, convertToHomeCurrency, handleWeatherClick) ...
+  // 為節省篇幅，請確保您這裡保留了原本所有的邏輯函數代碼
+  const addExpense = (timelineIndex, newItem) => { const newExpense = { id: Date.now().toString(), dayIndex, timelineIndex, ...newItem }; setExpenses(prev => [...prev, newExpense]); };
+  const removeExpense = (id) => { if(confirm("確定要刪除這筆帳務嗎？")) { setExpenses(prev => prev.filter(e => e.id !== id)); } };
+  const handlePhotoUpload = async (e, timelineIndex) => { const file = e.target.files[0]; if (!file) return; try { const base64 = await compressImage(file); const currentItem = day.timeline[timelineIndex]; const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64]; updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos }); } catch (error) { console.error("Image upload failed", error); alert("圖片處理失敗，請重試"); } };
+  const removePhoto = (timelineIndex, photoIndex) => { if(!confirm("刪除這張照片？")) return; const currentItem = day.timeline[timelineIndex]; const newPhotos = currentItem.photos.filter((_, i) => i !== photoIndex); updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos }); };
+  const handleNoteChange = (timelineIndex, text) => { updateItineraryItem(dayIndex, timelineIndex, { user_notes: text }); };
+  const handleDeepDive = async (timelineIndex, item) => { /* 請保留原本完整的 handleDeepDive 代碼 */ if (item.ai_details) { setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title }); return; } if (!apiKey) return alert("需要 API Key 才能使用此功能"); setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title }); const TARGET_MODEL = 'gemini-2.5-flash'; const prompt = `針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title }); } catch (error) { console.error(error); alert("AI 分析失敗: " + error.message); setActiveDeepDive(null); } };
+  const convertToHomeCurrency = (amount) => { if (!currencySettings.rate) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
+  const handleWeatherClick = async () => { setIsRefreshingWeather(true); await onRefreshWeather(dayIndex, day.city, day.date); setIsRefreshingWeather(false); };
 
-  const removeExpense = (id) => {
-    if(confirm("確定要刪除這筆帳務嗎？")) {
-      setExpenses(prev => prev.filter(e => e.id !== id));
-    }
-  };
 
-  // 2. 照片功能函數
-  const handlePhotoUpload = async (e, timelineIndex) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const base64 = await compressImage(file);
-      const currentItem = day.timeline[timelineIndex];
-      const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64];
-      updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
-    } catch (error) {
-      console.error("Image upload failed", error);
-      alert("圖片處理失敗，請重試");
-    }
-  };
-
-  const removePhoto = (timelineIndex, photoIndex) => {
-    if(!confirm("刪除這張照片？")) return;
-    const currentItem = day.timeline[timelineIndex];
-    const newPhotos = currentItem.photos.filter((_, i) => i !== photoIndex);
-    updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
-  };
-
-  // 3. 筆記功能函數
-  const handleNoteChange = (timelineIndex, text) => {
-    updateItineraryItem(dayIndex, timelineIndex, { user_notes: text });
-  };
-
-  // 4. AI 深度導遊函數
-  const handleDeepDive = async (timelineIndex, item) => {
-    if (item.ai_details) {
-      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
-      return;
-    }
-
-    if (!apiKey) return alert("需要 API Key 才能使用此功能");
-    
-    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
-
-    // 強制使用 gemini-2.5-flash
-    const TARGET_MODEL = 'gemini-2.5-flash';
-
-    const prompt = `
-      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
-      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
-      請務必回傳合法的 JSON 物件，不要有其他文字。
-      包含以下欄位:
-      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
-      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
-      3. "safety_alert": 針對此地的具體治安或避雷提示
-      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
-      5. "walking_route": [
-           "起點: 建議的最近車站出口或地標",
-           "途經1: 沿途好逛或好拍的點",
-           "途經2: (選填)",
-           "終點: ${item.title}" 
-         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
-    `;
-
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      const data = await response.json();
-      
-      if (data.error) throw new Error(data.error.message);
-
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!resultText) throw new Error("AI 無回應");
-
-      const cleanedText = cleanJsonResult(resultText);
-      let aiResult = JSON.parse(cleanedText);
-
-      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
-      
-      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
-    } catch (error) {
-      console.error(error);
-      alert("AI 分析失敗: " + error.message);
-      setActiveDeepDive(null);
-    }
-  };
-
-  const convertToHomeCurrency = (amount) => {
-     if (!currencySettings.rate || currencySettings.rate === 0) return '';
-     const homeAmount = Math.round(amount * currencySettings.rate);
-     return `(≈ NT$${homeAmount.toLocaleString()})`;
-  };
-  const handleWeatherClick = async () => {
-      setIsRefreshingWeather(true);
-      await onRefreshWeather(dayIndex, day.city, day.date);
-      setIsRefreshingWeather(false);
+  // 定義不同類型的可愛配色方案
+  const typeColors = {
+    flight: 'bg-sky-100 text-sky-500 ring-sky-200',
+    transport: 'bg-indigo-100 text-indigo-500 ring-indigo-200',
+    meal: 'bg-orange-100 text-orange-500 ring-orange-200',
+    hotel: 'bg-rose-100 text-rose-500 ring-rose-200',
+    activity: 'bg-teal-100 text-teal-500 ring-teal-200',
+    spot: 'bg-emerald-100 text-emerald-500 ring-emerald-200',
+    shopping: 'bg-pink-100 text-pink-500 ring-pink-200',
+    default: 'bg-slate-100 text-slate-500 ring-slate-200'
   };
 
   return (
-    <div className={`bg-white/80 backdrop-blur rounded-3xl shadow-xl min-h-[600px] overflow-hidden border border-white/50 ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
+    // 卡片容器：改为米色/奶油色背景，增加柔和的边框和阴影
+    <div className={`bg-[#fffef8] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
       
-      {/* Day Header (已修改) */}
-      <div className={`bg-slate-800 text-white p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
+      {/* 背景裝飾貼紙 */}
+      {!isPrintMode && (
+        <>
+          <div className="absolute bottom-0 right-0 opacity-[0.07] pointer-events-none text-amber-600"><Tent className="w-48 h-48 -rotate-12 translate-x-10 translate-y-10" /></div>
+          <div className="absolute top-1/2 left-0 opacity-[0.07] pointer-events-none text-sky-600"><Cloud className="w-32 h-32 rotate-12 -translate-x-10" /></div>
+        </>
+      )}
+
+      {/* Day Header：改為明亮的藍天白雲漸層風格 */}
+      <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
         {!isPrintMode && (
-          <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/4 blur-3xl"></div>
+          <>
+            <div className="absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div>
+            <div className="absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-yellow-300 opacity-20 rounded-full blur-3xl"></div>
+            {/* 標題區的小裝飾 */}
+            <div className="absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div>
+          </>
         )}
+
         <div className="relative z-10">
-           {/* 大標題 (城市) - 點擊可編輯 */}
+           {/* 大標題 (城市) */}
            <div className="flex items-end gap-2 mb-2">
                {isPrintMode ? (
-                   <h3 className="text-4xl font-extrabold text-black">
-                       <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>
-                       {day.city}
-                   </h3>
+                   <h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>
                ) : (
                    <input 
                        value={day.city}
                        onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })}
-                       className="bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/50"
+                       className="bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/70 drop-shadow-sm"
                        placeholder="輸入城市名稱"
                    />
                )}
            </div>
 
-           {/* 副標題 (主題) - 點擊可編輯 */}
-           <div className={`flex items-center gap-2 text-blue-200 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : ''}`}>
-             <Sparkles className={`w-4 h-4 md:w-5 md:h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> 
-             {isPrintMode ? (
-                 <span>{day.title}</span>
-             ) : (
+           {/* 副標題 (主題) */}
+           <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : ''}`}>
+             <Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> 
+             {isPrintMode ? <span>{day.title}</span> : (
                  <input 
                     value={day.title}
                     onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })}
-                    className="bg-transparent border-b border-transparent hover:border-blue-200/50 focus:border-blue-200 focus:outline-none w-full md:w-1/2 transition-colors placeholder-blue-200/50"
+                    className="bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full md:w-1/2 transition-colors placeholder-sky-100/70"
                     placeholder="輸入行程主題"
                  />
              )}
            </div>
 
-           {/* 天氣與穿著 - 含刷新按鈕 */}
+           {/* 天氣與穿著 - 改為可愛的膠囊樣式 */}
            {(day.weather_forecast || day.clothing_suggestion) && (
-             <div className={`mt-4 flex flex-wrap gap-4 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
+             <div className={`mt-4 flex flex-wrap gap-3 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
                {day.weather_forecast && (
-                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-blue-50'}`}>
-                   <CloudSun className="w-4 h-4" />
-                   <span>{day.weather_forecast}</span>
+                 <div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-sky-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}>
+                   <CloudSun className="w-4 h-4" /><span>{day.weather_forecast}</span>
                  </div>
                )}
                {day.clothing_suggestion && (
-                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-orange-50'}`}>
-                   <Shirt className="w-4 h-4" />
-                   <span>{day.clothing_suggestion}</span>
+                 <div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-orange-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}>
+                   <Shirt className="w-4 h-4" /><span>{day.clothing_suggestion}</span>
                  </div>
                )}
-               
-               {/* 刷新按鈕 */}
                {!isPrintMode && (
-                   <button 
-                     onClick={handleWeatherClick}
-                     disabled={isRefreshingWeather}
-                     className={`p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-all ${isRefreshingWeather ? 'animate-spin opacity-50' : ''}`}
-                     title="重新預測天氣與穿著"
-                   >
-                     <RefreshCw className="w-4 h-4 text-white" />
+                   <button onClick={handleWeatherClick} disabled={isRefreshingWeather} className={`p-2 rounded-full bg-white/20 hover:bg-white/40 transition-all text-white ${isRefreshingWeather ? 'animate-spin' : 'hover:rotate-180'}`} title="重新預測天氣">
+                     <RefreshCw className="w-5 h-5" />
                    </button>
                )}
              </div>
@@ -1299,219 +1211,171 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       </div>
 
       {/* Timeline Content */}
-      <div className={`p-4 md:p-12 relative ${isPrintMode ? 'p-0' : ''}`}>
-        <div className={`absolute left-[35px] md:left-[59px] top-12 bottom-12 w-0.5 bg-gradient-to-b from-slate-200 via-slate-300 to-slate-200 ${isPrintMode ? 'hidden' : ''}`}></div>
+      <div className={`p-4 md:p-10 relative ${isPrintMode ? 'p-0' : ''}`}>
+        {/* 時間軸線：改為彩色虛線 */}
+        <div className={`absolute left-[35px] md:left-[59px] top-10 bottom-10 w-[3px] bg-[linear-gradient(to_bottom,transparent,SkyBlue,LightPink,Moccasin,transparent)] bg-[length:100%_20px] bg-repeat-y ${isPrintMode ? 'hidden' : ''}`} style={{backgroundImage: 'repeating-linear-gradient(0deg, #bae6fd, #bae6fd 8px, transparent 8px, transparent 16px)'}}></div>
+        
         <div className={`space-y-8 md:space-y-12 ${isPrintMode ? 'space-y-6' : ''}`}>
-          {day.timeline.map((item, timelineIndex) => (
+          {day.timeline.map((item, timelineIndex) => {
+            // 取得對應類型的可愛配色
+            const colorClass = typeColors[item.type] || typeColors.default;
+            
+            return (
             <React.Fragment key={timelineIndex}>
-                <div className="relative flex gap-4 md:gap-8 group break-inside-avoid">
+                <div className="relative flex gap-4 md:gap-8 group break-inside-avoid z-10">
                   
-                  {/* Icon */}
+                  {/* Icon：改為更大、更圓潤、馬卡龍配色的圓圈 */}
                   <div 
-                    onClick={() => !isPrintMode && onIconClick(dayIndex, timelineIndex)} // 綁定點擊事件
-                    className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 cursor-pointer hover:ring-4 hover:ring-blue-100 ${isPrintMode ? 'hidden' : item.type === 'flight' ? 'bg-indigo-500 text-white' : item.type === 'meal' ? 'bg-orange-500 text-white' : item.type === 'transport' ? 'bg-slate-500 text-white' : item.type === 'activity' ? 'bg-pink-500 text-white' : item.type === 'shopping' ? 'bg-rose-500 text-white' : item.type === 'hotel' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white'}`}
+                    onClick={() => !isPrintMode && onIconClick(dayIndex, timelineIndex)}
+                    className={`w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center shrink-0 z-10 border-[5px] border-[#fffef8] shadow-md transition-all group-hover:scale-110 cursor-pointer hover:shadow-lg ring-4 ${colorClass.split(' ')[2]} ${isPrintMode ? 'hidden' : colorClass}`}
                     title="點擊更換圖示"
                   >
-                    {/* Icon 內容顯示邏輯 (增加 shopping 的支援) */}
-                    {item.type === 'flight' && <Plane className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'transport' && <Train className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'meal' && <Utensils className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'hotel' && <Hotel className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
-                    {item.type === 'shopping' && <Wallet className="w-5 h-5 md:w-6 md:h-6" />}
-                    {/* 預設 */}
-                    {(item.type === 'spot' || !['flight','transport','meal','hotel','activity','shopping'].includes(item.type)) && <MapPin className="w-5 h-5 md:w-6 md:h-6" />}
+                    {item.type === 'flight' && <Plane className="w-6 h-6 md:w-7 md:h-7" />}
+                    {item.type === 'transport' && <Train className="w-6 h-6 md:w-7 md:h-7" />}
+                    {item.type === 'meal' && <Utensils className="w-6 h-6 md:w-7 md:h-7" />}
+                    {item.type === 'hotel' && <Hotel className="w-6 h-6 md:w-7 md:h-7" />}
+                    {item.type === 'activity' && <BookOpen className="w-6 h-6 md:w-7 md:h-7" />}
+                    {item.type === 'shopping' && <Wallet className="w-6 h-6 md:w-7 md:h-7" />}
+                    {(item.type === 'spot' || !['flight','transport','meal','hotel','activity','shopping'].includes(item.type)) && <MapPin className="w-6 h-6 md:w-7 md:h-7" />}
                   </div>
 
-                  <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform relative group ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
+                  {/* 行程卡片本體：更圓潤、更柔和的陰影 */}
+                  <div className={`flex-1 bg-white rounded-[2rem] p-5 md:p-7 shadow-[0_4px_20px_rgb(0,0,0,0.06)] hover:shadow-[0_8px_25px_rgb(0,0,0,0.1)] transition-all duration-300 transform relative group border-2 border-slate-50 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
                     
-                    {/* 編輯/刪除按鈕 */}
-                    <div className="absolute top-2 right-2 flex items-center gap-1 bg-white/90 p-1 rounded-lg shadow-sm z-20 print:hidden border border-slate-100">
-                        <button onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all"><Edit3 className="w-4 h-4" /></button>
-                        <button onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-all"><Trash2 className="w-4 h-4" /></button>
+                    {/* 編輯/刪除按鈕：改為圓形 */}
+                    <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-white p-1.5 rounded-full shadow-sm z-20 print:hidden opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
+                        <button onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-2 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-full transition-all"><Edit3 className="w-4 h-4" /></button>
+                        <button onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-all"><Trash2 className="w-4 h-4" /></button>
                     </div>
 
                     <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                       <div>
-                        {/* 時間顯示 (可點擊編輯) */}
+                        {/* 時間顯示 */}
                         {editingTimeId === timelineIndex && !isPrintMode ? (
-                            <input 
-                                type="time"
-                                defaultValue={item.time}
-                                autoFocus
-                                onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }}
-                                onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }}
-                                className="bg-blue-50 text-blue-800 px-2 py-1 rounded-lg text-sm font-bold border border-blue-300 outline-none mb-2"
-                            />
+                            <input type="time" defaultValue={item.time} autoFocus onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }} onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }} className="bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-sm font-bold border-2 border-sky-200 outline-none mb-2 font-mono" />
                         ) : (
-                            <div 
-                                onClick={() => !isPrintMode && setEditingTimeId(timelineIndex)}
-                                className={`inline-flex items-center gap-2 bg-slate-100 text-slate-600 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[10px] md:text-xs font-bold mb-2 cursor-pointer hover:bg-blue-100 hover:text-blue-600 transition-colors ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`}
-                                title="點擊修改時間"
-                            >
-                              <span className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-slate-400 ${isPrintMode ? 'hidden' : ''}`}></span>
-                              {item.time}
+                            <div onClick={() => !isPrintMode && setEditingTimeId(timelineIndex)} className={`inline-flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-xs md:text-sm font-bold mb-2 cursor-pointer hover:bg-sky-100 transition-colors ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`} title="點擊修改時間">
+                              <Clock className={`w-3.5 h-3.5 ${isPrintMode ? 'hidden' : ''}`} />{item.time}
                             </div>
                         )}
-
-                        <h4 className="font-bold text-xl md:text-2xl text-slate-800 flex flex-wrap items-center gap-2 md:gap-3">
+                        <h4 className="font-bold text-xl md:text-2xl text-slate-700 flex flex-wrap items-center gap-2">
                           {item.title}
-                          {item.price_level && <span className={`text-[10px] md:text-xs px-2 py-0.5 rounded border ${isPrintMode ? 'border-black text-black' : 'bg-green-50 text-green-600 border-green-100'}`}>{item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}</span>}
+                          {item.price_level && <span className={`text-[10px] md:text-xs px-2 py-1 rounded-full font-bold ${isPrintMode ? 'border-black text-black border' : item.price_level === 'High' ? 'bg-rose-100 text-rose-600' : item.price_level === 'Mid' ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}`}>{item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}</span>}
                         </h4>
                       </div>
                       
-                      {/* Action Bar */}
-                      <div className={`flex items-center gap-2 ${isPrintMode ? 'hidden' : ''}`}>
-                         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="p-2 rounded-full hover:bg-blue-50 text-blue-500"><Map className="w-5 h-5" /></a>
-                         <button onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2 rounded-full ${item.user_notes ? 'bg-yellow-50 text-yellow-600' : 'text-slate-400'}`}><FileText className="w-5 h-5" /></button>
-                         <label className="p-2 rounded-full hover:bg-slate-50 text-slate-400 cursor-pointer"><input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoUpload(e, timelineIndex)} /><Camera className="w-5 h-5" /></label>
-                         <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2 rounded-full ${item.ai_details ? 'text-purple-600 bg-purple-50' : 'text-purple-400'}`}><Bot className="w-5 h-5" /></button>
+                      {/* Action Bar：按鈕改為更可愛的風格 */}
+                      <div className={`flex items-center gap-1 ${isPrintMode ? 'hidden' : ''}`}>
+                         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="p-2.5 rounded-full hover:bg-sky-100 text-sky-400 hover:text-sky-600 transition-colors"><Map className="w-5 h-5" /></a>
+                         <button onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2.5 rounded-full transition-colors ${item.user_notes ? 'bg-amber-100 text-amber-600' : 'text-amber-300 hover:bg-amber-50 hover:text-amber-500'}`}><FileText className="w-5 h-5" /></button>
+                         <label className="p-2.5 rounded-full hover:bg-rose-50 text-rose-300 hover:text-rose-500 cursor-pointer transition-colors"><input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoUpload(e, timelineIndex)} /><Camera className="w-5 h-5" /></label>
+                         <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2.5 rounded-full transition-colors relative ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-300 hover:bg-violet-50 hover:text-violet-500'}`}>
+                             <Bot className="w-5 h-5" />
+                             {item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}
+                         </button>
                       </div>
                     </div>
                     
-                    <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>{item.description}</div>
+                    <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line pl-2 ${isPrintMode ? 'text-black pl-0' : ''}`}>{item.description}</div>
 
-                    {/* ✅ 補回：AI 深度導遊 (列印版) */}
+                    {/* AI 深度導遊情報 (列印版) - 樣式微調 */}
                     {isPrintMode && item.ai_details && (
-                      <div className="mt-2 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm break-inside-avoid">
-                          <h5 className="font-bold text-slate-800 mb-2 flex items-center gap-2 border-b border-slate-200 pb-2">
-                             <Sparkles className="w-4 h-4 text-purple-600" /> AI 深度導遊情報
-                          </h5>
-                          <div className="space-y-2 text-slate-700">
-                            <div><span className="font-bold text-purple-700">📍 路線:</span> {safeRender(item.ai_details.route_guide)}</div>
-                            <div><span className="font-bold text-orange-700">🍽️ 必訪:</span> {safeRender(item.ai_details.must_visit_shops)}</div>
-                            <div><span className="font-bold text-red-700">🛡️ 安全:</span> {safeRender(item.ai_details.safety_alert)}</div>
-                            <div className="text-xs text-slate-500 pt-1"><span className="font-bold">🗺️ 地圖:</span> {safeRender(item.ai_details.mini_map_desc)}</div>
+                      <div className="mt-2 mb-4 p-5 bg-violet-50 rounded-2xl border-2 border-violet-100 text-sm break-inside-avoid relative overflow-hidden">
+                          {/* 背景裝飾 */}
+                          <div className="absolute top-0 right-0 text-violet-200 opacity-30"><Sparkles className="w-16 h-16" /></div>
+                          <h5 className="font-bold text-violet-800 mb-3 flex items-center gap-2 border-b border-violet-200 pb-2 relative z-10"><Sparkles className="w-5 h-5" /> AI 深度導遊情報</h5>
+                          <div className="space-y-2.5 text-slate-700 relative z-10">
+                            {/* ... 內容保持不變 ... */}
+                            <div><span className="font-bold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-md mr-1">📍 路線:</span> {safeRender(item.ai_details.route_guide)}</div>
+                            <div><span className="font-bold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded-md mr-1">🍽️ 必訪:</span> {safeRender(item.ai_details.must_visit_shops)}</div>
+                            <div><span className="font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded-md mr-1">🛡️ 安全:</span> {safeRender(item.ai_details.safety_alert)}</div>
+                            <div className="text-xs text-slate-500 pt-2 border-t border-violet-200"><span className="font-bold mr-1">🗺️ 地圖:</span> {safeRender(item.ai_details.mini_map_desc)}</div>
                           </div>
                       </div>
                     )}
 
-                    {/* User Notes */}
-                    {(activeNote === timelineIndex || item.user_notes) && (<div className="mb-4"><textarea value={item.user_notes||''} onChange={(e)=>handleNoteChange(timelineIndex,e.target.value)} className="w-full p-3 bg-yellow-50/50 border border-yellow-200 rounded-lg text-sm outline-none resize-none" placeholder="筆記..."/></div>)}
+                    {/* User Notes - 改為便利貼樣式 */}
+                    {(activeNote === timelineIndex || item.user_notes) && (<div className="mb-5 relative rotate-1 transition-transform hover:rotate-0"><div className="absolute -top-2 -left-2 text-yellow-400 opacity-50"><Pin className="w-5 h-5" /></div><textarea value={item.user_notes||''} onChange={(e)=>handleNoteChange(timelineIndex,e.target.value)} className="w-full p-4 bg-yellow-100/80 border-none rounded-xl text-sm outline-none resize-none shadow-sm text-yellow-800 placeholder-yellow-800/50 font-handwriting" rows="3" placeholder="寫點什麼紀錄一下..."/></div>)}
                     
-                    {/* Photos */}
-                    {item.photos?.length > 0 && (<div className="flex gap-3 overflow-x-auto pb-2 mb-4"><img src={item.photos[0]} className="h-24 w-24 object-cover rounded-lg"/></div>)}
+                    {/* Photos - 照片增加拍立得效果邊框 */}
+                    {item.photos?.length > 0 && (<div className="flex gap-3 overflow-x-auto pb-4 mb-2 pl-2"><div className="bg-white p-2 shadow-md rounded-lg rotate-2 hover:rotate-0 transition-all"><img src={item.photos[0]} className="h-28 w-28 object-cover rounded-md border border-slate-100"/></div></div>)}
 
-                    {/* ✅ 補回：AI 補充資訊 (交通、提醒、菜單) */}
+                    {/* 交通建議 - 改為可愛風格 */}
                     {item.transport_detail && (
-                      <div className={`bg-slate-50 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 border border-slate-100 ${isPrintMode ? 'bg-transparent border border-slate-300' : ''}`}>
-                        <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><Train className="w-4 h-4 text-slate-500" /></div>
-                        <div className="text-xs md:text-sm text-slate-600 flex-1"><span className="block font-bold text-slate-800 mb-1">交通建議</span>{item.transport_detail}</div>
+                      <div className={`bg-indigo-50 p-4 rounded-2xl mb-3 flex items-start gap-3 border-2 border-indigo-100 ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}>
+                        <div className={`bg-white p-2.5 rounded-full shadow-sm shrink-0 text-indigo-500 ${isPrintMode ? 'hidden' : ''}`}><Train className="w-5 h-5" /></div>
+                        <div className="text-sm text-indigo-900 flex-1 pt-0.5"><span className="block font-bold mb-1">交通建議</span>{item.transport_detail}</div>
                       </div>
                     )}
+                    {/* 重要提醒 - 改為可愛風格 */}
                     {item.warnings_tips && (
-                      <div className={`bg-amber-50 border border-amber-100 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 ${isPrintMode ? 'bg-transparent border border-black' : ''}`}>
-                        <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><AlertTriangle className="w-4 h-4 text-amber-500" /></div>
-                        <div className="text-xs md:text-sm text-amber-800 flex-1"><span className="block font-bold text-amber-900 mb-1">重要提醒 (Tips)</span>{item.warnings_tips}</div>
+                      <div className={`bg-amber-50 border-2 border-amber-100 p-4 rounded-2xl mb-3 flex items-start gap-3 ${isPrintMode ? 'bg-transparent border-black' : ''}`}>
+                        <div className={`bg-white p-2.5 rounded-full shadow-sm shrink-0 text-amber-500 ${isPrintMode ? 'hidden' : ''}`}><AlertTriangle className="w-5 h-5" /></div>
+                        <div className="text-sm text-amber-900 flex-1 pt-0.5"><span className="block font-bold mb-1">重要提醒 (Tips)</span>{item.warnings_tips}</div>
                       </div>
                     )}
-                    {item.menu_recommendations && item.menu_recommendations.length > 0 && (
-                      <div className={`mt-4 md:mt-6 border-t border-slate-100 pt-3 md:pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}>
-                        <h5 className="text-xs md:text-sm font-bold text-orange-600 mb-2 md:mb-3 flex items-center gap-2"><Globe className={`w-4 h-4 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5>
-                        <div className={`bg-orange-50/50 rounded-xl overflow-hidden border border-orange-100 overflow-x-auto ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}>
-                          <table className="w-full text-xs md:text-sm text-left min-w-[300px]">
-                            <thead className={`bg-orange-100 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}>
-                              <tr>
-                                <th className="p-2 md:p-3 pl-3 md:pl-4 font-bold">當地菜名</th>
-                                <th className="p-2 md:p-3 font-bold">中文</th>
-                                <th className="p-2 md:p-3 font-bold">預估價格</th>
-                              </tr>
-                            </thead>
-                            <tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>
-                              {item.menu_recommendations.map((menu, mIdx) => (
-                                <tr key={mIdx} className={`hover:bg-orange-50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}>
-                                  <td className="p-2 md:p-3 pl-3 md:pl-4 font-medium text-orange-900">{menu.local}</td>
-                                  <td className="p-2 md:p-3">{menu.cn}</td>
-                                  <td className="p-2 md:p-3 text-slate-500 font-mono">{menu.price}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
+                    {/* 點餐翻譯 - 樣式微調 */}
+                    {item.menu_recommendations && item.menu_recommendations.length > 0 && (<div className={`mt-6 border-t-2 border-orange-100 pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}><h5 className="text-sm font-bold text-orange-600 mb-3 flex items-center gap-2"><ChefHat className={`w-5 h-5 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5><div className={`bg-orange-50/80 rounded-2xl overflow-hidden border-2 border-orange-100 overflow-x-auto shadow-sm ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}><table className="w-full text-sm text-left min-w-[300px]"><thead className={`bg-orange-200/50 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}><tr><th className="p-3 pl-4 font-bold rounded-tl-2xl">當地菜名</th><th className="p-3 font-bold">中文</th><th className="p-3 font-bold rounded-tr-2xl">預估價格</th></tr></thead><tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>{item.menu_recommendations.map((menu, mIdx) => (<tr key={mIdx} className={`hover:bg-orange-100/50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}><td className="p-3 pl-4 font-bold text-orange-700">{menu.local}</td><td className="p-3">{menu.cn}</td><td className="p-3 text-slate-500 font-mono">{menu.price}</td></tr>))}</tbody></table></div></div>)}
 
-                    {/* ✅ 補回：完整記帳功能 (Ledger) */}
+                    {/* 記帳小本本 - 改為可愛風格 */}
                     {!isPrintMode && (
-                      <div className="mt-4 pt-4 border-t border-slate-100">
-                          <div className="flex items-center justify-between mb-2">
-                            <h5 className="text-sm font-bold text-slate-600 flex items-center gap-2"><Wallet className="w-4 h-4 text-emerald-500" /> 記帳小本本</h5>
-                            <button onClick={() => setEditingExpense(editingExpense === timelineIndex ? null : timelineIndex)} className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors flex items-center gap-1">
-                              {editingExpense === timelineIndex ? <MinusCircle className="w-3 h-3" /> : <Plus className="w-3 h-3" />} {editingExpense === timelineIndex ? '收起' : '新增消費'}
+                      <div className="mt-6 pt-4 border-t-2 border-emerald-100/50">
+                          <div className="flex items-center justify-between mb-3">
+                            <h5 className="text-sm font-bold text-emerald-700 flex items-center gap-2"><Wallet className="w-5 h-5" /> 記帳小本本</h5>
+                            <button onClick={() => setEditingExpense(editingExpense === timelineIndex ? null : timelineIndex)} className={`text-xs px-3 py-1.5 rounded-full transition-colors flex items-center gap-1 font-bold shadow-sm ${editingExpense === timelineIndex ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'}`}>
+                              {editingExpense === timelineIndex ? <MinusCircle className="w-3.5 h-3.5" /> : <PlusCircle className="w-3.5 h-3.5" />} {editingExpense === timelineIndex ? '收起' : '記一筆'}
                             </button>
                           </div>
-
                           <div className="space-y-2">
                             {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
-                              <div key={expense.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded border border-slate-100">
-                                <div className="flex flex-col">
-                                  <span className="font-bold text-slate-700">{expense.item} ({expense.category})</span>
-                                  <span className="text-slate-500">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
-                                  {expense.note && <span className="text-slate-400 italic scale-90 origin-left">{expense.note}</span>}
+                              <div key={expense.id} className="flex justify-between items-center text-sm bg-[#f0fdf4] p-2.5 rounded-xl border border-emerald-100 shadow-sm group/expense hover:shadow-md transition-all relative overflow-hidden">
+                                <div className="absolute right-0 bottom-0 opacity-10 text-emerald-300 pointer-events-none"><Coins className="w-12 h-12 -rotate-12 translate-x-4 translate-y-4"/></div>
+                                <div className="flex flex-col relative z-10">
+                                  <span className="font-bold text-emerald-800 flex items-center gap-1">{expense.item} <span className="text-xs font-normal text-emerald-600 bg-emerald-100 px-1.5 rounded-md">{expense.category}</span></span>
+                                  <span className="text-xs text-emerald-600 mt-0.5">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
+                                  {expense.note && <span className="text-xs text-slate-400 italic mt-1 border-l-2 border-slate-200 pl-1">{expense.note}</span>}
                                 </div>
-                                <div className="flex flex-col items-end gap-0.5">
+                                <div className="flex flex-col items-end gap-0.5 relative z-10">
                                   <div className="flex items-center gap-2">
-                                    <span className="font-mono font-bold text-slate-800">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
-                                    <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
+                                    <span className="font-mono font-bold text-lg text-emerald-700">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
+                                    <button onClick={() => removeExpense(expense.id)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover/expense:opacity-100 transition-opacity p-1 bg-white rounded-full shadow-sm"><X className="w-3.5 h-3.5" /></button>
                                   </div>
-                                  <span className="text-[10px] text-blue-500 font-medium">{convertToHomeCurrency(expense.amount)}</span>
+                                  <span className="text-[10px] text-slate-400 font-medium bg-white/50 px-1.5 rounded-full">{convertToHomeCurrency(expense.amount)}</span>
                                 </div>
                               </div>
                             ))}
                           </div>
-
                           {editingExpense === timelineIndex && (
-                            <ExpenseForm 
-                              travelers={travelers} 
-                              currencySettings={currencySettings}
-                              onSave={(newItem) => {
-                                addExpense(timelineIndex, newItem);
-                                setEditingExpense(null);
-                              }} 
-                              onCancel={() => setEditingExpense(null)}
-                            />
+                            <div className="mt-3 bg-emerald-50/50 p-3 rounded-2xl border-2 border-emerald-100 relative animate-in slide-in-from-top-2">
+                                <ExpenseForm travelers={travelers} currencySettings={currencySettings} onSave={(newItem) => { addExpense(timelineIndex, newItem); setEditingExpense(null); }} onCancel={() => setEditingExpense(null)} />
+                            </div>
                           )}
                       </div>
                     )}
                   </div>
                 </div>
-
-                {/* 插入按鈕 */}
+                
+                {/* 插入按鈕：改為可愛的粉色圓圈 */}
                 {!isPrintMode && (
-                    <div className="relative flex items-center justify-center py-2 z-10 group/add">
-                        <button 
-                            onClick={() => onAddClick(dayIndex, timelineIndex + 1, day.city)}
-                            className="w-8 h-8 rounded-full bg-slate-100 border border-slate-300 text-slate-400 hover:bg-blue-500 hover:text-white hover:scale-110 hover:border-blue-500 transition-all flex items-center justify-center shadow-sm opacity-50 group-hover/add:opacity-100"
-                            title="在此處插入新行程"
-                        >
+                    <div className="relative flex items-center justify-center py-3 z-10 group/add">
+                        <button onClick={() => onAddClick(dayIndex, timelineIndex + 1, day.city)} className="w-9 h-9 rounded-full bg-white border-2 border-rose-200 text-rose-300 hover:bg-rose-400 hover:text-white hover:scale-110 hover:border-rose-400 transition-all flex items-center justify-center shadow-sm opacity-60 group-hover/add:opacity-100" title="在此處插入新行程">
                             <Plus className="w-5 h-5" />
                         </button>
                     </div>
                 )}
-
             </React.Fragment>
-          ))}
+          )})}
           
-          {/* 若時間軸為空，顯示新增按鈕 */}
+          {/* 新增第一個行程按鈕 */}
           {(!day.timeline || day.timeline.length === 0) && !isPrintMode && (
-             <button onClick={() => onAddClick(dayIndex, 0, day.city)} className="w-full py-8 border-2 border-dashed border-slate-300 rounded-2xl text-slate-400 hover:border-blue-400 hover:text-blue-500 flex flex-col items-center justify-center gap-2 transition-all">
-                <Plus className="w-8 h-8" />
-                <span className="font-bold">新增第一個行程</span>
+             <button onClick={() => onAddClick(dayIndex, 0, day.city)} className="w-full py-12 border-4 border-dashed border-sky-200 rounded-[2rem] text-sky-400 hover:border-sky-400 hover:text-sky-600 hover:bg-sky-50 flex flex-col items-center justify-center gap-3 transition-all group">
+                <div className="p-4 bg-sky-100 rounded-full group-hover:scale-110 transition-transform"><Plus className="w-10 h-10" /></div>
+                <span className="font-bold text-lg">點擊這裡新增第一個可愛行程！✨</span>
              </button>
           )}
         </div>
-        
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
-        
-        {/* Deep Dive Modal */}
-        <DeepDiveModal 
-           isOpen={activeDeepDive !== null}
-           onClose={() => setActiveDeepDive(null)}
-           data={activeDeepDive?.data}
-           isLoading={activeDeepDive?.isLoading}
-           itemTitle={activeDeepDive?.title}
-           onSavePlan={onSavePlan}
-        />
+        <DeepDiveModal isOpen={activeDeepDive !== null} onClose={() => setActiveDeepDive(null)} data={activeDeepDive?.data} isLoading={activeDeepDive?.isLoading} itemTitle={activeDeepDive?.title} onSavePlan={onSavePlan} />
       </div>
     </div>
   );
@@ -3854,145 +3718,103 @@ const App = () => {
   };
 
   return (
-    <div 
-    className="min-h-screen p-4 md:p-8 font-sans selection:bg-blue-200 selection:text-blue-900 print:bg-white print:p-0 bg-cover bg-center bg-fixed"
-    style={{
-      // 這裡設定背景圖，並疊加一層漸層白膜，讓文字保持清晰。您可以更換 url('...') 中的網址
-      backgroundImage: `linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(241, 245, 249, 0.9)), url('https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=2021&auto=format&fit=crop')`
-      }}
-    >
-      {step === 'input' && renderInputForm()}
-      {step === 'loading' && renderLoading()}
-      {step === 'result' && (
-        <>
-          {renderResult()}
-          {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
-          {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
-        </>
-      )}
-      {step === 'saved_list' && renderSavedList()}
-      {/* ✅ 3. 新增：菜單助手 Modal (放在這裡，所有頁面都能吃到) */}
-      <MenuHelperModal 
-        isOpen={isMenuModalOpen}
-        onClose={() => setIsMenuModalOpen(false)}
-        apiKey={apiKey}
-        currencySymbol={currencySettings.symbol}
-      />
+    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-rose-50 to-amber-50 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] p-4 md:p-8 relative overflow-hidden">
+      
+      {/* 2. 背景裝飾貼紙 (浮水印) */}
+      <div className="fixed top-20 left-10 text-sky-200 opacity-20 pointer-events-none animate-pulse"><Whale className="w-24 h-24 -rotate-12" /></div>
+      <div className="fixed bottom-10 right-10 text-rose-200 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
+      <div className="fixed top-40 right-20 text-amber-200 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
 
-      {/* 編輯行程 Modal (您原本已經加好的) */}
-      {editModalData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">更換目的地</h3>
-            <input
-              type="text"
-              value={editModalData.newTitle}
-              onChange={(e) => setEditModalData({ ...editModalData, newTitle: e.target.value })}
-              className="w-full p-3 border border-slate-300 rounded-lg mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="請輸入新的地點名稱..."
-              disabled={isProcessingEdit}
-            />
-            
-            {isProcessingEdit ? (
-               <div className="flex items-center justify-center gap-2 text-blue-600 py-4">
-                  <Loader2 className="w-5 h-5 animate-spin" /> <span className="font-bold animate-pulse">AI 正在蒐集新地點資料...</span>
-               </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <div className="flex gap-3">
-                   <button 
-                     onClick={handleManualEditComplete}
-                     className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-1"
-                   >
-                     {/* ⚠️ 注意：請確認上方 import 有加入 Edit3 */}
-                     <span className="font-bold">手動完成</span> <span className="text-xs">(僅改名)</span>
-                   </button>
-                   <button 
-                     onClick={handleAIEditComplete}
-                     className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-1"
-                   >
-                     <Sparkles className="w-4 h-4" /> AI 完成 (補充資料)
-                   </button>
-                </div>
-                <button 
-                  onClick={() => setEditModalData(null)}
-                  className="w-full py-2 border border-slate-300 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
-                >
-                  取消編輯
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      {/* 👆👆👆 結束 👆👆👆 */}
-      {/* ✅ 新增：圖示選擇器 */}
-      <IconSelectorModal 
-        isOpen={!!iconSelectModalData}
-        onClose={() => setIconSelectModalData(null)}
-        onSelect={handleIconUpdate}
-      />
-      {addModalData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
-            <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-blue-600" /> 新增行程節點
-            </h3>
-            
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="text-xs font-bold text-slate-500 mb-1 block">時間</label>
-                <input
-                  type="time"
-                  value={addModalData.time}
-                  onChange={(e) => setAddModalData({ ...addModalData, time: e.target.value })}
-                  className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-500 mb-1 block">目的地 / 項目名稱</label>
-                <input
-                  type="text"
-                  value={addModalData.title}
-                  onChange={(e) => setAddModalData({ ...addModalData, title: e.target.value })}
-                  className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                  placeholder="例如：東京鐵塔、吃午餐..."
-                  disabled={isProcessingEdit}
-                />
-              </div>
+      {/* 內容容器：這裡設為 max-w-7xl 以確保結果頁 (max-w-6xl) 不會被切到 */}
+      <div className="max-w-7xl mx-auto relative z-10">
+        
+        {/* 3. 主標題區塊：變得更繽紛、圓潤 */}
+        <header className="text-center mb-8 md:mb-12 py-8 px-4 bg-white/60 backdrop-blur-md rounded-[3rem] shadow-xl border-4 border-white relative overflow-hidden">
+          {/* 標題背景裝飾 */}
+          <div className="absolute top-[-20px] left-[-20px] text-yellow-300 opacity-30"><Sun className="w-24 h-24 animate-spin-slow" /></div>
+          <div className="absolute bottom-[-10px] right-[-10px] text-blue-300 opacity-20"><CarFront className="w-20 h-20" /></div>
+          
+          <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-rose-400 to-amber-400 drop-shadow-sm flex items-center justify-center gap-3 relative z-10">
+            <Plane className="w-10 h-10 md:w-14 md:h-14 text-sky-400 animate-bounce-slow" /> 
+            AI 旅遊規劃小幫手 
+            <span className="text-2xl md:text-4xl">✨</span>
+          </h1>
+           {!apiKey && (
+            <p className="text-slate-500 mt-3 text-sm md:text-base bg-white/80 inline-block px-4 py-1 rounded-full">
+              (請先在下方設定輸入 API Key 才能啟用 AI 大腦喔！)
+            </p>
+          )}
+        </header>
+        
+        {/* 👇👇👇 原本的主要內容邏輯接在這裡 👇👇👇 */}
+
+        {step === 'input' && renderInputForm()}
+        {step === 'loading' && renderLoading()}
+        {step === 'result' && (
+          <>
+            {renderResult()}
+            {isCurrencyModalOpen && <CurrencyModal onClose={() => setIsCurrencyModalOpen(false)} currencySettings={currencySettings} setCurrencySettings={setCurrencySettings} />}
+            {isTravelerModalOpen && <TravelerModal travelers={travelerNames} setTravelers={setTravelerNames} onClose={() => setIsTravelerModalOpen(false)} />}
+          </>
+        )}
+        {step === 'saved_list' && renderSavedList()}
+
+        {/* Modal 區塊 */}
+        <MenuHelperModal 
+          isOpen={isMenuModalOpen}
+          onClose={() => setIsMenuModalOpen(false)}
+          apiKey={apiKey}
+          currencySymbol={currencySettings.symbol}
+        />
+        
+        {editModalData && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
+            {/* ... 這裡放原本的編輯 Modal 內容 ... */}
+            <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
+                 {/* 省略... 請確保您原本的 Modal 代碼還在 */}
+                 {/* 因為篇幅關係這裡沒展開，請保留您原本寫好的 editModalData 內容 */}
+                 {/* 如果您之前的代碼不見了，我可以再補給您 */}
+                 <h3 className="text-lg font-bold text-slate-800 mb-4">更換目的地</h3>
+                 {/* ...Input & Buttons... */}
+                 <input type="text" value={editModalData.newTitle} onChange={(e) => setEditModalData({ ...editModalData, newTitle: e.target.value })} className="w-full p-3 border border-slate-300 rounded-lg mb-6 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="請輸入新的地點名稱..." disabled={isProcessingEdit} />
+                 {isProcessingEdit ? (
+                    <div className="flex items-center justify-center gap-2 text-blue-600 py-4"><Loader2 className="w-5 h-5 animate-spin" /> <span className="font-bold animate-pulse">AI 正在蒐集新地點資料...</span></div>
+                 ) : (
+                    <div className="flex flex-col gap-3">
+                        <div className="flex gap-3">
+                           <button onClick={handleManualEditComplete} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-1"><Edit3 className="w-4 h-4" /> <span className="font-bold">手動完成</span></button>
+                           <button onClick={handleAIEditComplete} className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-1"><Sparkles className="w-4 h-4" /> AI 完成</button>
+                        </div>
+                        <button onClick={() => setEditModalData(null)} className="w-full py-2 border border-slate-300 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors">取消編輯</button>
+                    </div>
+                 )}
             </div>
-            
-            {isProcessingEdit ? (
-               <div className="flex items-center justify-center gap-2 text-blue-600 py-4">
-                  <Loader2 className="w-5 h-5 animate-spin" /> <span className="font-bold animate-pulse">AI 正在建立新行程...</span>
-               </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <div className="flex gap-3">
-                   <button 
-                     onClick={handleManualAddComplete}
-                     className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-1"
-                   >
-                     <Edit3 className="w-4 h-4" /> 手動完成
-                   </button>
-                   <button 
-                     onClick={handleAIAddComplete}
-                     className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-1"
-                   >
-                     <Sparkles className="w-4 h-4" /> AI 完成
-                   </button>
-                </div>
-                <button 
-                  onClick={() => setAddModalData(null)}
-                  className="w-full py-2 border border-slate-300 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
-                >
-                  取消
-                </button>
-              </div>
-            )}
           </div>
-        </div>
-      )}
+        )}
+
+        <IconSelectorModal 
+          isOpen={!!iconSelectModalData}
+          onClose={() => setIconSelectModalData(null)}
+          onSelect={handleIconUpdate}
+        />
+        
+        {addModalData && (
+          // ... 原本的新增行程 Modal ...
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
+             {/* 為了節省篇幅，請保留您原本寫好的 addModalData 內容 */}
+             <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md animate-in slide-in-from-bottom-4">
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2"><Plus className="w-5 h-5 text-blue-600" /> 新增行程節點</h3>
+                {/* ... inputs ... */}
+                <div className="space-y-4 mb-6">
+                  <div><label className="text-xs font-bold text-slate-500 mb-1 block">時間</label><input type="time" value={addModalData.time} onChange={(e) => setAddModalData({ ...addModalData, time: e.target.value })} className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono" /></div>
+                  <div><label className="text-xs font-bold text-slate-500 mb-1 block">目的地 / 項目名稱</label><input type="text" value={addModalData.title} onChange={(e) => setAddModalData({ ...addModalData, title: e.target.value })} className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例如：東京鐵塔、吃午餐..." disabled={isProcessingEdit} /></div>
+                </div>
+                {isProcessingEdit ? (<div className="flex items-center justify-center gap-2 text-blue-600 py-4"><Loader2 className="w-5 h-5 animate-spin" /> <span className="font-bold animate-pulse">AI 正在建立新行程...</span></div>) : (<div className="flex flex-col gap-3"><div className="flex gap-3"><button onClick={handleManualAddComplete} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors flex items-center justify-center gap-1"><Edit3 className="w-4 h-4" /> 手動完成</button><button onClick={handleAIAddComplete} className="flex-1 py-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center justify-center gap-1"><Sparkles className="w-4 h-4" /> AI 完成</button></div><button onClick={() => setAddModalData(null)} className="w-full py-2 border border-slate-300 text-slate-500 hover:bg-slate-50 rounded-lg transition-colors">取消</button></div>)}
+             </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 };
