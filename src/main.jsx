@@ -1110,6 +1110,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   const [activeDeepDive, setActiveDeepDive] = useState(null);
   const [editingTimeId, setEditingTimeId] = useState(null);
 
+  // 1. 記帳功能函數
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = {
       id: Date.now().toString(),
@@ -1126,15 +1127,14 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     }
   };
 
+  // 2. 照片功能函數
   const handlePhotoUpload = async (e, timelineIndex) => {
     const file = e.target.files[0];
     if (!file) return;
-
     try {
       const base64 = await compressImage(file);
       const currentItem = day.timeline[timelineIndex];
       const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64];
-      
       updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
     } catch (error) {
       console.error("Image upload failed", error);
@@ -1149,49 +1149,119 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
   };
 
+  // 3. 筆記功能函數
   const handleNoteChange = (timelineIndex, text) => {
     updateItineraryItem(dayIndex, timelineIndex, { user_notes: text });
   };
 
+  // 4. AI 深度導遊函數
   const handleDeepDive = async (timelineIndex, item) => {
-    if (item.ai_details) { setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title }); return; }
-    if (!apiKey) return alert("需要 API Key 才能使用此功能");
-    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
-    const prompt = `針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析... (請保留原本的 prompt)`; 
-    // ⚠️ 注意：請確保這裡使用您之前已經修正過的 gemini-2.5-flash 版本的 handleDeepDive 邏輯
-    // 為了簡潔，這裡假設您會保留原本正確的 handleDeepDive
-    try {
-        // ... 原本的 fetch 邏輯 ...
-        // 暫時用簡單版模擬，請替換回您原本完整的代碼
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
-        const data = await response.json();
-        // ... 解析與更新邏輯 ...
-    } catch (error) { /* ... */ }
-  };
-  
-  const convertToHomeCurrency = (amount) => { if (!currencySettings.rate) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
+    if (item.ai_details) {
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
+      return;
+    }
 
+    if (!apiKey) return alert("需要 API Key 才能使用此功能");
+    
+    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
+
+    // 強制使用 gemini-2.5-flash
+    const TARGET_MODEL = 'gemini-2.5-flash';
+
+    const prompt = `
+      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${item.title}" 
+         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const data = await response.json();
+      
+      if (data.error) throw new Error(data.error.message);
+
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應");
+
+      const cleanedText = cleanJsonResult(resultText);
+      let aiResult = JSON.parse(cleanedText);
+
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
+    } catch (error) {
+      console.error(error);
+      alert("AI 分析失敗: " + error.message);
+      setActiveDeepDive(null);
+    }
+  };
+
+  const convertToHomeCurrency = (amount) => {
+     if (!currencySettings.rate || currencySettings.rate === 0) return '';
+     const homeAmount = Math.round(amount * currencySettings.rate);
+     return `(≈ NT$${homeAmount.toLocaleString()})`;
+  };
 
   return (
     <div className={`bg-white/80 backdrop-blur rounded-3xl shadow-xl min-h-[600px] overflow-hidden border border-white/50 ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
       
-      {/* Day Header 保持不變 */}
+      {/* Day Header */}
       <div className={`bg-slate-800 text-white p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
-         {/* ... (Header 內容) ... */}
-         <div className="relative z-10"><h3 className={`text-3xl md:text-5xl font-extrabold mb-2 ${isPrintMode ? 'text-black text-4xl' : ''}`}>{isPrintMode && <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>}{day.city}</h3><p className={`text-blue-200 text-base md:text-xl font-medium flex items-center gap-2 ${isPrintMode ? 'text-slate-700' : ''}`}><Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${isPrintMode ? 'hidden' : ''}`} /> {day.title}</p></div>
+        {!isPrintMode && (
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/4 blur-3xl"></div>
+        )}
+        <div className="relative z-10">
+           <h3 className={`text-3xl md:text-5xl font-extrabold mb-2 ${isPrintMode ? 'text-black text-4xl' : ''}`}>
+             {isPrintMode && <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>}
+             {day.city}
+           </h3>
+           <p className={`text-blue-200 text-base md:text-xl font-medium flex items-center gap-2 ${isPrintMode ? 'text-slate-700' : ''}`}>
+             <Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${isPrintMode ? 'hidden' : ''}`} /> 
+             {day.title}
+           </p>
+
+           {(day.weather_forecast || day.clothing_suggestion) && (
+             <div className={`mt-4 flex flex-wrap gap-4 ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
+               {day.weather_forecast && (
+                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-blue-50'}`}>
+                   <CloudSun className="w-4 h-4" />
+                   <span>{day.weather_forecast}</span>
+                 </div>
+               )}
+               {day.clothing_suggestion && (
+                 <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-orange-50'}`}>
+                   <Shirt className="w-4 h-4" />
+                   <span>{day.clothing_suggestion}</span>
+                 </div>
+               )}
+             </div>
+           )}
+        </div>
       </div>
 
       {/* Timeline Content */}
       <div className={`p-4 md:p-12 relative ${isPrintMode ? 'p-0' : ''}`}>
-        {/* 時間軸垂直線 */}
         <div className={`absolute left-[35px] md:left-[59px] top-12 bottom-12 w-0.5 bg-gradient-to-b from-slate-200 via-slate-300 to-slate-200 ${isPrintMode ? 'hidden' : ''}`}></div>
-        
         <div className={`space-y-8 md:space-y-12 ${isPrintMode ? 'space-y-6' : ''}`}>
           {day.timeline.map((item, timelineIndex) => (
             <React.Fragment key={timelineIndex}>
-                
-                {/* 項目本身 */}
                 <div className="relative flex gap-4 md:gap-8 group break-inside-avoid">
+                  
                   {/* Icon */}
                   <div className={`w-10 h-10 md:w-14 md:h-14 rounded-full flex items-center justify-center shrink-0 z-10 border-4 md:border-[6px] border-white shadow-lg transition-transform group-hover:scale-110 ${isPrintMode ? 'hidden' : item.type === 'flight' ? 'bg-indigo-500 text-white' : item.type === 'meal' ? 'bg-orange-500 text-white' : item.type === 'transport' ? 'bg-slate-500 text-white' : item.type === 'activity' ? 'bg-pink-500 text-white' : 'bg-blue-500 text-white'}`}>
                     {item.type === 'flight' && <Plane className="w-5 h-5 md:w-6 md:h-6" />}
@@ -1199,13 +1269,12 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                     {item.type === 'meal' && <Utensils className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'hotel' && <Hotel className="w-5 h-5 md:w-6 md:h-6" />}
                     {item.type === 'activity' && <BookOpen className="w-5 h-5 md:w-6 md:h-6" />}
-                    {/* 預設圖示 (如果 type 是 spot) */}
                     {item.type === 'spot' && <MapPin className="w-5 h-5 md:w-6 md:h-6" />}
                   </div>
 
                   <div className={`flex-1 bg-white border border-slate-100 rounded-2xl p-4 md:p-6 shadow-sm hover:shadow-xl transition-all duration-300 transform relative group ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
                     
-                    {/* 編輯/刪除按鈕 (保持不變) */}
+                    {/* 編輯/刪除按鈕 */}
                     <div className="absolute top-2 right-2 flex items-center gap-1 bg-white/90 p-1 rounded-lg shadow-sm z-20 print:hidden border border-slate-100">
                         <button onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-all"><Edit3 className="w-4 h-4" /></button>
                         <button onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-all"><Trash2 className="w-4 h-4" /></button>
@@ -1213,22 +1282,14 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
                     <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                       <div>
-                        {/* ✅ 時間顯示：點擊切換編輯模式 */}
+                        {/* 時間顯示 (可點擊編輯) */}
                         {editingTimeId === timelineIndex && !isPrintMode ? (
                             <input 
                                 type="time"
                                 defaultValue={item.time}
                                 autoFocus
-                                onBlur={(e) => {
-                                    onTimeUpdate(dayIndex, timelineIndex, e.target.value);
-                                    setEditingTimeId(null);
-                                }}
-                                onKeyDown={(e) => {
-                                    if(e.key === 'Enter') {
-                                        onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value);
-                                        setEditingTimeId(null);
-                                    }
-                                }}
+                                onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }}
+                                onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }}
                                 className="bg-blue-50 text-blue-800 px-2 py-1 rounded-lg text-sm font-bold border border-blue-300 outline-none mb-2"
                             />
                         ) : (
@@ -1248,10 +1309,8 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                         </h4>
                       </div>
                       
-                      {/* Action Bar (保持不變) */}
+                      {/* Action Bar */}
                       <div className={`flex items-center gap-2 ${isPrintMode ? 'hidden' : ''}`}>
-                         {/* ... Map, Note, Camera, Bot buttons ... */}
-                         {/* 請將原本的按鈕組複製貼上回這裡 */}
                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="p-2 rounded-full hover:bg-blue-50 text-blue-500"><Map className="w-5 h-5" /></a>
                          <button onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2 rounded-full ${item.user_notes ? 'bg-yellow-50 text-yellow-600' : 'text-slate-400'}`}><FileText className="w-5 h-5" /></button>
                          <label className="p-2 rounded-full hover:bg-slate-50 text-slate-400 cursor-pointer"><input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoUpload(e, timelineIndex)} /><Camera className="w-5 h-5" /></label>
@@ -1261,19 +1320,114 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                     
                     <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line border-l-4 border-slate-100 pl-3 md:pl-4 py-1 ${isPrintMode ? 'text-black border-none pl-0' : ''}`}>{item.description}</div>
 
-                    {/* AI Info, Notes, Photos, Ledger... (保持不變) */}
-                    {/* 這裡請保留原本所有下方的顯示邏輯 (User Notes, Photos, Ledger 等) */}
-                    {/* ... */}
+                    {/* ✅ 補回：AI 深度導遊 (列印版) */}
+                    {isPrintMode && item.ai_details && (
+                      <div className="mt-2 mb-4 p-4 bg-slate-50 rounded-xl border border-slate-200 text-sm break-inside-avoid">
+                          <h5 className="font-bold text-slate-800 mb-2 flex items-center gap-2 border-b border-slate-200 pb-2">
+                             <Sparkles className="w-4 h-4 text-purple-600" /> AI 深度導遊情報
+                          </h5>
+                          <div className="space-y-2 text-slate-700">
+                            <div><span className="font-bold text-purple-700">📍 路線:</span> {safeRender(item.ai_details.route_guide)}</div>
+                            <div><span className="font-bold text-orange-700">🍽️ 必訪:</span> {safeRender(item.ai_details.must_visit_shops)}</div>
+                            <div><span className="font-bold text-red-700">🛡️ 安全:</span> {safeRender(item.ai_details.safety_alert)}</div>
+                            <div className="text-xs text-slate-500 pt-1"><span className="font-bold">🗺️ 地圖:</span> {safeRender(item.ai_details.mini_map_desc)}</div>
+                          </div>
+                      </div>
+                    )}
+
+                    {/* User Notes */}
                     {(activeNote === timelineIndex || item.user_notes) && (<div className="mb-4"><textarea value={item.user_notes||''} onChange={(e)=>handleNoteChange(timelineIndex,e.target.value)} className="w-full p-3 bg-yellow-50/50 border border-yellow-200 rounded-lg text-sm outline-none resize-none" placeholder="筆記..."/></div>)}
+                    
+                    {/* Photos */}
                     {item.photos?.length > 0 && (<div className="flex gap-3 overflow-x-auto pb-2 mb-4"><img src={item.photos[0]} className="h-24 w-24 object-cover rounded-lg"/></div>)}
-                    {!isPrintMode && (<div className="mt-4 pt-4 border-t border-slate-100"><h5 className="text-sm font-bold text-slate-600 mb-2">記帳小本本...</h5></div>)}
+
+                    {/* ✅ 補回：AI 補充資訊 (交通、提醒、菜單) */}
+                    {item.transport_detail && (
+                      <div className={`bg-slate-50 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 border border-slate-100 ${isPrintMode ? 'bg-transparent border border-slate-300' : ''}`}>
+                        <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><Train className="w-4 h-4 text-slate-500" /></div>
+                        <div className="text-xs md:text-sm text-slate-600 flex-1"><span className="block font-bold text-slate-800 mb-1">交通建議</span>{item.transport_detail}</div>
+                      </div>
+                    )}
+                    {item.warnings_tips && (
+                      <div className={`bg-amber-50 border border-amber-100 p-3 md:p-4 rounded-xl mb-3 md:mb-4 flex items-start gap-3 md:gap-4 ${isPrintMode ? 'bg-transparent border border-black' : ''}`}>
+                        <div className={`bg-white p-2 rounded-full shadow-sm shrink-0 ${isPrintMode ? 'hidden' : ''}`}><AlertTriangle className="w-4 h-4 text-amber-500" /></div>
+                        <div className="text-xs md:text-sm text-amber-800 flex-1"><span className="block font-bold text-amber-900 mb-1">重要提醒 (Tips)</span>{item.warnings_tips}</div>
+                      </div>
+                    )}
+                    {item.menu_recommendations && item.menu_recommendations.length > 0 && (
+                      <div className={`mt-4 md:mt-6 border-t border-slate-100 pt-3 md:pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}>
+                        <h5 className="text-xs md:text-sm font-bold text-orange-600 mb-2 md:mb-3 flex items-center gap-2"><Globe className={`w-4 h-4 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5>
+                        <div className={`bg-orange-50/50 rounded-xl overflow-hidden border border-orange-100 overflow-x-auto ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}>
+                          <table className="w-full text-xs md:text-sm text-left min-w-[300px]">
+                            <thead className={`bg-orange-100 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}>
+                              <tr>
+                                <th className="p-2 md:p-3 pl-3 md:pl-4 font-bold">當地菜名</th>
+                                <th className="p-2 md:p-3 font-bold">中文</th>
+                                <th className="p-2 md:p-3 font-bold">預估價格</th>
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>
+                              {item.menu_recommendations.map((menu, mIdx) => (
+                                <tr key={mIdx} className={`hover:bg-orange-50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}>
+                                  <td className="p-2 md:p-3 pl-3 md:pl-4 font-medium text-orange-900">{menu.local}</td>
+                                  <td className="p-2 md:p-3">{menu.cn}</td>
+                                  <td className="p-2 md:p-3 text-slate-500 font-mono">{menu.price}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ✅ 補回：完整記帳功能 (Ledger) */}
+                    {!isPrintMode && (
+                      <div className="mt-4 pt-4 border-t border-slate-100">
+                          <div className="flex items-center justify-between mb-2">
+                            <h5 className="text-sm font-bold text-slate-600 flex items-center gap-2"><Wallet className="w-4 h-4 text-emerald-500" /> 記帳小本本</h5>
+                            <button onClick={() => setEditingExpense(editingExpense === timelineIndex ? null : timelineIndex)} className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors flex items-center gap-1">
+                              {editingExpense === timelineIndex ? <MinusCircle className="w-3 h-3" /> : <Plus className="w-3 h-3" />} {editingExpense === timelineIndex ? '收起' : '新增消費'}
+                            </button>
+                          </div>
+
+                          <div className="space-y-2">
+                            {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
+                              <div key={expense.id} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded border border-slate-100">
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-slate-700">{expense.item} ({expense.category})</span>
+                                  <span className="text-slate-500">{expense.payer} 付款, {expense.splitters.length} 人分攤</span>
+                                  {expense.note && <span className="text-slate-400 italic scale-90 origin-left">{expense.note}</span>}
+                                </div>
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono font-bold text-slate-800">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
+                                    <button onClick={() => removeExpense(expense.id)} className="text-red-300 hover:text-red-500"><X className="w-3 h-3" /></button>
+                                  </div>
+                                  <span className="text-[10px] text-blue-500 font-medium">{convertToHomeCurrency(expense.amount)}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {editingExpense === timelineIndex && (
+                            <ExpenseForm 
+                              travelers={travelers} 
+                              currencySettings={currencySettings}
+                              onSave={(newItem) => {
+                                addExpense(timelineIndex, newItem);
+                                setEditingExpense(null);
+                              }} 
+                              onCancel={() => setEditingExpense(null)}
+                            />
+                          )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* ✅ 插入按鈕 (在每個行程之後顯示) */}
+                {/* 插入按鈕 */}
                 {!isPrintMode && (
                     <div className="relative flex items-center justify-center py-2 z-10 group/add">
-                        {/* 懸浮時才明顯顯示的 + 按鈕 */}
                         <button 
                             onClick={() => onAddClick(dayIndex, timelineIndex + 1, day.city)}
                             className="w-8 h-8 rounded-full bg-slate-100 border border-slate-300 text-slate-400 hover:bg-blue-500 hover:text-white hover:scale-110 hover:border-blue-500 transition-all flex items-center justify-center shadow-sm opacity-50 group-hover/add:opacity-100"
@@ -1287,7 +1441,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
             </React.Fragment>
           ))}
           
-          {/* 若時間軸為空，顯示一個大的新增按鈕 */}
+          {/* 若時間軸為空，顯示新增按鈕 */}
           {(!day.timeline || day.timeline.length === 0) && !isPrintMode && (
              <button onClick={() => onAddClick(dayIndex, 0, day.city)} className="w-full py-8 border-2 border-dashed border-slate-300 rounded-2xl text-slate-400 hover:border-blue-400 hover:text-blue-500 flex flex-col items-center justify-center gap-2 transition-all">
                 <Plus className="w-8 h-8" />
@@ -1297,8 +1451,8 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         </div>
         
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
-
-        {/* --- Deep Dive Modal --- */}
+        
+        {/* Deep Dive Modal */}
         <DeepDiveModal 
            isOpen={activeDeepDive !== null}
            onClose={() => setActiveDeepDive(null)}
