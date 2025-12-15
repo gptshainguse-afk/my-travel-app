@@ -2006,7 +2006,9 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
-  // 使用較快的模型，或者沿用當前設定
+  // ✅ 修正：全面升級為 2.5 系列
+  // 如果使用者選 Pro 模式 -> gemini-2.5-pro
+  // 如果使用者選 Flash 模式 -> gemini-2.5-flash
   const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
   
   const prompt = `
@@ -2034,25 +2036,21 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
     
     const data = await response.json();
 
-    // ✅ 新增：檢查 API 是否回傳錯誤 (例如 Key 無效或配額不足)
     if (data.error) {
         throw new Error(data.error.message || "API 回傳錯誤");
     }
 
-    // ✅ 新增：檢查是否有回傳內容 (避免被安全過濾導致 crash)
     const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!resultText) {
         throw new Error("AI 無法生成內容 (可能因安全設定被過濾，或模型忙碌中)");
     }
 
-    // 使用全域定義的 cleanJsonResult (如果有的話)，或是用正規表達式清理
     const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
     
     return JSON.parse(cleanedText);
 
   } catch (error) {
     console.error("單點生成失敗:", error);
-    // 這裡拋出錯誤，讓外層的 handleAIEditComplete 可以接住並 alert
     throw error;
   }
 }
@@ -2071,7 +2069,7 @@ const fileToBase64 = (file) => {
 const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [selectedImages, setSelectedImages] = useState([]);
   const [imagePreviews, setImagePreviews] = useState([]);
-  const [menuData, setMenuData] = useState(null); // 存放翻譯後的菜單資料
+  const [menuData, setMenuData] = useState(null);
   const [isAnalyzingMenu, setIsAnalyzingMenu] = useState(false);
   
   const [budget, setBudget] = useState('');
@@ -2085,7 +2083,6 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     if (files.length === 0) return;
     setSelectedImages([...selectedImages, ...files]);
 
-    // 建立預覽圖
     const newPreviews = files.map(file => URL.createObjectURL(file));
     setImagePreviews([...imagePreviews, ...newPreviews]);
   };
@@ -2097,7 +2094,6 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
     setIsAnalyzingMenu(true);
     try {
-        // 準備圖片資料
         const imageParts = await Promise.all(selectedImages.map(async (file) => ({
             inlineData: {
                 data: await fileToBase64(file),
@@ -2132,18 +2128,20 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
           }
         `;
         
-        // 注意：這裡要使用支援圖片的模型，例如 gemini-pro-vision 或最新的 flash
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+        // ✅ 修正：使用 gemini-2.5-flash (視覺辨識速度快)
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{
-                    parts: [{ text: prompt }, ...imageParts] // 文字 prompt + 圖片資料
+                    parts: [{ text: prompt }, ...imageParts]
                 }]
             })
         });
         
         const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
         const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim();
         setMenuData(JSON.parse(cleanedText));
@@ -2176,12 +2174,15 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
            請直接以一段人性化的繁體中文回答，像在對話一樣，不需要 JSON 格式。
         `;
 
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`, {
+         // ✅ 修正：使用 gemini-2.5-pro (推理能力較強，適合做推薦)
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
         const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        
         setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
 
     } catch (error) {
@@ -2191,109 +2192,105 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     }
   };
   
-  // --- UI 渲染部分 (簡化版) ---
+  // ... (UI 渲染部分保持不變) ...
   if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
-            <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
-            <button onClick={onClose}><X /></button>
-        </div>
-
-        <div className="p-6 overflow-y-auto flex-1 space-y-8">
-            {/* 1. 圖片上傳區 */}
-            <div>
-                <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
-                    {imagePreviews.map((src, idx) => (
-                        <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
-                    ))}
-                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
-                        <Camera className="w-6 h-6 text-slate-400" />
-                        <span className="text-xs text-slate-500 mt-1">加入照片</span>
-                        <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
-                    </label>
-                </div>
-                <button 
-                    onClick={handleAnalyzeMenu} 
-                    disabled={isAnalyzingMenu || selectedImages.length === 0}
-                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
-                >
-                    {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
-                    {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
-                </button>
+     // ... 原本的 JSX ...
+     <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
+        {/* ... */}
+        {/* 請保留原本的 UI 結構，這部分沒有變動 */}
+        <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
+            <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
+                <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
+                <button onClick={onClose}><X /></button>
             </div>
-
-            {/* 2. 菜單結果顯示區 */}
-            {menuData && (
-                <div className="space-y-6 animate-in slide-in-from-bottom-4">
-                    {menuData.categories.map((cat, catIdx) => (
-                        <div key={catIdx}>
-                            <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
-                            <div className="space-y-3">
-                                {cat.items.map((item, itemIdx) => (
-                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
-                                        <div>
-                                            <div className="font-bold text-slate-800">{item.translated_name}</div>
-                                            <div className="text-xs text-slate-500">{item.original_name}</div>
-                                            {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
-                                        </div>
-                                        <div className="text-right font-mono font-bold text-orange-600">
-                                            {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
-                                             item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
-                                             '--'}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-
-        {/* 3. 底部推薦控制區 (只有在有菜單資料時顯示) */}
-        {menuData && (
-            <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
-                <div className="flex gap-3 mb-3">
-                    <input 
-                        type="number" 
-                        placeholder={`預算 (例如: 2000${currencySymbol})`}
-                        value={budget}
-                        onChange={e=>setBudget(e.target.value)}
-                        className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
-                    />
-                    <input 
-                        type="text" 
-                        placeholder="特殊要求 (例如: 不吃牛、要全熟、對蝦過敏)"
-                        value={requests}
-                        onChange={e=>setRequests(e.target.value)}
-                        className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
-                    />
+            
+            <div className="p-6 overflow-y-auto flex-1 space-y-8">
+                <div>
+                    <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
+                        {imagePreviews.map((src, idx) => (
+                            <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
+                        ))}
+                         <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
+                            <Camera className="w-6 h-6 text-slate-400" />
+                            <span className="text-xs text-slate-500 mt-1">加入照片</span>
+                            <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
+                        </label>
+                    </div>
                     <button 
-                        onClick={handleRecommend}
-                        disabled={isRecommending}
-                        className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors"
+                        onClick={handleAnalyzeMenu} 
+                        disabled={isAnalyzingMenu || selectedImages.length === 0}
+                        className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
                     >
-                        {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
+                        {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
+                        {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
                     </button>
                 </div>
-                {recommendation && (
-                    <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
-                        <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
-                        {recommendation}
+
+                {menuData && (
+                    <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                        {menuData.categories.map((cat, catIdx) => (
+                            <div key={catIdx}>
+                                <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
+                                <div className="space-y-3">
+                                    {cat.items.map((item, itemIdx) => (
+                                        <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
+                                            <div>
+                                                <div className="font-bold text-slate-800">{item.translated_name}</div>
+                                                <div className="text-xs text-slate-500">{item.original_name}</div>
+                                                {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
+                                            </div>
+                                            <div className="text-right font-mono font-bold text-orange-600">
+                                                {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
+                                                 item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
+                                                 '--'}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
-        )}
-      </div>
-    </div>
+
+            {menuData && (
+                <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
+                    <div className="flex gap-3 mb-3">
+                        <input 
+                            type="number" 
+                            placeholder={`預算 (例如: 2000${currencySymbol})`}
+                            value={budget}
+                            onChange={e=>setBudget(e.target.value)}
+                            className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
+                        />
+                        <input 
+                            type="text" 
+                            placeholder="特殊要求 (例如: 不吃牛、要全熟、對蝦過敏)"
+                            value={requests}
+                            onChange={e=>setRequests(e.target.value)}
+                            className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
+                        />
+                        <button 
+                            onClick={handleRecommend}
+                            disabled={isRecommending}
+                            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors"
+                        >
+                            {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
+                        </button>
+                    </div>
+                    {recommendation && (
+                        <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
+                            <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
+                            {recommendation}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+     </div>
   );
 };
-
-export default MenuHelperModal;
 
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
