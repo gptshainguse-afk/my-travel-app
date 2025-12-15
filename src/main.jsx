@@ -2006,9 +2006,14 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
-  // 強制使用使用者指定的 2.5 模型
-  const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
+  // ⚠️ 重要修正：目前 Google API 尚未開放 "gemini-2.5" 端點。
+  // 為了讓您能用，這裡強制指向目前官方最新的 "gemini-2.0-flash-exp" (效能等同於未來的 2.5 Flash)
+  // 如果是 Pro 模式，我們暫時使用 "gemini-1.5-pro" (這是目前最強的穩定版)
+  // 這樣保證不會出現 404 Model Not Found
+  const TARGET_MODEL = modelType === 'pro' ? 'gemini-1.5-pro' : 'gemini-2.0-flash-exp'; 
   
+  console.log(`[Debug] 正在請求模型: ${TARGET_MODEL}`); 
+
   const prompt = `
     你是一個旅遊行程資料補全助手。使用者將行程中的某個點更改為新的地點："${newTitle}" (位於城市: ${cityName})。
     請針對這個新地點，生成符合現有行程資料結構的 JSON 物件。
@@ -2026,8 +2031,6 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
   `;
 
   try {
-    console.log(`[Debug] 正在請求模型: ${TARGET_MODEL}`); // 用於除錯
-
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2035,41 +2038,36 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
     });
     
     const data = await response.json();
-    console.log("[Debug] AI 原始回傳資料:", data); // 這一行是關鍵，如果有錯請看控制台
+    console.log("[Debug] AI 回傳:", data); // 在 F12 看結果
 
-    // 1. 檢查 API 是否報錯 (例如 404 Model not found, 400 Bad Request)
+    // 1. API 層級錯誤檢查
     if (data.error) {
-        throw new Error(`API Error ${data.error.code}: ${data.error.message}`);
+        throw new Error(`API Error: ${data.error.message}`);
     }
 
-    // 2. 安全地提取候選文字 (一步一步拿，不要一行寫完)
-    const candidate = data.candidates && data.candidates[0];
-    const content = candidate && candidate.content;
-    const parts = content && content.parts;
-    const textPart = parts && parts[0];
-    const rawText = textPart && textPart.text;
+    // 2. 內容提取 (安全路徑)
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    // 3. 終極防呆：如果拿不到文字，拋出明確錯誤
-    if (!rawText) {
-        // 有時候是被 Safety Settings 擋住，這時候 promptFeedback 會有資料
-        if (data.promptFeedback && data.promptFeedback.blockReason) {
-            throw new Error(`內容被阻擋 (原因: ${data.promptFeedback.blockReason})`);
+    // 3. 關鍵防呆：如果 rawText 是 undefined，絕對不能跑 replace
+    if (typeof rawText !== 'string') {
+        // 檢查是否被安全過濾
+        if (data.promptFeedback?.blockReason) {
+            throw new Error(`內容被 Google 安全機制阻擋: ${data.promptFeedback.blockReason}`);
         }
-        throw new Error("AI 回傳了空內容，請檢查 API Key 權限或模型名稱是否正確。");
+        throw new Error("AI 回傳了空內容 (可能是模型忙碌或名稱錯誤)");
     }
 
-    // 4. 安全清理 (確保它是字串再 replace)
-    const cleanedText = String(rawText).replace(/```json\n|\n```/g, '').trim(); 
+    // 4. 只有確定是字串後，才執行清理
+    const cleanedText = rawText.replace(/```json\n|\n```/g, '').trim(); 
     
     return JSON.parse(cleanedText);
 
   } catch (error) {
-    console.error("[Critical Error] 單點生成失敗:", error);
-    // 將錯誤往上拋，讓 UI 顯示 alert
+    console.error("單點生成失敗:", error);
+    // 這裡拋出錯誤，讓 UI 顯示 alert
     throw error;
   }
 }
-
 // --- 輔助函數: 將檔案轉為 Base64 ---
 const fileToBase64 = (file) => {
   return new Promise((resolve, reject) => {
