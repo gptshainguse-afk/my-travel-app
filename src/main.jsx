@@ -3635,6 +3635,8 @@ const App = () => {
              apiKey={apiKey}
              updateItineraryItem={updateItineraryItem}
              onSavePlan={saveCurrentPlan}
+             onDeleteClick={handleDeleteItem} 
+             onEditClick={openEditModal}
            />
         </div>
 
