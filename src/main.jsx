@@ -2006,9 +2006,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
-  // ✅ 修正：全面升級為 2.5 系列
-  // 如果使用者選 Pro 模式 -> gemini-2.5-pro
-  // 如果使用者選 Flash 模式 -> gemini-2.5-flash
+  // 強制使用使用者指定的 2.5 模型
   const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
   
   const prompt = `
@@ -2028,6 +2026,8 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
   `;
 
   try {
+    console.log(`[Debug] 正在請求模型: ${TARGET_MODEL}`); // 用於除錯
+
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2035,26 +2035,40 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
     });
     
     const data = await response.json();
+    console.log("[Debug] AI 原始回傳資料:", data); // 這一行是關鍵，如果有錯請看控制台
 
+    // 1. 檢查 API 是否報錯 (例如 404 Model not found, 400 Bad Request)
     if (data.error) {
-        throw new Error(data.error.message || "API 回傳錯誤");
+        throw new Error(`API Error ${data.error.code}: ${data.error.message}`);
     }
 
-    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) {
-        throw new Error("AI 無法生成內容 (可能因安全設定被過濾，或模型忙碌中)");
+    // 2. 安全地提取候選文字 (一步一步拿，不要一行寫完)
+    const candidate = data.candidates && data.candidates[0];
+    const content = candidate && candidate.content;
+    const parts = content && content.parts;
+    const textPart = parts && parts[0];
+    const rawText = textPart && textPart.text;
+
+    // 3. 終極防呆：如果拿不到文字，拋出明確錯誤
+    if (!rawText) {
+        // 有時候是被 Safety Settings 擋住，這時候 promptFeedback 會有資料
+        if (data.promptFeedback && data.promptFeedback.blockReason) {
+            throw new Error(`內容被阻擋 (原因: ${data.promptFeedback.blockReason})`);
+        }
+        throw new Error("AI 回傳了空內容，請檢查 API Key 權限或模型名稱是否正確。");
     }
 
-    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
+    // 4. 安全清理 (確保它是字串再 replace)
+    const cleanedText = String(rawText).replace(/```json\n|\n```/g, '').trim(); 
     
     return JSON.parse(cleanedText);
 
   } catch (error) {
-    console.error("單點生成失敗:", error);
+    console.error("[Critical Error] 單點生成失敗:", error);
+    // 將錯誤往上拋，讓 UI 顯示 alert
     throw error;
   }
 }
-修正重點：
 
 // --- 輔助函數: 將檔案轉為 Base64 ---
 const fileToBase64 = (file) => {
