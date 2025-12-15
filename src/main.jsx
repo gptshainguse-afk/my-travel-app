@@ -1407,8 +1407,33 @@ const handleDeepDive = async (timelineIndex, item) => {
       
       if (data.error) throw new Error(data.error.message);
 
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應內容");
+
+      // 使用強化版清理函數
+      const cleanedText = cleanJsonResult(resultText);
+      console.log("DeepDive Cleaned JSON:", cleanedText); // Debug 用
+
+      let aiResult;
+      try {
+         aiResult = JSON.parse(cleanedText);
+      } catch (e) {
+         console.error("Parse Error Raw:", resultText);
+         throw new Error("AI 回傳格式錯誤，無法解析");
+      }
+
+      // 更新全域狀態 (存檔用)
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
       
-  };
+      // 更新 Modal 狀態 (顯示用)
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
+
+    } catch (error) {
+      console.error(error);
+      alert("AI 分析失敗: " + error.message);
+      setActiveDeepDive(null); // 關閉視窗或顯示錯誤
+    }
+};
 const ApiKeyTutorialModal = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
