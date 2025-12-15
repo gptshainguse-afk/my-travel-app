@@ -165,20 +165,29 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
   if (!isOpen) return null;
   
   const getMultiStopMapUrl = () => {
+    // 1. 如果有 AI 產生的多點路線 (Walking Route)
     if (data?.walking_route && Array.isArray(data.walking_route) && data.walking_route.length > 0) {
-      // 1. 清理地點名稱
+      
+      // 清理地點名稱 (移除 "起點:", "終點:" 等前綴)
       const cleanWaypoints = data.walking_route.map(pt => {
          return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
       });
-      // 2. 組合 URL
+      
+      // 組合路徑：將地點用 '/' 連接 (例如: 地點A/地點B/地點C)
       const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
+      
+      // ✅ 修正 1: 使用正確的 Google Maps Dir (導航) 網址
+      // ✅ 修正 2: 加上 $ 符號正確引用變數
+      // data=!4m2!4m1!3e2 是強制開啟「步行模式」的參數
       return `https://www.google.com/maps/dir/${path}/data=!4m2!4m1!3e2`;
     }
-    // 降級備案
+    
+    // 2. 降級備案：如果沒有多點資料，就搜尋單一地點
+    // ✅ 修正: 改為標準的 search 網址
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
   };
 
-  // ✅ 修正：呼叫函數來取得正確的 URL
+  // 呼叫函數取得最終網址
   const mapUrl = getMultiStopMapUrl();
 
   return createPortal(
@@ -2073,12 +2082,19 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                     {imagePreviews.map((src, idx) => (
                         <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200 shrink-0" />
                     ))}
-                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
+                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0 relative">
                         <Camera className="w-6 h-6 text-slate-400" />
                         <span className="text-xs text-slate-500 mt-1">加入照片</span>
-                        {/* ✅ 修正：確保 input 能正確觸發 onChange */}
-                        <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
-                    </label>
+                        
+                        {/* 這裡原本是 hidden，現在改為絕對定位 + 透明，直接蓋在整個方塊上 */}
+                        <input 
+                            type="file" 
+                            accept="image/*" // iOS 認得這個，會跳出圖庫/拍照選項
+                            multiple 
+                            onChange={handleImageSelect} 
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
+                        />
+                    </div>
                 </div>
                 <button 
                     onClick={handleAnalyzeMenu} 
