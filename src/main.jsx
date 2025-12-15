@@ -13,7 +13,7 @@ import {
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
   ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
   CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw,
-  Palmtree, Whale, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, sun
+  Palmtree, Whale, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, Sun
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -163,25 +163,23 @@ const safeRender = (content) => {
 // --- AI 深度規劃彈窗 (Portal) ---
 const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
   if (!isOpen) return null;
+  
   const getMultiStopMapUrl = () => {
     if (data?.walking_route && Array.isArray(data.walking_route) && data.walking_route.length > 0) {
-      // 1. 清理地點名稱 (移除 "起點:", "終點:" 等前綴，只留地名以便 Google 搜尋)
+      // 1. 清理地點名稱
       const cleanWaypoints = data.walking_route.map(pt => {
          return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
       });
-      
-      // 2. 組合 URL (使用 encodeURIComponent 確保中文正常)
+      // 2. 組合 URL
       const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
-      
-      // data=!4m2!4m1!3e2 強制開啟步行模式
       return `https://www.google.com/maps/dir/${path}/data=!4m2!4m1!3e2`;
     }
-    
-    // 降級備案：如果沒有多點資料，就導航到終點
+    // 降級備案
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
   };
 
-  const mapUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(itemTitle || '')}&travelmode=walking`;
+  // ✅ 修正：呼叫函數來取得正確的 URL
+  const mapUrl = getMultiStopMapUrl();
 
   return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-0 md:p-4 animate-in fade-in duration-200">
