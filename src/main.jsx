@@ -297,20 +297,21 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
 };
 
 // --- Simple Pie Chart ---
-const SimplePieChart = ({ data, title, currencySettings }) => {
+const SimplePieChart = ({ data, title }) => {
   if (!data || data.length === 0) return <div className="text-center text-slate-400 text-sm py-4">尚無資料</div>;
   
-  const total = data.reduce((acc, item) => acc + item.value, 0);
-  if (total === 0) return <div className="text-center text-slate-400 text-sm py-4">金額為 0</div>;
+  // 計算總金額 (全部轉為台幣)
+  const totalTWD = data.reduce((acc, item) => acc + item.valueTWD, 0);
 
-  const { symbol, rate } = currencySettings;
+  if (totalTWD === 0) return <div className="text-center text-slate-400 text-sm py-4">金額為 0</div>;
 
   let cumulativePercent = 0;
   const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#6366f1', '#84cc16'];
 
   const slices = data.map((item, index) => {
     const startPercent = cumulativePercent;
-    const percent = item.value / total;
+    // 使用台幣價值來計算百分比
+    const percent = item.valueTWD / totalTWD;
     cumulativePercent += percent;
     const endPercent = cumulativePercent;
 
@@ -324,7 +325,7 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
       ? `M 1 0 A 1 1 0 1 1 -1 0 A 1 1 0 1 1 1 0 Z`
       : `M 0 0 L ${x1} ${y1} A 1 1 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
 
-    return { path: pathData, color: colors[index % colors.length], label: item.label, value: item.value, percent };
+    return { path: pathData, color: colors[index % colors.length], label: item.label, valueTWD: item.valueTWD, percent };
   });
 
   return (
@@ -343,15 +344,10 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
               <span className="text-slate-600 font-medium">{slice.label}</span>
               <span className="text-slate-400">
                 {(slice.percent * 100).toFixed(1)}% 
-                <span className="ml-1 text-slate-500 font-mono">
-                  {symbol}{Math.round(slice.value).toLocaleString()}
+                {/* 顯示台幣金額 */}
+                <span className="ml-1 text-blue-500 font-bold font-mono">
+                  NT${Math.round(slice.valueTWD).toLocaleString()}
                 </span>
-                {/* ✅ 新增：單項目的台幣換算 */}
-                {rate && rate > 0 && (
-                   <span className="ml-1 text-blue-400 font-medium">
-                     (≈NT${Math.round(slice.value * rate).toLocaleString()})
-                   </span>
-                )}
               </span>
             </div>
           ))}
@@ -361,13 +357,11 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
       {/* 總金額顯示區 */}
       <div className="mt-3 flex flex-col items-center border-t border-slate-100 pt-2 w-full">
         <div className="text-sm font-bold text-slate-800">
-           總計: {symbol}{Math.round(total).toLocaleString()}
+           總計 (約合台幣): <span className="text-blue-600">NT${Math.round(totalTWD).toLocaleString()}</span>
         </div>
-        {rate && rate > 0 && (
-           <div className="text-xs text-blue-500 font-medium mt-0.5">
-             (≈ NT$ {Math.round(total * rate).toLocaleString()})
-           </div>
-        )}
+        <div className="text-[10px] text-slate-400">
+           *因包含多種幣別，統一轉換為台幣統計
+        </div>
       </div>
     </div>
   );
@@ -375,9 +369,8 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
 
 // --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
-  // viewMode: 'category' | 'personal' (個人支出) | 'shared' (代墊分攤)
   const [viewMode, setViewMode] = useState('category'); 
-  const { symbol, rate } = currencySettings;
+  // 注意：這裡我們不再依賴全域 currencySettings 來計算總額，而是依賴每一筆帳目自己的匯率
 
   const relevantExpenses = useMemo(() => {
     if (dayIndex !== null) {
@@ -386,29 +379,38 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return expenses;
   }, [expenses, dayIndex]);
 
-  // 1. 消費分類
+  // 輔助函數：取得該筆消費的台幣價值
+  const getTWDValue = (expense) => {
+      // 優先使用該筆帳紀錄的匯率，如果沒有(舊資料)，則使用當前全域匯率
+      const rate = expense.exchangeRate || currencySettings.rate || 0.21;
+      return Number(expense.amount) * rate;
+  };
+
+  // 1. 消費分類 (以台幣計算)
   const categoryData = useMemo(() => {
     const map = {};
     relevantExpenses.forEach(e => {
-      map[e.category] = (map[e.category] || 0) + Number(e.amount);
+      const val = getTWDValue(e);
+      map[e.category] = (map[e.category] || 0) + val;
     });
-    return Object.entries(map).map(([label, value]) => ({ label, value }));
-  }, [relevantExpenses]);
+    return Object.entries(map).map(([label, valueTWD]) => ({ label, valueTWD }));
+  }, [relevantExpenses, currencySettings.rate]);
 
-  // 2. 個人支出 (消費觀點)
+  // 2. 個人支出 (以台幣計算)
   const personalData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
     relevantExpenses.forEach(e => {
-      const splitAmount = Number(e.amount) / (e.splitters.length || 1);
+      const totalValTWD = getTWDValue(e);
+      const splitVal = totalValTWD / (e.splitters.length || 1);
       e.splitters.forEach(person => {
-        map[person] = (map[person] || 0) + splitAmount;
+        map[person] = (map[person] || 0) + splitVal;
       });
     });
-    return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
-  }, [relevantExpenses, travelers]);
+    return Object.entries(map).map(([label, valueTWD]) => ({ label, valueTWD })).filter(i => i.valueTWD > 0);
+  }, [relevantExpenses, travelers, currencySettings.rate]);
 
-  // 3. 代墊分攤 (支付觀點 - 用於圓餅圖顯示誰墊了多少錢)
+  // 3. 代墊分攤 (以台幣計算)
   const sharedData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
@@ -416,63 +418,55 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
       if (e.splitters && e.splitters.length > 1 && e.payer !== '各付各') {
           const payer = e.payer;
           if (map[payer] !== undefined) {
-             map[payer] += Number(e.amount);
+             // 累加的是台幣價值
+             map[payer] += getTWDValue(e);
           }
       }
     });
-    return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
-  }, [relevantExpenses, travelers]);
+    return Object.entries(map).map(([label, valueTWD]) => ({ label, valueTWD })).filter(i => i.valueTWD > 0);
+  }, [relevantExpenses, travelers, currencySettings.rate]);
 
-  // 4. ✅ 新增：自動結算建議 (Smart Settlement Logic)
+  // 4. 自動結算建議 (以台幣計算)
   const settlementSuggestions = useMemo(() => {
     if (viewMode !== 'shared') return [];
 
-    // Step A: 計算每個人的「淨額 (Balance)」
-    // 正數 = 多付了 (要收錢)
-    // 負數 = 少付了 (要給錢)
-    const balances = {};
+    const balances = {}; // 紀錄每個人欠款或應收的「台幣」金額
     travelers.forEach(t => balances[t] = 0);
 
     relevantExpenses.forEach(e => {
-       // 只計算有多人分攤且非各付各的項目
        if (e.splitters && e.splitters.length > 1 && e.payer !== '各付各') {
-           const amount = Number(e.amount);
+           const amountTWD = getTWDValue(e);
            
-           // 付款人：+ 金額 (代表他對團體有貢獻)
-           if (balances[e.payer] !== undefined) balances[e.payer] += amount;
+           // 付款人：+ 台幣價值
+           if (balances[e.payer] !== undefined) balances[e.payer] += amountTWD;
 
-           // 分攤人：- 應付金額 (代表他消耗了團體資源)
-           const splitAmount = amount / e.splitters.length;
+           // 分攤人：- 應付的台幣價值
+           const splitAmountTWD = amountTWD / e.splitters.length;
            e.splitters.forEach(p => {
-               if (balances[p] !== undefined) balances[p] -= splitAmount;
+               if (balances[p] !== undefined) balances[p] -= splitAmountTWD;
            });
        }
     });
 
-    // Step B: 分類債務人與債權人
-    let debtors = [];   // 要給錢的人 (Balance < 0)
-    let creditors = []; // 要收錢的人 (Balance > 0)
+    let debtors = [];
+    let creditors = [];
 
     Object.entries(balances).forEach(([name, amount]) => {
-        const val = Math.round(amount); // 四捨五入避免小數點誤差
-        if (val < -1) debtors.push({ name, amount: val }); // 寬容度設為 1 元
+        const val = Math.round(amount); 
+        if (val < -1) debtors.push({ name, amount: val });
         else if (val > 1) creditors.push({ name, amount: val });
     });
 
-    // 排序：金額大的排前面 (貪婪演算法，減少交易次數)
-    debtors.sort((a, b) => a.amount - b.amount); // 負最多的排前面 (-500, -200...)
-    creditors.sort((a, b) => b.amount - a.amount); // 正最多的排前面 (500, 200...)
+    debtors.sort((a, b) => a.amount - b.amount); 
+    creditors.sort((a, b) => b.amount - a.amount);
 
-    // Step C: 配對平帳
     const suggestions = [];
-    let i = 0; // debtor index
-    let j = 0; // creditor index
+    let i = 0; 
+    let j = 0; 
 
     while (i < debtors.length && j < creditors.length) {
         const debtor = debtors[i];
         const creditor = creditors[j];
-
-        // 交易金額 = min(債務人欠的錢, 債權人該收的錢)
         const amountToSettle = Math.min(Math.abs(debtor.amount), creditor.amount);
 
         if (amountToSettle > 0) {
@@ -482,29 +476,24 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
                 amount: amountToSettle
             });
         }
-
-        // 更新餘額
         debtor.amount += amountToSettle;
         creditor.amount -= amountToSettle;
-
-        // 如果平帳了，移動指標
         if (Math.abs(debtor.amount) < 1) i++;
         if (creditor.amount < 1) j++;
     }
 
     return suggestions;
-  }, [relevantExpenses, travelers, viewMode]);
+  }, [relevantExpenses, travelers, viewMode, currencySettings.rate]);
 
 
-  // 根據模式選擇要顯示的資料
   const currentData = viewMode === 'category' ? categoryData 
                     : viewMode === 'personal' ? personalData 
                     : sharedData;
 
   const getTitle = () => {
-      if (viewMode === 'category') return '消費項目比例';
-      if (viewMode === 'personal') return '個人總消費 (含獨享)';
-      return '代墊公款總額 (誰先付了錢?)';
+      if (viewMode === 'category') return '消費項目比例 (台幣)';
+      if (viewMode === 'personal') return '個人總消費 (含獨享/台幣)';
+      return '代墊公款總額 (台幣)';
   };
 
   if (relevantExpenses.length === 0) {
@@ -521,10 +510,9 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
       <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-center gap-3">
         <h3 className="font-bold text-slate-700 flex items-center gap-2">
           <PieChart className="w-5 h-5 text-blue-600" />
-          {dayIndex !== null ? `Day ${dayIndex + 1} 帳本結算` : '整趟旅程 總帳本結算'}
+          {dayIndex !== null ? `Day ${dayIndex + 1} 帳本結算 (自動轉匯台幣)` : '整趟旅程 總帳本結算 (自動轉匯台幣)'}
         </h3>
         
-        {/* 切換按鈕區塊 */}
         <div className="flex bg-slate-200 rounded-lg p-1 text-[10px] md:text-xs font-bold w-full md:w-auto">
           <button 
             onClick={() => setViewMode('category')}
@@ -554,13 +542,12 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
           currencySettings={currencySettings}
         />
         
-        {/* ✅ 新增：如果是代墊模式，且有需要平帳的建議，就顯示出來 */}
         {viewMode === 'shared' && (
             <div className="mt-6 pt-4 border-t border-slate-100">
                 {settlementSuggestions.length > 0 ? (
                     <div className="bg-blue-50/50 rounded-xl p-4 border border-blue-100">
                         <h5 className="font-bold text-blue-800 text-sm mb-3 flex items-center gap-2">
-                            <CheckCircle2 className="w-4 h-4" /> 結算建議 (誰該給誰錢?)
+                            <CheckCircle2 className="w-4 h-4" /> 結算建議 (最終應付台幣)
                         </h5>
                         <div className="space-y-2">
                             {settlementSuggestions.map((item, idx) => (
@@ -572,17 +559,13 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
                                     </div>
                                     <div className="text-right">
                                         <div className="font-mono font-bold text-slate-800">
-                                            {symbol}{item.amount.toLocaleString()}
+                                            NT$ {item.amount.toLocaleString()}
                                         </div>
-                                        {rate && rate > 0 && (
-                                            <div className="text-[10px] text-slate-400">
-                                                (≈NT$ {Math.round(item.amount * rate).toLocaleString()})
-                                            </div>
-                                        )}
                                     </div>
                                 </div>
                             ))}
                         </div>
+                        <p className="text-[10px] text-blue-400 mt-2 text-center">* 系統已自動將所有不同幣別之消費轉換為台幣進行平帳計算</p>
                     </div>
                 ) : (
                     currentData.length > 0 && (
@@ -592,7 +575,6 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
                     )
                 )}
                 
-                {/* 若完全無資料 */}
                 {currentData.length === 0 && (
                     <div className="text-center text-xs text-slate-400 mt-2">
                         (目前沒有多人代墊款項)
@@ -607,7 +589,15 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
 // --- Expense Form ---
 const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   const [form, setForm] = useState({
-    item: '', category: '美食', amount: '', payer: travelers[0] || '', splitters: travelers, note: ''
+    item: '', 
+    category: '美食', 
+    amount: '', 
+    payer: travelers[0] || '', 
+    splitters: travelers, 
+    note: '',
+    // ✅ 新增：預設帶入當前的全域匯率設定
+    currencyCode: currencySettings.code, 
+    exchangeRate: currencySettings.rate 
   });
 
   const isGoDutch = form.payer === '各付各';
@@ -635,7 +625,10 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     onSave({
       ...form,
       amount: finalAmount,
-      note: isGoDutch ? `${form.note} (各付各: 單價 ${form.amount} x ${form.splitters.length}人)` : form.note
+      // 備註現在會多顯示幣別，方便辨識
+      note: isGoDutch 
+        ? `${form.note} (${form.currencyCode} 各付各: ${form.amount} x ${form.splitters.length}人)` 
+        : form.note
     });
   };
 
@@ -646,7 +639,8 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
            <input name="item" placeholder="消費項目 (如: 拉麵)" value={form.item} onChange={handleChange} className="w-full p-2 border rounded outline-none focus:border-emerald-500" />
         </div>
         <div className="col-span-2 md:col-span-1 relative">
-           <div className="absolute left-3 top-2 text-slate-400">{currencySettings.symbol}</div>
+           {/* 顯示當前使用的幣別符號 */}
+           <div className="absolute left-3 top-2 text-slate-400 font-bold">{currencySettings.symbol}</div>
            <input 
              name="amount" 
              type="number" 
@@ -655,8 +649,13 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
              onChange={handleChange} 
              className="w-full pl-8 p-2 border rounded outline-none focus:border-emerald-500" 
            />
+           {/* ✅ 提示：讓用戶知道這筆帳是依據什麼匯率記的 */}
+           <div className="absolute right-2 top-2.5 text-[10px] text-emerald-600 bg-emerald-100 px-1.5 rounded">
+             匯率 {form.exchangeRate}
+           </div>
         </div>
       </div>
+      {/* ... (中間的分類與付款人選擇保持不變) ... */}
       <div className="grid grid-cols-2 gap-3 mb-3">
         <select name="category" value={form.category} onChange={handleChange} className="p-2 border rounded bg-white">
           <option>美食</option><option>娛樂</option><option>門票</option><option>購物</option><option>交通</option><option>小費</option><option>其他</option>
@@ -666,11 +665,12 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
           <option value="各付各">各付各 (Go Dutch)</option>
         </select>
       </div>
-      
+
       <div className="mb-3 bg-white p-2 rounded border border-slate-100">
         <div className="flex justify-between items-center mb-1">
            <div className="text-xs text-slate-500">分攤者 (預設全員):</div>
-           {isGoDutch && <div className="text-xs text-emerald-600 font-bold">總金額將自動計算: {currencySettings.symbol}{Number(form.amount) * form.splitters.length}</div>}
+           {/* 這裡也加上幣別顯示 */}
+           {isGoDutch && <div className="text-xs text-emerald-600 font-bold">總金額: {currencySettings.symbol}{Number(form.amount) * form.splitters.length}</div>}
         </div>
         <div className="flex flex-wrap gap-2">
           {travelers.map(t => (
