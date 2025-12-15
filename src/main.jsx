@@ -1228,23 +1228,47 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   return (
     <div className={`bg-white/80 backdrop-blur rounded-3xl shadow-xl min-h-[600px] overflow-hidden border border-white/50 ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
       
-      {/* Day Header */}
+      {/* Day Header (已修改) */}
       <div className={`bg-slate-800 text-white p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
         {!isPrintMode && (
           <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/4 blur-3xl"></div>
         )}
         <div className="relative z-10">
-           <h3 className={`text-3xl md:text-5xl font-extrabold mb-2 ${isPrintMode ? 'text-black text-4xl' : ''}`}>
-             {isPrintMode && <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>}
-             {day.city}
-           </h3>
-           <p className={`text-blue-200 text-base md:text-xl font-medium flex items-center gap-2 ${isPrintMode ? 'text-slate-700' : ''}`}>
-             <Sparkles className={`w-4 h-4 md:w-5 md:h-5 ${isPrintMode ? 'hidden' : ''}`} /> 
-             {day.title}
-           </p>
+           {/* 大標題 (城市) - 點擊可編輯 */}
+           <div className="flex items-end gap-2 mb-2">
+               {isPrintMode ? (
+                   <h3 className="text-4xl font-extrabold text-black">
+                       <span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>
+                       {day.city}
+                   </h3>
+               ) : (
+                   <input 
+                       value={day.city}
+                       onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })}
+                       className="bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/50"
+                       placeholder="輸入城市名稱"
+                   />
+               )}
+           </div>
 
+           {/* 副標題 (主題) - 點擊可編輯 */}
+           <div className={`flex items-center gap-2 text-blue-200 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : ''}`}>
+             <Sparkles className={`w-4 h-4 md:w-5 md:h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> 
+             {isPrintMode ? (
+                 <span>{day.title}</span>
+             ) : (
+                 <input 
+                    value={day.title}
+                    onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })}
+                    className="bg-transparent border-b border-transparent hover:border-blue-200/50 focus:border-blue-200 focus:outline-none w-full md:w-1/2 transition-colors placeholder-blue-200/50"
+                    placeholder="輸入行程主題"
+                 />
+             )}
+           </div>
+
+           {/* 天氣與穿著 - 含刷新按鈕 */}
            {(day.weather_forecast || day.clothing_suggestion) && (
-             <div className={`mt-4 flex flex-wrap gap-4 ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
+             <div className={`mt-4 flex flex-wrap gap-4 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>
                {day.weather_forecast && (
                  <div className={`flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/10 ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'text-blue-50'}`}>
                    <CloudSun className="w-4 h-4" />
@@ -1256,6 +1280,18 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                    <Shirt className="w-4 h-4" />
                    <span>{day.clothing_suggestion}</span>
                  </div>
+               )}
+               
+               {/* 刷新按鈕 */}
+               {!isPrintMode && (
+                   <button 
+                     onClick={handleWeatherClick}
+                     disabled={isRefreshingWeather}
+                     className={`p-1.5 rounded-full bg-white/10 hover:bg-white/20 transition-all ${isRefreshingWeather ? 'animate-spin opacity-50' : ''}`}
+                     title="重新預測天氣與穿著"
+                   >
+                     <RefreshCw className="w-4 h-4 text-white" />
+                   </button>
                )}
              </div>
            )}
