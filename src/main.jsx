@@ -1342,11 +1342,26 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
                   {/* Card */}
                   <div className={`flex-1 bg-white rounded-[2rem] p-5 md:p-7 shadow-[0_4px_20px_rgb(0,0,0,0.06)] hover:shadow-[0_8px_25px_rgb(0,0,0,0.1)] transition-all duration-300 transform relative group border-2 border-slate-50 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
-                    <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-white p-1.5 rounded-full shadow-sm z-20 print:hidden opacity-0 group-hover:opacity-100 transition-all scale-90 group-hover:scale-100">
-                        <button onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-2 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-full transition-all"><Edit3 className="w-4 h-4" /></button>
-                        <button onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-all"><Trash2 className="w-4 h-4" /></button>
+                    <div className="absolute top-3 right-3 flex items-center gap-1 bg-white/90 backdrop-blur-sm p-1 rounded-full shadow-sm z-20 print:hidden border border-slate-200">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} 
+                        className="p-2 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-full transition-colors"
+                        title="編輯"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                      
+                      {/* 中間加一條分隔線，讓按鈕區隔更清楚 */}
+                      <div className="w-px h-4 bg-slate-200"></div>
+                  
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} 
+                        className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors"
+                        title="刪除"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-
                     <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                       <div>
                         {editingTimeId === timelineIndex && !isPrintMode ? (
