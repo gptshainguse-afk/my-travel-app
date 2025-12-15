@@ -12,7 +12,7 @@ import {
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
   ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
-  CheckCircle2, Image as ImageIcon, ChefHat, Edit3
+  CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
@@ -1104,11 +1104,14 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onIconClick}) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
   const [activeDeepDive, setActiveDeepDive] = useState(null);
   const [editingTimeId, setEditingTimeId] = useState(null);
+  
+  // ✅ 新增：控制天氣刷新的 Loading 狀態
+  const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
 
   // 1. 記帳功能函數
   const addExpense = (timelineIndex, newItem) => {
@@ -1215,6 +1218,11 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
      if (!currencySettings.rate || currencySettings.rate === 0) return '';
      const homeAmount = Math.round(amount * currencySettings.rate);
      return `(≈ NT$${homeAmount.toLocaleString()})`;
+  };
+  const handleWeatherClick = async () => {
+      setIsRefreshingWeather(true);
+      await onRefreshWeather(dayIndex, day.city, day.date);
+      setIsRefreshingWeather(false);
   };
 
   return (
@@ -2268,6 +2276,37 @@ const IconSelectorModal = ({ isOpen, onClose, onSelect }) => {
     </div>
   );
 };
+async function regenerateDayWeather(city, date, apiKey) {
+  const TARGET_MODEL = 'gemini-2.5-flash'; 
+  
+  const prompt = `
+    請查詢並預測 "${city}" 在日期 "${date}" 的天氣狀況。
+    請回傳一個純 JSON 物件，包含以下兩個欄位 (繁體中文)：
+    1. "weather_forecast": 簡短天氣敘述與氣溫 (例如: "🌤️ 多雲時晴 18°C-24°C，降雨機率 10%")
+    2. "clothing_suggestion": 針對該氣溫的具體穿著建議 (例如: "早晚溫差大，建議洋蔥式穿搭，帶件薄外套")
+    
+    只需回傳 JSON，不要 Markdown。
+  `;
+
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+    });
+    
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
+    return JSON.parse(cleanedText);
+
+  } catch (error) {
+    console.error("天氣更新失敗:", error);
+    throw error;
+  }
+}
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
@@ -2356,6 +2395,33 @@ const App = () => {
     newItinerary.days[dayIndex].timeline[timelineIndex].time = newTime;
     // 為了保持順序，通常修改時間後應該重新排序，但在這裡我們先只更新時間，讓使用者自己決定順序
     setItineraryData(newItinerary);
+  };
+
+  // ✅ 1. 新增：更新整天的大標題資訊 (標題、副標、天氣)
+  const updateDayInfo = (dayIndex, updates) => {
+    setItineraryData(prev => {
+        const newDays = [...prev.days];
+        // 更新該天 (dayIndex) 的特定欄位
+        newDays[dayIndex] = { ...newDays[dayIndex], ...updates };
+        return { ...prev, days: newDays };
+    });
+  };
+
+  // ✅ 2. 新增：處理天氣刷新按鈕
+  const handleWeatherRefresh = async (dayIndex, city, date) => {
+    if (!apiKey) return alert("需要 API Key");
+    
+    // 這裡我們不使用全域 loading，而是讓 DayTimeline 自己處理 loading 狀態
+    // 所以這裡回傳 promise 讓組件去 await
+    return regenerateDayWeather(city, date, apiKey).then(result => {
+        updateDayInfo(dayIndex, {
+            weather_forecast: result.weather_forecast,
+            clothing_suggestion: result.clothing_suggestion
+        });
+        alert(`已更新 ${date} 的天氣預報！`);
+    }).catch(err => {
+        alert("天氣更新失敗: " + err.message);
+    });
   };
 
   // ✅ 3. 新增：打開新增視窗
@@ -3717,6 +3783,8 @@ const App = () => {
              onTimeUpdate={handleTimeUpdate}
              onAddClick={openAddModal}
              onIconClick={(dIdx, tIdx) => setIconSelectModalData({ dayIndex: dIdx, timelineIndex: tIdx })}
+             onUpdateDayInfo={updateDayInfo}
+             onRefreshWeather={handleWeatherRefresh}
            />
         </div>
 
