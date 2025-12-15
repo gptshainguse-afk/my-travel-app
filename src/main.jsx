@@ -162,32 +162,20 @@ const safeRender = (content) => {
 };
 
 // --- AI 深度規劃彈窗 (Portal) ---
-const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan }) => {
+const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenerate }) => {
   if (!isOpen) return null;
   
   const getMultiStopMapUrl = () => {
-    // 1. 如果有 AI 產生的多點路線 (Walking Route)
     if (data?.walking_route && Array.isArray(data.walking_route) && data.walking_route.length > 0) {
-      
-      // 清理地點名稱 (移除 "起點:", "終點:" 等前綴)
       const cleanWaypoints = data.walking_route.map(pt => {
          return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
       });
-      
-      // 組合路徑：將地點用 '/' 連接 (例如: 地點A/地點B/地點C)
       const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
-      
-      // ✅ 修正：使用正確的 Google Maps Dir 網址，並補上 $ 符號
-      // data=!4m2!4m1!3e2 強制開啟步行模式
       return `https://www.google.com/maps/dir/${path}/data=!4m2!4m1!3e2`;
     }
-    
-    // 2. 降級備案：搜尋單一地點
-    // ✅ 修正：使用正確的 Search 網址，並補上 $ 符號
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
   };
 
-  // ✅ 修正：直接呼叫函數，不要再有額外的 const mapUrl = ... 定義
   const mapUrl = getMultiStopMapUrl();
 
   return createPortal(
@@ -216,6 +204,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
             </div>
           ) : data ? (
             <div className="space-y-4 md:space-y-6 pb-4">
+               {/* 路線指引 */}
                <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-purple-100">
                   <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
                     <MapPin className="w-5 h-5 text-purple-500" /> 最佳路線指引
@@ -236,6 +225,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                   )} 
                </div>
 
+               {/* 必吃與治安 */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                  <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-orange-100">
                     <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
@@ -264,7 +254,6 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
                >
                   <h4 className="flex items-center gap-2 font-bold text-blue-800 mb-2 text-sm md:text-base">
                     <Map className="w-5 h-5" /> 
-                    {/* 動態改變標題 */}
                     {data.walking_route ? '開啟多點步行導航 (A➝B➝C)' : '迷你地圖導航'}
                     <ExternalLink className="w-4 h-4 opacity-50 group-hover:opacity-100 transition-opacity ml-auto" />
                   </h4>
@@ -284,20 +273,20 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
           )}
         </div>
 
-        {/* Footer */}
+        {/* Footer Buttons */}
         <div className="p-4 border-t border-slate-100 bg-white flex gap-3 justify-end shrink-0 pb-8 md:pb-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
           <button 
             onClick={onClose} 
-            className="px-4 py-2 md:px-5 md:py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors flex items-center gap-2 text-sm md:text-base"
+            className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors"
           >
-            <ArrowLeft className="w-4 h-4" /> <span className="hidden md:inline">返回行程</span><span className="md:hidden">返回</span>
+            返回
           </button>
           {!isLoading && data && (
             <button 
-              onClick={() => { onSavePlan(); alert('規劃已儲存！'); }} 
-              className="px-4 py-2 md:px-5 md:py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2 text-sm md:text-base"
+              onClick={onRegenerate} 
+              className="px-5 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2"
             >
-              <Save className="w-4 h-4" /> <span className="hidden md:inline">儲存規劃</span><span className="md:hidden">儲存</span>
+              <RefreshCw className="w-4 h-4" /> 重新生成
             </button>
           )}
         </div>
@@ -1199,7 +1188,82 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       setActiveDeepDive(null); // 關閉視窗或顯示錯誤
     }
 };
-  
+  const handleRegenerateDeepDive = async () => {
+    // 從 activeDeepDive 狀態中取得當前的 timelineIndex 和 title
+    const { timelineIndex, title } = activeDeepDive;
+    
+    if (!apiKey) return alert("需要 API Key");
+    
+    // 設定 Loading，保留 title，清空 data 以顯示 Loading 動畫
+    setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null });
+
+    const TARGET_MODEL = 'gemini-2.5-flash';
+    const prompt = `
+      針對景點/地點: "${title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${title}" 
+         ] (請提供單純的地點名稱，方便 Google Maps 搜尋)
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應");
+
+      const cleanedText = cleanJsonResult(resultText);
+      let aiResult = JSON.parse(cleanedText);
+
+      // 更新行程資料
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      
+      // 更新 Modal 顯示
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title });
+
+    } catch (error) {
+      console.error(error);
+      alert("重新生成失敗: " + error.message);
+      // 失敗時保持原本的視窗開啟，但停止 loading
+      setActiveDeepDive(prev => ({ ...prev, isLoading: false })); 
+    }
+  };
+
+  // ... (其他代碼)
+
+  return (
+    // ...
+    <div className="...">
+       {/* ... */}
+       
+       {/* ✅ 修改 DeepDiveModal 的呼叫，傳入 onRegenerate */}
+       <DeepDiveModal 
+           isOpen={activeDeepDive !== null}
+           onClose={() => setActiveDeepDive(null)}
+           data={activeDeepDive?.data}
+           isLoading={activeDeepDive?.isLoading}
+           itemTitle={activeDeepDive?.title}
+           onRegenerate={handleRegenerateDeepDive} // 傳入新函數
+           // onSavePlan={onSavePlan} <--- 移除這個
+        />
+    </div>
+  );
   // 定義不同類型的可愛配色方案
   const typeColors = {
     flight: 'bg-sky-100 text-sky-500 ring-sky-200',
