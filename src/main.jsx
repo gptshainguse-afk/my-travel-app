@@ -2005,10 +2005,11 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 };
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
-async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
-  const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash'; 
+async function regenerateSingleItem(newTitle, cityName, apiKey) {
+  // 強制使用 2.5 Flash，避免 Pro 模型的配額限制 (Rate Limit)
+  const TARGET_MODEL = 'gemini-2.5-flash'; 
   
-  console.log(`[Debug] 正在請求模型: ${TARGET_MODEL}`); 
+  console.log(`[AI Edit] 正在使用模型: ${TARGET_MODEL} 進行生成...`);
 
   const prompt = `
     你是一個旅遊行程資料補全助手。使用者將行程中的某個點更改為新的地點："${newTitle}" (位於城市: ${cityName})。
@@ -2034,33 +2035,22 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
     });
     
     const data = await response.json();
-    console.log("[Debug] AI 回傳:", data); // 在 F12 看結果
 
-    // 1. API 層級錯誤檢查
     if (data.error) {
-        throw new Error(`API Error: ${data.error.message}`);
+        // 直接將 API 的原始錯誤拋出，方便除錯，不隱藏問題
+        throw new Error(data.error.message || `API Error (${TARGET_MODEL})`);
     }
 
-    // 2. 內容提取 (安全路徑)
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    // 3. 關鍵防呆：如果 rawText 是 undefined，絕對不能跑 replace
-    if (typeof rawText !== 'string') {
-        // 檢查是否被安全過濾
-        if (data.promptFeedback?.blockReason) {
-            throw new Error(`內容被 Google 安全機制阻擋: ${data.promptFeedback.blockReason}`);
-        }
-        throw new Error("AI 回傳了空內容 (可能是模型忙碌或名稱錯誤)");
+    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!resultText) {
+        throw new Error("AI 無法生成內容 (Empty Response)");
     }
 
-    // 4. 只有確定是字串後，才執行清理
-    const cleanedText = rawText.replace(/```json\n|\n```/g, '').trim(); 
-    
+    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
     return JSON.parse(cleanedText);
 
   } catch (error) {
     console.error("單點生成失敗:", error);
-    // 這裡拋出錯誤，讓 UI 顯示 alert
     throw error;
   }
 }
