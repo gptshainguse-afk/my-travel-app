@@ -88,6 +88,28 @@ const usePersistentState = (key, initialValue) => {
   return [state, setState];
 };
 
+const cleanJsonResult = (text) => {
+  if (!text) return "{}";
+  try {
+    // 1. 先移除 Markdown 標記 (```json 和 ```)
+    let cleaned = text.replace(/```json/gi, '').replace(/```/g, '');
+    
+    // 2. 尋找第一個 '{' 和最後一個 '}'
+    const firstOpen = cleaned.indexOf('{');
+    const lastClose = cleaned.lastIndexOf('}');
+    
+    // 3. 如果有找到合法的括號，就只擷取中間這段
+    if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+      cleaned = cleaned.substring(firstOpen, lastClose + 1);
+    }
+    
+    return cleaned.trim();
+  } catch (e) {
+    console.error("JSON Clean Error", e);
+    return "{}";
+  }
+};
+
 // --- 圖片壓縮工具 ---
 const compressImage = (file) => {
   return new Promise((resolve) => {
