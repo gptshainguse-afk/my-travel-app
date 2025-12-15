@@ -110,27 +110,6 @@ const compressImage = (file) => {
   });
 };
 
-// --- JSON 清理工具 ---
-const cleanJsonResult = (text) => {
-  if (!text) return "{}";
-  try {
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      return text.substring(firstBrace, lastBrace + 1);
-    }
-    // 使用一般字串取代，避免正則表達式在某些環境下的編譯問題
-    let cleaned = text;
-    if (cleaned.includes('```json')) cleaned = cleaned.split('```json')[1];
-    if (cleaned.includes('```')) cleaned = cleaned.split('```')[0];
-    return cleaned.trim();
-  } catch (e) {
-    console.error("JSON Clean Error", e);
-    return text;
-  }
-};
-
 // --- 安全渲染文字 ---
 const safeRender = (content) => {
   if (content === null || content === undefined) return '';
