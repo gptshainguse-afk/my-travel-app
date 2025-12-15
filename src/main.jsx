@@ -2020,10 +2020,15 @@ async function regenerateSingleItem(newTitle, cityName, apiKey) {
     2. 物件必須包含以下欄位：
        - "title": "${newTitle}" (固定不變)
        - "description": 一段關於此地點的簡短吸引人描述 (50字內)。
-       - "location_query": 用於 Google Maps 搜尋的精確關鍵字 (例如："台北101觀景台")。
-       - "transport_detail": 若此點通常需要特定交通方式到達(如渡輪、纜車)，請簡述，否則留空字串。
-       - "suggested_duration": 建議停留時間 (例如: "1.5小時")。
-       - "type": 根據地點性質判斷，填入 "activity" 或 "meal" 或 "spot"。
+       - "location_query": 用於 Google Maps 搜尋的精確關鍵字。
+       - "transport_detail": 若此點通常需要特定交通方式到達，請簡述，否則留空。
+       - "suggested_duration": 建議停留時間。
+       - "type": 根據地點性質填入 "activity", "meal", "spot" 等。
+       
+       // ✅ 新增：要求回傳這兩個關鍵欄位
+       - "warnings_tips": 針對此地點的重要提醒 (例如：需提前預約、禁帶外食、排隊需知)，若無則留空。
+       - "menu_recommendations": 若此地點是餐廳或有販售食物，請提供 3-5 樣推薦菜色陣列。格式：[{ "local": "原文", "cn": "中文", "price": "預估價格" }]。若非餐廳，回傳 [] 空陣列。
+
     3. 請確保資料真實準確。
   `;
 
@@ -2947,7 +2952,6 @@ const App = () => {
 
     setIsProcessingEdit(true);
     try {
-      // 呼叫 API 取得新地點的基本資料 (描述、建議時間等)
       const aiResult = await regenerateSingleItem(newTitle, city, apiKey);
       
       const newItinerary = { ...itineraryData };
@@ -2955,13 +2959,19 @@ const App = () => {
 
       // 合併資料邏輯：
       // 1. ...oldItemData: 保留使用者手動輸入的筆記 (user_notes)、照片 (photos)、記帳 (expenses)
-      // 2. ...aiResult: 用 AI 查到的新基本資料覆蓋 (description, transport_detail...)
-      // 3. ai_details: null: ❌ 強制移除舊地點的深度推薦，避免資料錯亂
+      // 2. 覆蓋舊有的 AI 生成欄位，避免殘留
       newItinerary.days[dayIndex].timeline[itemIndex] = {
           ...oldItemData, 
+          
+          // ✅ 先清空舊的 AI 資料 (預設值)
+          warnings_tips: "",
+          menu_recommendations: [],
+          ai_details: null,
+
+          // ✅ 再填入 AI 新生成的資料 (aiResult 裡面的值會覆蓋上面的預設值)
           ...aiResult,    
-          title: newTitle,
-          ai_details: null // ✅ 這裡清空舊的深度推薦
+          
+          title: newTitle 
       };
 
       setItineraryData(newItinerary);
