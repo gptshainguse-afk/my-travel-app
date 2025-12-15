@@ -13,7 +13,7 @@ import {
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
   ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
   CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw,
-  Palmtree, Whale, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, Sun
+  Palmtree, Fish, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, Sun
 } from 'lucide-react';
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
