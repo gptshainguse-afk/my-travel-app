@@ -2031,18 +2031,32 @@ async function regenerateSingleItem(newTitle, cityName, apiKey, modelType) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
     });
+    
     const data = await response.json();
+
+    // ✅ 新增：檢查 API 是否回傳錯誤 (例如 Key 無效或配額不足)
+    if (data.error) {
+        throw new Error(data.error.message || "API 回傳錯誤");
+    }
+
+    // ✅ 新增：檢查是否有回傳內容 (避免被安全過濾導致 crash)
     const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    // 假設您有一個 cleanJsonResult 函數在作用域內
-    // const cleanedText = cleanJsonResult(resultText); 
-    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); // 暫時替代
+    if (!resultText) {
+        throw new Error("AI 無法生成內容 (可能因安全設定被過濾，或模型忙碌中)");
+    }
+
+    // 使用全域定義的 cleanJsonResult (如果有的話)，或是用正規表達式清理
+    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
+    
     return JSON.parse(cleanedText);
+
   } catch (error) {
     console.error("單點生成失敗:", error);
+    // 這裡拋出錯誤，讓外層的 handleAIEditComplete 可以接住並 alert
     throw error;
   }
 }
-
+修正重點：
 
 // --- 輔助函數: 將檔案轉為 Base64 ---
 const fileToBase64 = (file) => {
