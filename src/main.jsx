@@ -152,17 +152,16 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onSavePlan
          return pt.replace(/^(起點|途經\d*|終點)[:：]\s*/, '').trim();
       });
       
-      // 組合路徑：將地點用 '/' 連接 (例如: 地點A/地點B/地點C)
+      // 組合路徑：將地點用 '/' 連接
       const path = cleanWaypoints.map(w => encodeURIComponent(w)).join('/');
       
-      // ✅ 修正 1: 使用正確的 Google Maps Dir (導航) 網址
-      // ✅ 修正 2: 加上 $ 符號正確引用變數
-      // data=!4m2!4m1!3e2 是強制開啟「步行模式」的參數
+      // ✅ 修正：使用正確的 Google Maps Dir 網址，並補上 $ 符號
+      // data=!4m2!4m1!3e2 強制開啟步行模式
       return `https://www.google.com/maps/dir/${path}/data=!4m2!4m1!3e2`;
     }
     
-    // 2. 降級備案：如果沒有多點資料，就搜尋單一地點
-    // ✅ 修正: 改為標準的 search 網址
+    // 2. 降級備案：搜尋單一地點
+    // ✅ 修正：使用正確的 Search 網址，並補上 $ 符號
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(itemTitle || '')}`;
   };
 
