@@ -2922,42 +2922,50 @@ const App = () => {
     if (!newTitle.trim() || newTitle === currentTitle) {
       setEditModalData(null); return;
     }
-  
+
     const newItinerary = { ...itineraryData };
-    // 只更新標題，保留其他所有欄位 (包含使用者可能添加的備註等隱藏欄位)
-    newItinerary.days[dayIndex].timeline[itemIndex].title = newTitle;
-    // 更新搜尋關鍵字，讓地圖按鈕能運作
-    newItinerary.days[dayIndex].timeline[itemIndex].location_query = newTitle;
+    const item = newItinerary.days[dayIndex].timeline[itemIndex];
+
+    // 更新標題與搜尋關鍵字
+    item.title = newTitle;
+    item.location_query = newTitle;
+    
+    // ✅ 關鍵修正：因為地點換了，舊的「AI 深度導遊 (推薦/路線)」已經無效，必須清空
+    // 這樣介面上的紫色按鈕會重置，您可以再點一次來生成新地點的推薦
+    item.ai_details = null; 
     
     setItineraryData(newItinerary);
-    updateRelatedExpenses(currentTitle, newTitle); // 同步更新記帳名稱
+    updateRelatedExpenses(currentTitle, newTitle);
     setEditModalData(null);
   };
-  
-  // --- 核心邏輯：執行編輯 (AI 完成) ---
+
+  // --- 修正後的 handleAIEditComplete (AI 編輯) ---
   const handleAIEditComplete = async () => {
     const { dayIndex, itemIndex, newTitle, currentTitle, city } = editModalData;
     if (!newTitle.trim()) return alert("請輸入新的地點名稱");
     if (!apiKey) return alert("需要 API Key 才能使用 AI 功能");
-  
+
     setIsProcessingEdit(true);
     try {
-      // 呼叫上面定義的 API 函數
-      const aiResult = await regenerateSingleItem(newTitle, city, apiKey, modelType);
+      // 呼叫 API 取得新地點的基本資料 (描述、建議時間等)
+      const aiResult = await regenerateSingleItem(newTitle, city, apiKey);
       
       const newItinerary = { ...itineraryData };
       const oldItemData = newItinerary.days[dayIndex].timeline[itemIndex];
-  
-      // 關鍵：合併資料。使用 AI 的新資料覆蓋舊資料，
-      // 但如果 oldItemData 有 AI 沒有回傳的欄位 (例如使用者手動加的 note)，會被保留下來。
+
+      // 合併資料邏輯：
+      // 1. ...oldItemData: 保留使用者手動輸入的筆記 (user_notes)、照片 (photos)、記帳 (expenses)
+      // 2. ...aiResult: 用 AI 查到的新基本資料覆蓋 (description, transport_detail...)
+      // 3. ai_details: null: ❌ 強制移除舊地點的深度推薦，避免資料錯亂
       newItinerary.days[dayIndex].timeline[itemIndex] = {
-          ...oldItemData, // 先展開舊資料
-          ...aiResult,    // 用 AI 新資料覆蓋 (description, query 等)
-          title: newTitle // 確保標題是新的
+          ...oldItemData, 
+          ...aiResult,    
+          title: newTitle,
+          ai_details: null // ✅ 這裡清空舊的深度推薦
       };
-  
+
       setItineraryData(newItinerary);
-      updateRelatedExpenses(currentTitle, newTitle); // 同步更新記帳名稱
+      updateRelatedExpenses(currentTitle, newTitle);
       setEditModalData(null);
     } catch (error) {
       alert("AI 生成失敗: " + error.message);
