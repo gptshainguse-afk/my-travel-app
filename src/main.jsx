@@ -2031,17 +2031,22 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
 
-  // 1. 處理圖片選擇
+  // ✅ 修正：使用函數式更新 (prev => ...) 確保圖片能正確疊加
   const handleImageSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
-    setSelectedImages([...selectedImages, ...files]);
 
+    // 更新檔案列表
+    setSelectedImages(prev => [...prev, ...files]);
+
+    // 更新預覽圖
     const newPreviews = files.map(file => URL.createObjectURL(file));
-    setImagePreviews([...imagePreviews, ...newPreviews]);
+    setImagePreviews(prev => [...prev, ...newPreviews]);
+    
+    // 清空 input 讓同檔名可以重複選 (如果需要)
+    e.target.value = '';
   };
 
-  // 2. 核心: 呼叫 AI 分析菜單圖片
   const handleAnalyzeMenu = async () => {
     if (selectedImages.length === 0) return alert("請先選擇菜單照片");
     if (!apiKey) return alert("請輸入 API Key");
@@ -2054,6 +2059,9 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 mimeType: file.type
             }
         })));
+
+        // 強制使用 2.5-flash (或是 1.5-flash) 以支援圖片
+        const TARGET_MODEL = 'gemini-1.5-flash'; 
 
         const prompt = `
           你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
@@ -2082,8 +2090,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
           }
         `;
         
-        // ✅ 修正：使用 gemini-2.5-flash (視覺辨識速度快)
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2108,7 +2115,6 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     }
   };
 
-  // 3. 核心: 呼叫 AI 進行推薦
   const handleRecommend = async () => {
     if (!menuData) return;
     if (!apiKey) return alert("請輸入 API Key");
@@ -2117,26 +2123,18 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     try {
         const prompt = `
            我有一份已整理好的菜單資料 (JSON): ${JSON.stringify(menuData)}
-           
            我的需求如下:
            - 預算限制: ${budget ? budget + currencySymbol : '無限制'}
            - 特殊要求: ${requests || '無'}
-
-           請根據以上菜單與需求，擔任一位專業的點餐顧問。
-           請推薦一套組合 (或是幾樣單品)，並說明推薦理由，以及總共大約多少錢。
-           
-           請直接以一段人性化的繁體中文回答，像在對話一樣，不需要 JSON 格式。
+           請擔任一位專業點餐顧問，推薦一套組合並說明理由。請直接用繁體中文回答。
         `;
 
-         // ✅ 修正：使用 gemini-2.5-pro (推理能力較強，適合做推薦)
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`, {
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
         const data = await response.json();
-        if (data.error) throw new Error(data.error.message);
-        
         setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
 
     } catch (error) {
@@ -2146,106 +2144,123 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     }
   };
   
-  // ... (UI 渲染部分保持不變) ...
   if (!isOpen) return null;
-  return (
-     // ... 原本的 JSX ...
-     <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
-        {/* ... */}
-        {/* 請保留原本的 UI 結構，這部分沒有變動 */}
-        <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
-            <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
-                <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
-                <button onClick={onClose}><X /></button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1 space-y-8">
-                <div>
-                    <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
-                        {imagePreviews.map((src, idx) => (
-                            <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
-                        ))}
-                         <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
-                            <Camera className="w-6 h-6 text-slate-400" />
-                            <span className="text-xs text-slate-500 mt-1">加入照片</span>
-                            <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
-                        </label>
-                    </div>
-                    <button 
-                        onClick={handleAnalyzeMenu} 
-                        disabled={isAnalyzingMenu || selectedImages.length === 0}
-                        className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
-                    >
-                        {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
-                        {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
-                    </button>
-                </div>
 
-                {menuData && (
-                    <div className="space-y-6 animate-in slide-in-from-bottom-4">
-                        {menuData.categories.map((cat, catIdx) => (
-                            <div key={catIdx}>
-                                <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
-                                <div className="space-y-3">
-                                    {cat.items.map((item, itemIdx) => (
-                                        <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
-                                            <div>
-                                                <div className="font-bold text-slate-800">{item.translated_name}</div>
-                                                <div className="text-xs text-slate-500">{item.original_name}</div>
-                                                {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
-                                            </div>
-                                            <div className="text-right font-mono font-bold text-orange-600">
-                                                {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
-                                                 item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
-                                                 '--'}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
+        <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
+            <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
+            <button onClick={onClose}><X /></button>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1 space-y-8">
+            <div>
+                <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
+                    {imagePreviews.map((src, idx) => (
+                        <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200 shrink-0" />
+                    ))}
+                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg cursor-pointer hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0">
+                        <Camera className="w-6 h-6 text-slate-400" />
+                        <span className="text-xs text-slate-500 mt-1">加入照片</span>
+                        {/* ✅ 修正：確保 input 能正確觸發 onChange */}
+                        <input type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
+                    </label>
+                </div>
+                <button 
+                    onClick={handleAnalyzeMenu} 
+                    disabled={isAnalyzingMenu || selectedImages.length === 0}
+                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
+                >
+                    {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
+                    {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
+                </button>
             </div>
 
             {menuData && (
-                <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
-                    <div className="flex gap-3 mb-3">
-                        <input 
-                            type="number" 
-                            placeholder={`預算 (例如: 2000${currencySymbol})`}
-                            value={budget}
-                            onChange={e=>setBudget(e.target.value)}
-                            className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
-                        />
-                        <input 
-                            type="text" 
-                            placeholder="特殊要求 (例如: 不吃牛、要全熟、對蝦過敏)"
-                            value={requests}
-                            onChange={e=>setRequests(e.target.value)}
-                            className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400"
-                        />
-                        <button 
-                            onClick={handleRecommend}
-                            disabled={isRecommending}
-                            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors"
-                        >
-                            {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
-                        </button>
-                    </div>
-                    {recommendation && (
-                        <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
-                            <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
-                            {recommendation}
+                <div className="space-y-6 animate-in slide-in-from-bottom-4">
+                    {menuData.categories.map((cat, catIdx) => (
+                        <div key={catIdx}>
+                            <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
+                            <div className="space-y-3">
+                                {cat.items.map((item, itemIdx) => (
+                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
+                                        <div>
+                                            <div className="font-bold text-slate-800">{item.translated_name}</div>
+                                            <div className="text-xs text-slate-500">{item.original_name}</div>
+                                            {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
+                                        </div>
+                                        <div className="text-right font-mono font-bold text-orange-600">
+                                            {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
+                                             item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
+                                             '--'}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
-                    )}
+                    ))}
                 </div>
             )}
         </div>
-     </div>
+
+        {menuData && (
+            <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
+                <div className="flex gap-3 mb-3">
+                    <input type="number" placeholder={`預算 (例如: 2000${currencySymbol})`} value={budget} onChange={e=>setBudget(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400" />
+                    <input type="text" placeholder="特殊要求 (例如: 不吃牛、對蝦過敏)" value={requests} onChange={e=>setRequests(e.target.value)} className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400" />
+                    <button onClick={handleRecommend} disabled={isRecommending} className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors">
+                        {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
+                    </button>
+                </div>
+                {recommendation && (
+                    <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
+                        <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
+                        {recommendation}
+                    </div>
+                )}
+            </div>
+        )}
+      </div>
+    </div>
   );
 };
+const IconSelectorModal = ({ isOpen, onClose, onSelect }) => {
+  if (!isOpen) return null;
 
+  const icons = [
+    { type: 'flight', label: '航班', icon: <Plane className="w-6 h-6" /> },
+    { type: 'transport', label: '交通/移動', icon: <Train className="w-6 h-6" /> },
+    { type: 'meal', label: '餐飲', icon: <Utensils className="w-6 h-6" /> },
+    { type: 'hotel', label: '住宿', icon: <Hotel className="w-6 h-6" /> },
+    { type: 'activity', label: '景點/活動', icon: <BookOpen className="w-6 h-6" /> },
+    { type: 'spot', label: '地標/打卡', icon: <MapPin className="w-6 h-6" /> },
+    { type: 'shopping', label: '購物', icon: <Wallet className="w-6 h-6" /> }, // 新增購物
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2000] p-4 animate-in fade-in">
+      <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-bold text-slate-800">更換行程圖示</h3>
+          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+        <div className="grid grid-cols-4 gap-4">
+          {icons.map((item) => (
+            <button
+              key={item.type}
+              onClick={() => onSelect(item.type)}
+              className="flex flex-col items-center gap-2 p-3 rounded-xl hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200"
+            >
+              <div className="text-blue-600">{item.icon}</div>
+              <span className="text-xs font-bold text-slate-600">{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
@@ -2260,6 +2275,7 @@ const App = () => {
   const [addModalData, setAddModalData] = useState(null);
   const [isProcessingEdit, setIsProcessingEdit] = useState(false); // AI 處理中的 loading 狀態
   const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
+  const [iconSelectModalData, setIconSelectModalData] = useState(null);
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
     outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
     transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
@@ -2318,6 +2334,16 @@ const App = () => {
     { icon: '💰', title: '第三步：預算與信用卡', desc: '設定餐廳的價位偏好，並勾選「信用卡推薦」，AI 將根據您的發卡國家，計算最佳刷卡回饋攻略。' },
     { icon: '✨', title: '第四步：一鍵生成', desc: '填妥後點擊下方按鈕，AI 將在幾秒內為您生成包含景點、美食、交通與預算的完整行程！' }
   ];
+  const handleIconUpdate = (newType) => {
+    if (!iconSelectModalData) return;
+    const { dayIndex, timelineIndex } = iconSelectModalData;
+    
+    const newItinerary = { ...itineraryData };
+    newItinerary.days[dayIndex].timeline[timelineIndex].type = newType;
+    
+    setItineraryData(newItinerary);
+    setIconSelectModalData(null); // 關閉視窗
+  };
   const handleTimeUpdate = (dayIndex, timelineIndex, newTime) => {
     const newItinerary = { ...itineraryData };
     newItinerary.days[dayIndex].timeline[timelineIndex].time = newTime;
@@ -3683,6 +3709,7 @@ const App = () => {
              onEditClick={openEditModal}
              onTimeUpdate={handleTimeUpdate}
              onAddClick={openAddModal}
+             onIconClick={(dIdx, tIdx) => setIconSelectModalData({ dayIndex: dIdx, timelineIndex: tIdx })}
            />
         </div>
 
