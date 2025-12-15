@@ -378,8 +378,8 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
 
 // --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
+  // viewMode: 'category' | 'personal' (個人支出) | 'shared' (個人分攤)
   const [viewMode, setViewMode] = useState('category'); 
-  // const { symbol } = currencySettings; // 這行可以拿掉，因為我們直接傳整包
 
   const relevantExpenses = useMemo(() => {
     if (dayIndex !== null) {
@@ -388,6 +388,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return expenses;
   }, [expenses, dayIndex]);
 
+  // 1. 消費分類 (保持不變)
   const categoryData = useMemo(() => {
     const map = {};
     relevantExpenses.forEach(e => {
@@ -396,7 +397,8 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return Object.entries(map).map(([label, value]) => ({ label, value }));
   }, [relevantExpenses]);
 
-  const personData = useMemo(() => {
+  // 2. 個人支出 (原有的邏輯：包含自己買的 + 分攤的)
+  const personalData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
     relevantExpenses.forEach(e => {
@@ -407,6 +409,33 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     });
     return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
   }, [relevantExpenses, travelers]);
+
+  // 3. 個人分攤 (新邏輯：排除掉只有 1 人分攤的項目)
+  const sharedData = useMemo(() => {
+    const map = {};
+    travelers.forEach(t => map[t] = 0);
+    relevantExpenses.forEach(e => {
+      // 關鍵過濾：只有當分攤人數 > 1 時，才納入計算
+      if (e.splitters && e.splitters.length > 1) {
+          const splitAmount = Number(e.amount) / e.splitters.length;
+          e.splitters.forEach(person => {
+            map[person] = (map[person] || 0) + splitAmount;
+          });
+      }
+    });
+    return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
+  }, [relevantExpenses, travelers]);
+
+  // 根據模式選擇要顯示的資料
+  const currentData = viewMode === 'category' ? categoryData 
+                    : viewMode === 'personal' ? personalData 
+                    : sharedData;
+
+  const getTitle = () => {
+      if (viewMode === 'category') return '消費項目比例';
+      if (viewMode === 'personal') return '個人總支出 (含獨享)';
+      return '共同分攤金額 (排除獨享)';
+  };
 
   if (relevantExpenses.length === 0) {
     return (
@@ -419,38 +448,51 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
 
   return (
     <div className="mt-8 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden print:break-inside-avoid">
-      <div className="bg-slate-100 px-6 py-3 border-b border-slate-200 flex justify-between items-center">
+      <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 flex flex-col md:flex-row justify-between items-center gap-3">
         <h3 className="font-bold text-slate-700 flex items-center gap-2">
           <PieChart className="w-5 h-5 text-blue-600" />
           {dayIndex !== null ? `Day ${dayIndex + 1} 帳本結算` : '整趟旅程 總帳本結算'}
         </h3>
-        <div className="flex bg-slate-200 rounded-lg p-1 text-xs font-bold">
+        
+        {/* 切換按鈕區塊 */}
+        <div className="flex bg-slate-200 rounded-lg p-1 text-[10px] md:text-xs font-bold w-full md:w-auto">
           <button 
             onClick={() => setViewMode('category')}
-            className={`px-3 py-1 rounded-md transition-all ${viewMode === 'category' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`flex-1 md:flex-none px-3 py-1.5 rounded-md transition-all ${viewMode === 'category' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
           >
             消費分類
           </button>
           <button 
-            onClick={() => setViewMode('person')}
-            className={`px-3 py-1 rounded-md transition-all ${viewMode === 'person' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            onClick={() => setViewMode('personal')}
+            className={`flex-1 md:flex-none px-3 py-1.5 rounded-md transition-all ${viewMode === 'personal' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            個人支出
+          </button>
+          <button 
+            onClick={() => setViewMode('shared')}
+            className={`flex-1 md:flex-none px-3 py-1.5 rounded-md transition-all ${viewMode === 'shared' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
           >
             個人分攤
           </button>
         </div>
       </div>
+      
       <div className="p-6">
         <SimplePieChart 
-          data={viewMode === 'category' ? categoryData : personData} 
-          title={viewMode === 'category' ? '消費項目比例' : '各旅行者分攤比例'} 
-          // ✅ 修改：這裡改傳 currencySettings
+          data={currentData} 
+          title={getTitle()} 
           currencySettings={currencySettings}
         />
+        {/* 如果是個人分攤模式且沒有資料 (代表大家都是各買各的)，顯示提示 */}
+        {viewMode === 'shared' && currentData.length === 0 && (
+            <div className="text-center text-xs text-slate-400 mt-2">
+                (目前沒有共同分攤的款項，所有消費皆為單人獨享)
+            </div>
+        )}
       </div>
     </div>
   );
 };
-
 // --- Expense Form ---
 const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   const [form, setForm] = useState({
