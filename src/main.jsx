@@ -378,7 +378,7 @@ const SimplePieChart = ({ data, title, currencySettings }) => {
 
 // --- Ledger Summary ---
 const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings }) => {
-  // viewMode: 'category' | 'personal' (個人支出) | 'shared' (個人分攤)
+  // viewMode: 'category' | 'personal' (個人支出/消費) | 'shared' (代墊公款)
   const [viewMode, setViewMode] = useState('category'); 
 
   const relevantExpenses = useMemo(() => {
@@ -397,7 +397,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return Object.entries(map).map(([label, value]) => ({ label, value }));
   }, [relevantExpenses]);
 
-  // 2. 個人支出 (原有的邏輯：包含自己買的 + 分攤的)
+  // 2. 個人支出 (保持不變：計算「消費」，即每個人實際吃了/用了多少錢)
   const personalData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
@@ -410,19 +410,25 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
     return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
   }, [relevantExpenses, travelers]);
 
-  // 3. 個人分攤 (新邏輯：排除掉只有 1 人分攤的項目)
+  // 3. 個人分攤/代墊 (新邏輯：計算「支付」，且排除獨享與各付各)
   const sharedData = useMemo(() => {
     const map = {};
     travelers.forEach(t => map[t] = 0);
+    
     relevantExpenses.forEach(e => {
-      // 關鍵過濾：只有當分攤人數 > 1 時，才納入計算
-      if (e.splitters && e.splitters.length > 1) {
-          const splitAmount = Number(e.amount) / e.splitters.length;
-          e.splitters.forEach(person => {
-            map[person] = (map[person] || 0) + splitAmount;
-          });
+      // 篩選條件：
+      // 1. 多人分攤 (e.splitters.length > 1)：排除自己買給自己的私帳
+      // 2. 非各付各 (e.payer !== '各付各')：排除沒有代墊行為的項目
+      if (e.splitters && e.splitters.length > 1 && e.payer !== '各付各') {
+          // ✅ 核心修改：金額不再除以人數分給 splitters
+          // 而是直接將「總金額」加給「付款人 (payer)」，代表他代墊了這筆錢
+          const payer = e.payer;
+          if (map[payer] !== undefined) {
+             map[payer] += Number(e.amount);
+          }
       }
     });
+    
     return Object.entries(map).map(([label, value]) => ({ label, value })).filter(i => i.value > 0);
   }, [relevantExpenses, travelers]);
 
@@ -433,8 +439,9 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
 
   const getTitle = () => {
       if (viewMode === 'category') return '消費項目比例';
-      if (viewMode === 'personal') return '個人總支出 (含獨享)';
-      return '共同分攤金額 (排除獨享)';
+      if (viewMode === 'personal') return '個人總消費 (含獨享)';
+      // 修改標題以符合新邏輯
+      return '代墊公款總額 (誰先付了錢?)';
   };
 
   if (relevantExpenses.length === 0) {
@@ -472,7 +479,7 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
             onClick={() => setViewMode('shared')}
             className={`flex-1 md:flex-none px-3 py-1.5 rounded-md transition-all ${viewMode === 'shared' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
           >
-            個人分攤
+            代墊分攤
           </button>
         </div>
       </div>
@@ -483,10 +490,10 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
           title={getTitle()} 
           currencySettings={currencySettings}
         />
-        {/* 如果是個人分攤模式且沒有資料 (代表大家都是各買各的)，顯示提示 */}
+        {/* 如果是個人分攤模式且沒有資料，顯示提示 */}
         {viewMode === 'shared' && currentData.length === 0 && (
             <div className="text-center text-xs text-slate-400 mt-2">
-                (目前沒有共同分攤的款項，所有消費皆為單人獨享)
+                (目前沒有多人代墊款項)
             </div>
         )}
       </div>
