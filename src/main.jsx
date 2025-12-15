@@ -3719,7 +3719,7 @@ const App = () => {
     <div className="min-h-screen bg-gradient-to-br from-sky-100 via-rose-50 to-amber-50 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] p-4 md:p-8 relative overflow-hidden">
       
       {/* 2. 背景裝飾貼紙 (浮水印) */}
-      <div className="fixed top-20 left-10 text-sky-200 opacity-20 pointer-events-none animate-pulse"><Whale className="w-24 h-24 -rotate-12" /></div>
+      <div className="fixed top-20 left-10 text-sky-200 opacity-20 pointer-events-none animate-pulse"><Fish className="w-24 h-24 -rotate-12" /></div>
       <div className="fixed bottom-10 right-10 text-rose-200 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
       <div className="fixed top-40 right-20 text-amber-200 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
 
