@@ -3133,7 +3133,8 @@ const App = () => {
  
   const renderInputForm = () => {
     return (
-      <div className="max-w-4xl mx-auto bg-white/80 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 print:hidden">
+      // ✅ 修改：輸入表單容器 (深色模式：摩卡色背景 + 深咖啡邊框)
+      <div className="max-w-4xl mx-auto bg-white/80 dark:bg-[#3a2a25]/90 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 dark:border-[#5d4037] print:hidden transition-colors duration-300">
         <TutorialModal 
            isOpen={showInputTutorial} 
            onClose={() => setShowInputTutorial(false)} 
@@ -3146,58 +3147,64 @@ const App = () => {
            onClose={() => setShowApiKeyTutorial(false)} 
         />
         {/* --- Header 區域開始 --- */}
-        <div className="pb-6 border-b border-slate-100/50">
+        <div className="pb-6 border-b border-slate-100/50 dark:border-[#5d4037]/50">
           
-          {/* 1. 上排：功能按鈕區 (獨立一行，靠左) */}
+          {/* 1. 上排：功能按鈕區 */}
           <div className="flex justify-start mb-4">
             <button 
               onClick={() => { localStorage.removeItem('tutorial_input_seen'); setShowInputTutorial(true); }}
-              className="px-3 py-2 text-slate-500 hover:text-blue-600 transition-colors flex items-center gap-2 text-sm font-bold border border-slate-200 rounded-xl hover:bg-blue-50 bg-white shadow-sm"
+              className="px-3 py-2 text-slate-500 dark:text-[#d6c0b3] hover:text-blue-600 dark:hover:text-sky-300 transition-colors flex items-center gap-2 text-sm font-bold border border-slate-200 dark:border-[#5d4037] rounded-xl hover:bg-blue-50 dark:hover:bg-[#4a3b32] bg-white dark:bg-[#2c1f1b] shadow-sm"
             >
                <Info className="w-4 h-4" /> 使用教學
             </button>
           </div>
 
-          {/* 2. 下排：標題區 (置中) */}
+          {/* 2. 下排：標題區 */}
           <div className="text-center">
-            <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 flex items-center justify-center gap-3 flex-wrap">
-              <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500" />
-              AI 智能旅程規劃小幫手
+            <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 dark:from-sky-300 dark:to-teal-300 flex items-center justify-center gap-3 flex-wrap">
+              <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500 dark:text-teal-300" />
+              AI 智能旅程規劃師
             </h1>
-            <p className="text-slate-500 mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
+            <p className="text-slate-500 dark:text-[#d6c0b3] mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
           </div>
         </div>
 
         <div className="space-y-6">
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 md:p-6 rounded-2xl border border-blue-100 shadow-inner">
+          {/* API Key 區塊 */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-[#2a1e1a] dark:to-[#33241f] p-5 md:p-6 rounded-2xl border border-blue-100 dark:border-[#5d4037] shadow-inner transition-colors duration-300">
             <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-bold text-blue-800 flex items-center gap-2">
+              <label className="block text-sm font-bold text-blue-800 dark:text-sky-200 flex items-center gap-2">
                 <Key className="w-4 h-4" /> Gemini API Key (必填)
-                {/* ✅ 新增：教學按鈕 */}
                 <button 
                   onClick={() => setShowApiKeyTutorial(true)}
-                  className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full hover:bg-amber-200 transition-colors flex items-center gap-1 font-normal cursor-pointer"
+                  className="text-xs bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-200 px-2 py-0.5 rounded-full hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors flex items-center gap-1 font-normal cursor-pointer"
                 >
                   <Info className="w-3 h-3" /> 如何獲取?
                 </button>
               </label>
               <div className="flex gap-2">
-                <button onClick={resetForm} className="text-xs text-slate-500 hover:text-slate-700 underline transition-colors">重置所有欄位</button>
-                {apiKey && <button onClick={clearApiKey} className="text-xs text-red-500 hover:text-red-700 underline transition-colors">清除儲存的 Key</button>}
+                <button onClick={resetForm} className="text-xs text-slate-500 dark:text-[#a08d85] hover:text-slate-700 dark:hover:text-[#ebd5c1] underline transition-colors">重置所有欄位</button>
+                {apiKey && <button onClick={clearApiKey} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 underline transition-colors">清除儲存的 Key</button>}
               </div>
             </div>
             <div className="relative">
-               <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="貼上您的 API Key (將自動儲存在本機)" className="w-full pl-4 pr-4 py-3 bg-white border border-blue-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all shadow-sm text-sm md:text-base" />
+               <input 
+                 type="password" 
+                 value={apiKey} 
+                 onChange={(e) => setApiKey(e.target.value)} 
+                 placeholder="貼上您的 API Key (將自動儲存在本機)" 
+                 className="w-full pl-4 pr-4 py-3 bg-white dark:bg-[#2c1f1b] border border-blue-200 dark:border-[#5d4037] rounded-xl focus:ring-4 focus:ring-blue-100 dark:focus:ring-[#5d4037]/50 focus:border-blue-500 dark:focus:border-sky-400 outline-none transition-all shadow-sm text-sm md:text-base dark:text-[#ebd5c1]" 
+               />
             </div>
             
             {/* 模型選擇區塊 */}
-            <div className="bg-white/60 p-3 rounded-xl border border-blue-100/50 mt-4">
-              <div className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">
+            <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
+              <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] mb-2 flex items-center gap-1">
                 <Bot className="w-3 h-3" /> 選擇 AI 模型引擎
               </div>
               <div className="flex flex-col md:flex-row gap-3">
                 {/* 2.5 Pro 選項 */}
-                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'pro' ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'pro' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
                       type="radio" 
@@ -3205,18 +3212,18 @@ const App = () => {
                       value="pro" 
                       checked={modelType === 'pro'} 
                       onChange={() => setModelType('pro')}
-                      className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                      className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800">使用 2.5 Pro (完整版)</span>
-                      <span className="block text-xs text-slate-500 mt-1">輸出慢但更完整，適合複雜規劃。</span>
-                      <span className="block text-[10px] text-amber-600 mt-0.5 font-mono">限制: ~2次/分</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 2.5 Pro (完整版)</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出慢但更完整，適合複雜規劃。</span>
+                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~2次/分</span>
                     </div>
                   </div>
                 </label>
     
                 {/* 2.5 Flash 選項 */}
-                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'flash' ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'flash' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
                       type="radio" 
@@ -3224,12 +3231,12 @@ const App = () => {
                       value="flash" 
                       checked={modelType === 'flash'} 
                       onChange={() => setModelType('flash')}
-                      className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 border-gray-300"
+                      className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800">使用 2.5 Flash (極速版)</span>
-                      <span className="block text-xs text-slate-500 mt-1">輸出快但可能會漏細節。</span>
-                      <span className="block text-[10px] text-amber-600 mt-0.5 font-mono">限制: ~3次/分</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 2.5 Flash (極速版)</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出快但可能會漏細節。</span>
+                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~3次/分</span>
                     </div>
                   </div>
                 </label>
@@ -3238,13 +3245,14 @@ const App = () => {
           </div>
           
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-blue-100 p-2 rounded-lg text-blue-600"><MapPin className="w-5 h-5" /></span>基本行程</h3>
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+              <span className="bg-blue-100 dark:bg-sky-900/50 p-2 rounded-lg text-blue-600 dark:text-sky-300"><MapPin className="w-5 h-5" /></span>基本行程
+            </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600">
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">
                   目的城市 
-                  {/* ✅ 新增：小字的提示訊息 */}
-                  <span className="text-xs text-slate-400 font-normal ml-2">
+                  <span className="text-xs text-slate-400 dark:text-[#8e7c75] font-normal ml-2">
                     (多個城市請用逗號或空白隔開)
                   </span>
                 </label>
@@ -3252,25 +3260,24 @@ const App = () => {
                   name="destinations" 
                   value={basicData.destinations} 
                   onChange={handleBasicChange} 
-                  // ✅ 新增：Placeholder 範例，讓使用者一看就懂
                   placeholder="例如：福岡, 熊本, 由布院"
-                  className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" 
+                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
                 />
               </div>
               
               {/* 日期選擇 (含月曆) */}
               <div className="space-y-2 relative">
-                <label className="text-sm font-semibold text-slate-600">旅遊日期</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">旅遊日期</label>
                 <div 
                   className="relative cursor-pointer"
                   onClick={() => setShowCalendar(!showCalendar)}
                 >
-                  <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" />
+                  <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />
                   <input 
                     name="dates" 
                     value={basicData.dates} 
                     readOnly 
-                    className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base cursor-pointer" 
+                    className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base cursor-pointer dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
                     placeholder="點擊選擇日期範圍"
                   />
                 </div>
@@ -3289,8 +3296,8 @@ const App = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600">風格</label>
-                <select name="type" value={basicData.type} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-sm md:text-base">
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">風格</label>
+                <select name="type" value={basicData.type} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]">
                   <option>休閒 (慢步調)</option>
                   <option>購物 (商圈為主)</option>
                   <option>文化 (歷史古蹟)</option>
@@ -3299,20 +3306,20 @@ const App = () => {
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600">人數</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">人數</label>
                 <div className="relative">
-                  <Users className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" />
-                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base" />
+                  <Users className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />
+                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#ebd5c1]" />
                 </div>
               </div>
             </div>
   
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600">交通偏好</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">交通偏好</label>
                 <div className="relative">
-                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400" />}
-                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-sm md:text-base">
+                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />}
+                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]">
                     <option value="public">大眾交通</option>
                     <option value="self_driving">自駕</option>
                   </select>
@@ -3321,16 +3328,16 @@ const App = () => {
               
               {basicData.transportMode === 'self_driving' && (
                 <div className="space-y-2 flex items-center h-full pt-6">
-                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-3 rounded-xl border border-slate-200 w-full hover:bg-slate-100 transition-colors">
+                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-xl border border-slate-200 dark:border-[#5d4037] w-full hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
                     <input 
                       type="checkbox" 
                       name="needParking" 
                       checked={basicData.needParking} 
                       onChange={handleBasicChange} 
-                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" 
+                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" 
                     />
-                    <span className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-                      <ParkingCircle className="w-5 h-5 text-slate-500" />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-[#ebd5c1] flex items-center gap-2">
+                      <ParkingCircle className="w-5 h-5 text-slate-500 dark:text-[#a08d85]" />
                       是否提供停車資訊
                     </span>
                   </label>
@@ -3339,60 +3346,60 @@ const App = () => {
             </div>
           </section>
   
-          <hr className="border-slate-100" />
+          <hr className="border-slate-100 dark:border-[#5d4037]" />
   
           {/* 特殊要求與價位 */}
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
-              <span className="bg-purple-100 p-2 rounded-lg text-purple-600"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+              <span className="bg-purple-100 dark:bg-purple-900/50 p-2 rounded-lg text-purple-600 dark:text-purple-300"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
             </h3>
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-600">特殊要求</label>
+              <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">特殊要求</label>
               <textarea 
                 ref={textareaRef} // 綁定 ref
                 name="specialRequests" 
                 value={basicData.specialRequests} 
                 onChange={handleBasicChange} 
                 rows={2} 
-                className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto" 
+                className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
                 placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-600 flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
+              <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3] flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
               <div className="flex flex-wrap gap-3">
                 {[
                   { key: 'high', label: '高 (NT$1000+)' },
                   { key: 'medium', label: '中 (NT$301-1000)' },
                   { key: 'low', label: '低 (NT$300以下)' }
                 ].map((price) => (
-                  <label key={price.key} className="flex items-center gap-2 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors">
-                    <input type="checkbox" name={price.key} checked={basicData.priceRanges?.[price.key] || false} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-                    <span className="text-sm font-medium text-slate-700">{price.label}</span>
+                  <label key={price.key} className="flex items-center gap-2 bg-slate-50 dark:bg-[#2c1f1b] px-4 py-3 rounded-xl border border-slate-200 dark:border-[#5d4037] cursor-pointer hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
+                    <input type="checkbox" name={price.key} checked={basicData.priceRanges?.[price.key] || false} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
+                    <span className="text-sm font-medium text-slate-700 dark:text-[#ebd5c1]">{price.label}</span>
                   </label>
                 ))}
               </div>
             </div>
           </section>
 
-          <hr className="border-slate-100" />
+          <hr className="border-slate-100 dark:border-[#5d4037]" />
           
           {/* 信用卡區塊 */}
           <section className="space-y-4">
-              <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
-              <span className="bg-emerald-100 p-2 rounded-lg text-emerald-600"><CreditCard className="w-5 h-5" /></span>支付與回饋設定
+              <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+              <span className="bg-emerald-100 dark:bg-emerald-900/50 p-2 rounded-lg text-emerald-600 dark:text-emerald-300"><CreditCard className="w-5 h-5" /></span>支付與回饋設定
               </h3>
               
               <div className="space-y-2 flex items-center h-full">
-                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 p-3 rounded-xl border border-slate-200 w-full hover:bg-slate-100 transition-colors">
+                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-xl border border-slate-200 dark:border-[#5d4037] w-full hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
                       <input 
                       type="checkbox" 
                       name="enableCreditCard" 
                       checked={basicData.enableCreditCard} 
                       onChange={handleBasicChange} 
-                      className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500" 
+                      className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 dark:bg-[#1e1410] dark:border-[#5d4037]" 
                       />
-                      <span className="text-sm font-semibold text-slate-700">
+                      <span className="text-sm font-semibold text-slate-700 dark:text-[#ebd5c1]">
                       開啟「信用卡回饋與優惠」推薦功能
                       </span>
                   </label>
@@ -3400,20 +3407,20 @@ const App = () => {
           
               {basicData.enableCreditCard && (
                   <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
-                      <label className="text-sm font-semibold text-slate-600">您的信用卡發卡國家/地區</label>
+                      <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">您的信用卡發卡國家/地區</label>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="relative">
                               <select 
                                   name="issuingCountry" 
                                   value={basicData.issuingCountry} 
                                   onChange={handleBasicChange} 
-                                  className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all appearance-none text-sm md:text-base"
+                                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]"
                               >
                                   {ISSUING_COUNTRIES && ISSUING_COUNTRIES.map(c => (
                                       <option key={c.code} value={c.code}>{c.name}</option>
                                   ))}
                               </select>
-                              <ChevronDown className="absolute right-4 top-4 w-4 h-4 text-slate-400 pointer-events-none" />
+                              <ChevronDown className="absolute right-4 top-4 w-4 h-4 text-slate-400 dark:text-[#8e7c75] pointer-events-none" />
                           </div>
                           {basicData.issuingCountry === 'OTHER' && (
                               <input 
@@ -3421,11 +3428,11 @@ const App = () => {
                                   placeholder="請輸入國家名稱" 
                                   value={basicData.otherCountryName} 
                                   onChange={handleBasicChange} 
-                                  className="w-full p-3 md:p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm" 
+                                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 outline-none text-sm dark:text-[#ebd5c1]" 
                               />
                           )}
                       </div>
-                      <p className="text-xs text-slate-400 pl-1">AI 將根據此設定，列出您可能持有的銀行列表供後續勾選。</p>
+                      <p className="text-xs text-slate-400 dark:text-[#8e7c75] pl-1">AI 將根據此設定，列出您可能持有的銀行列表供後續勾選。</p>
                   </div>
               )}
           </section>
@@ -3433,23 +3440,23 @@ const App = () => {
           {/* 航班資訊區塊 */}
           <section className="space-y-4">
             <div className="flex justify-between items-center">
-              <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2">
-                <span className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+              <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+                <span className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg text-indigo-600 dark:text-indigo-300">
                    {simpleFlights.outbound.mode === 'train' ? <Train className="w-5 h-5" /> : <Plane className="w-5 h-5" />}
                 </span>
                 交通方式 (飛機/火車)
               </h3>
               
               <div className="flex items-center gap-4">
-                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
-                  <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500" />
-                  <span className="text-sm font-bold text-slate-600">無 (不需安排)</span>
+                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#33241f] p-2 rounded-lg transition-colors">
+                  <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
+                  <span className="text-sm font-bold text-slate-600 dark:text-[#d6c0b3]">無 (不需安排)</span>
                 </label>
 
                 {basicData.hasFlights && (
-                  <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded-lg transition-colors">
-                    <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-                    <span className="text-sm font-bold text-slate-600">多段/複雜行程</span>
+                  <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#33241f] p-2 rounded-lg transition-colors">
+                    <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
+                    <span className="text-sm font-bold text-slate-600 dark:text-[#d6c0b3]">多段/複雜行程</span>
                   </label>
                 )}
               </div>
@@ -3457,27 +3464,27 @@ const App = () => {
 
             {/* 提示語 */}
             {basicData.hasFlights && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs md:text-sm text-amber-800 flex items-start gap-2">
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs md:text-sm text-amber-800 dark:text-amber-200 flex items-start gap-2">
                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
                  <div>
                    <span className="font-bold">精準規劃小撇步：</span>
-                   請務必填寫詳細的 <span className="font-bold text-amber-900">出發與抵達時間</span>。如果僅填寫班次/車次，AI 可能會抓不到最新的時刻表而導致行程安排錯誤。
+                   請務必填寫詳細的 <span className="font-bold text-amber-900 dark:text-amber-100">出發與抵達時間</span>。如果僅填寫班次/車次，AI 可能會抓不到最新的時刻表而導致行程安排錯誤。
                  </div>
               </div>
             )}
             
             {basicData.hasFlights && (
               !basicData.isMultiCityFlight ? (
-              <div className="bg-slate-50/50 p-4 md:p-6 rounded-2xl border border-slate-200 space-y-4 shadow-sm">
-                {[ { label: '去程', key: 'outbound', color: 'text-emerald-600' }, { label: '中轉', key: 'transit', color: 'text-amber-600' }, { label: '回程', key: 'inbound', color: 'text-blue-600' } ].map((row) => (
-                  <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+              <div className="bg-slate-50/50 dark:bg-[#2c1f1b]/50 p-4 md:p-6 rounded-2xl border border-slate-200 dark:border-[#5d4037] space-y-4 shadow-sm">
+                {[ { label: '去程', key: 'outbound', color: 'text-emerald-600 dark:text-emerald-400' }, { label: '中轉', key: 'transit', color: 'text-amber-600 dark:text-amber-400' }, { label: '回程', key: 'inbound', color: 'text-blue-600 dark:text-blue-400' } ].map((row) => (
+                  <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white dark:bg-[#33241f] p-3 rounded-xl border border-slate-100 dark:border-[#4a3b32] shadow-sm">
                     
                     {/* 標籤與模式切換 */}
                     <div className="col-span-1 md:col-span-1 flex flex-col items-center justify-center gap-1">
                       <span className={`text-sm font-bold ${row.color}`}>{row.label}</span>
                       <button 
                         onClick={() => handleSimpleFlightChange(row.key, 'mode', simpleFlights[row.key].mode === 'flight' ? 'train' : 'flight')}
-                        className="p-1.5 bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-600 rounded-lg transition-colors"
+                        className="p-1.5 bg-slate-100 dark:bg-[#2c1f1b] hover:bg-blue-100 dark:hover:bg-blue-900/30 text-slate-500 dark:text-[#a08d85] hover:text-blue-600 dark:hover:text-blue-300 rounded-lg transition-colors"
                         title="切換 飛機/火車"
                       >
                         {simpleFlights[row.key].mode === 'train' ? <Train className="w-4 h-4" /> : <Plane className="w-4 h-4" />}
@@ -3486,29 +3493,29 @@ const App = () => {
 
                     {/* 日期 */}
                     <div className="col-span-1 md:col-span-3">
-                      <label className="text-[10px] text-slate-400 pl-1 block">日期</label>
-                      <input type="date" value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-slate-700" />
+                      <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">日期</label>
+                      <input type="date" value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-bold text-slate-700 dark:text-[#ebd5c1]" />
                     </div>
 
                     {/* 時間 (拆分為出發/抵達) */}
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 pl-1 block">出發時間</label>
-                        <input type="time" value={simpleFlights[row.key].depTime} onChange={(e) => handleSimpleFlightChange(row.key, 'depTime', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">出發時間</label>
+                        <input type="time" value={simpleFlights[row.key].depTime} onChange={(e) => handleSimpleFlightChange(row.key, 'depTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
                     </div>
                     <div className="col-span-2 md:col-span-2 relative">
-                        <label className="text-[10px] text-slate-400 pl-1 block">抵達時間</label>
-                        <input type="time" value={simpleFlights[row.key].arrTime} onChange={(e) => handleSimpleFlightChange(row.key, 'arrTime', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
-                        <div className="absolute -left-2 top-8 text-slate-300 text-xs">➜</div>
+                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">抵達時間</label>
+                        <input type="time" value={simpleFlights[row.key].arrTime} onChange={(e) => handleSimpleFlightChange(row.key, 'arrTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
+                        <div className="absolute -left-2 top-8 text-slate-300 dark:text-[#5d4037] text-xs">➜</div>
                     </div>
 
                     {/* 班次與地點 */}
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 pl-1 block">班次/車次</label>
-                        <input type="text" placeholder="例如 IT202" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">班次/車次</label>
+                        <input type="text" placeholder="例如 IT202" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
                     </div>
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 pl-1 block">機場/車站代碼</label>
-                        <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono uppercase text-center" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">機場/車站代碼</label>
+                        <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase text-center dark:text-[#ebd5c1]" />
                     </div>
                   </div>
                 ))}
@@ -3516,86 +3523,86 @@ const App = () => {
             ) : (
               <div className="space-y-3">
                 {multiFlights.map((flight) => (
-                  <div key={flight.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                    <div onClick={() => toggleMultiFlight(flight.id)} className="p-4 flex items-center justify-between cursor-pointer bg-slate-50/50 hover:bg-slate-100">
+                  <div key={flight.id} className="bg-white dark:bg-[#33241f] border border-slate-200 dark:border-[#4a3b32] rounded-xl overflow-hidden shadow-sm">
+                    <div onClick={() => toggleMultiFlight(flight.id)} className="p-4 flex items-center justify-between cursor-pointer bg-slate-50/50 dark:bg-[#2c1f1b]/50 hover:bg-slate-100 dark:hover:bg-[#3e2b26]">
                       <div className="flex items-center gap-3">
-                        <span className={`font-bold text-slate-700 bg-white px-3 py-1 rounded-md border border-slate-200 text-sm shadow-sm flex items-center gap-2`}>
+                        <span className={`font-bold text-slate-700 dark:text-[#ebd5c1] bg-white dark:bg-[#2c1f1b] px-3 py-1 rounded-md border border-slate-200 dark:border-[#4a3b32] text-sm shadow-sm flex items-center gap-2`}>
                             {flight.mode === 'train' ? <Train className="w-3 h-3" /> : <Plane className="w-3 h-3" />}
                             {flight.type}
                         </span>
-                        {!flight.isOpen && <span className="text-sm text-slate-500">{flight.date} | {flight.depTime} ➜ {flight.arrTime} | {flight.station}</span>}
+                        {!flight.isOpen && <span className="text-sm text-slate-500 dark:text-[#a08d85]">{flight.date} | {flight.depTime} ➜ {flight.arrTime} | {flight.station}</span>}
                       </div>
-                      <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeMultiFlight(flight.id); }} className="p-2 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{flight.isOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
+                      <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeMultiFlight(flight.id); }} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{flight.isOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                     </div>
                     {flight.isOpen && (
-                      <div className="p-4 grid grid-cols-2 md:grid-cols-6 gap-4">
+                      <div className="p-4 grid grid-cols-2 md:grid-cols-6 gap-4 bg-white dark:bg-[#33241f]">
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">類型</label>
-                            <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">類型</label>
+                            <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">交通工具</label>
-                            <select value={flight.mode} onChange={(e) => updateMultiFlight(flight.id, 'mode', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">交通工具</label>
+                            <select value={flight.mode} onChange={(e) => updateMultiFlight(flight.id, 'mode', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-white dark:bg-[#2c1f1b] dark:text-[#ebd5c1]">
                               <option value="flight">飛機</option>
                               <option value="train">火車</option>
                             </select>
                         </div>
                         <div className="col-span-2 md:col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">日期</label>
-                            <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">日期</label>
+                            <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">出發時間</label>
-                            <input type="time" value={flight.depTime} onChange={(e) => updateMultiFlight(flight.id, 'depTime', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">出發時間</label>
+                            <input type="time" value={flight.depTime} onChange={(e) => updateMultiFlight(flight.id, 'depTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">抵達時間</label>
-                            <input type="time" value={flight.arrTime} onChange={(e) => updateMultiFlight(flight.id, 'arrTime', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">抵達時間</label>
+                            <input type="time" value={flight.arrTime} onChange={(e) => updateMultiFlight(flight.id, 'arrTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">班次</label>
-                            <input placeholder="班次" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">班次</label>
+                            <input placeholder="班次" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 block mb-1">地點代碼</label>
-                            <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border rounded-lg text-sm font-mono uppercase" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">地點代碼</label>
+                            <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
                       </div>
                     )}
                   </div>
                 ))}
-                <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-blue-400 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
+                <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-xl text-slate-500 dark:text-[#a08d85] hover:border-blue-400 dark:hover:border-sky-500 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
               </div>
             ))}
 
-            <div className="flex items-center gap-3 pt-2 bg-blue-50/50 p-4 rounded-xl border border-blue-100">
-                <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500" />
-                <label htmlFor="transitTour" className="text-slate-700 font-bold cursor-pointer text-sm md:text-base">安排轉機/中途入境觀光</label>
+            <div className="flex items-center gap-3 pt-2 bg-blue-50/50 dark:bg-[#2c1f1b]/50 p-4 rounded-xl border border-blue-100 dark:border-[#5d4037]">
+                <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
+                <label htmlFor="transitTour" className="text-slate-700 dark:text-[#ebd5c1] font-bold cursor-pointer text-sm md:text-base">安排轉機/中途入境觀光</label>
             </div>
           </section>
 
-          <hr className="border-slate-100" />
+          <hr className="border-slate-100 dark:border-[#5d4037]" />
 
           {/* 住宿資訊區塊 */}
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 flex items-center gap-2"><span className="bg-orange-100 p-2 rounded-lg text-orange-600"><Hotel className="w-5 h-5" /></span>住宿資訊</h3>
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2"><span className="bg-orange-100 dark:bg-orange-900/50 p-2 rounded-lg text-orange-600 dark:text-orange-300"><Hotel className="w-5 h-5" /></span>住宿資訊</h3>
             <div className="space-y-3">
               {accommodations.map((acc) => (
-                <div key={acc.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
-                  <div onClick={() => toggleAccommodation(acc.id)} className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50">
-                    <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold"><Hotel className="w-5 h-5" /></div><div><div className="font-bold text-slate-800 text-sm md:text-base">{acc.name || '新住宿地點'}</div><div className="text-xs text-slate-500">{acc.address}</div></div></div>
-                    <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeAccommodation(acc.id); }} className="p-2 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{acc.isOpen ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
+                <div key={acc.id} className="bg-white dark:bg-[#33241f] border border-slate-200 dark:border-[#4a3b32] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
+                  <div onClick={() => toggleAccommodation(acc.id)} className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-[#3e2b26]">
+                    <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center text-orange-600 dark:text-orange-300 font-bold"><Hotel className="w-5 h-5" /></div><div><div className="font-bold text-slate-800 dark:text-[#ebd5c1] text-sm md:text-base">{acc.name || '新住宿地點'}</div><div className="text-xs text-slate-500 dark:text-[#a08d85]">{acc.address}</div></div></div>
+                    <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeAccommodation(acc.id); }} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{acc.isOpen ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
                   </div>
                   {acc.isOpen && (
-                     <div className="p-5 bg-slate-50/50 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border rounded-lg text-sm" placeholder="類型" />
-                        <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border rounded-lg text-sm" placeholder="名稱" />
-                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border rounded-lg text-sm md:col-span-2" placeholder="完整地址" />
+                     <div className="p-5 bg-slate-50/50 dark:bg-[#2c1f1b]/50 border-t border-slate-100 dark:border-[#4a3b32] grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="類型" />
+                        <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="名稱" />
+                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm md:col-span-2 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="完整地址" />
                      </div>
                   )}
                 </div>
               ))}
-              <button onClick={addAccommodation} className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 flex justify-center items-center gap-2 hover:border-orange-400"><Plus className="w-5 h-5" /> 新增住宿</button>
+              <button onClick={addAccommodation} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-xl text-slate-500 dark:text-[#a08d85] flex justify-center items-center gap-2 hover:border-orange-400 dark:hover:border-orange-500"><Plus className="w-5 h-5" /> 新增住宿</button>
             </div>
           </section>
 
@@ -3603,18 +3610,18 @@ const App = () => {
         {/* ^ 這個 div 是 space-y-6 的結束 */}
 
         <div className="space-y-4 pt-4">
-          <button onClick={generateItinerary} className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100">
+          <button onClick={generateItinerary} className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100 dark:ring-[#5d4037]">
             <Sparkles className="w-6 h-6 animate-pulse" /> 開始 AI 一鍵規劃
           </button>
-          <button onClick={() => setStep('saved_list')} className="w-full bg-white border-2 border-slate-200 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-50 hover:border-slate-300 transition-all flex justify-center items-center gap-2">
+          <button onClick={() => setStep('saved_list')} className="w-full bg-white dark:bg-[#33241f] border-2 border-slate-200 dark:border-[#5d4037] text-slate-600 dark:text-[#d6c0b3] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#3e2b26] hover:border-slate-300 transition-all flex justify-center items-center gap-2">
             <List className="w-5 h-5" /> 查看已儲存的規劃 ({savedPlans.length})
           </button>
-          <label className="w-full bg-white border-2 border-dashed border-slate-300 text-slate-500 font-bold py-4 rounded-2xl hover:bg-slate-50 hover:border-blue-400 hover:text-blue-500 transition-all flex justify-center items-center gap-2 cursor-pointer">
+          <label className="w-full bg-white dark:bg-[#33241f] border-2 border-dashed border-slate-300 dark:border-[#5d4037] text-slate-500 dark:text-[#a08d85] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#3e2b26] hover:border-blue-400 hover:text-blue-500 transition-all flex justify-center items-center gap-2 cursor-pointer">
             <Upload className="w-5 h-5" /> 匯入 JSON
             <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
           </label>
         </div>
-        {errorMsg && <div className="p-4 bg-red-50 text-red-600 rounded-xl flex items-center gap-2 border border-red-100 animate-shake"><AlertTriangle className="w-5 h-5" />{errorMsg}</div>}
+        {errorMsg && <div className="p-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 rounded-xl flex items-center gap-2 border border-red-100 dark:border-red-800 animate-shake"><AlertTriangle className="w-5 h-5" />{errorMsg}</div>}
       </div>
     );
   };
@@ -3677,15 +3684,17 @@ const App = () => {
            storageKey="tutorial_result_seen"
         />
         {/* Header Card */}
-        <div className="bg-white/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
-           <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
-           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
+        <div className="bg-white/90 dark:bg-[#3a2a25]/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 dark:border-[#5d4037] relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
             <div className="w-full">
-              <div className="flex flex-wrap items-center gap-3 mb-2">
-                <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 print:text-black">{basicData.destinations}</h2>
-                {basicData.hasTransitTour && <span className="text-xs font-bold bg-indigo-100 text-indigo-700 px-2 md:px-3 py-1 rounded-full flex items-center gap-1 print:hidden"><Plane className="w-3 h-3" /> 含轉機觀光</span>}
-              </div>
-              <p className="text-slate-600 max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
+                <div className="flex flex-wrap items-center gap-3 mb-2">
+                {/* text-slate-800 -> dark:text-[#ebd5c1] */}
+                <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 dark:text-[#ebd5c1] print:text-black">{basicData.destinations}</h2>
+                {/* ... */}
+                </div>
+                {/* text-slate-600 -> dark:text-[#d6c0b3] */}
+                <p className="text-slate-600 dark:text-[#d6c0b3] max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
@@ -3840,29 +3849,31 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-rose-50 to-amber-50 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] p-4 md:p-8 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-rose-50 to-amber-50 dark:from-[#2c1f1b] dark:via-[#3a2a25] dark:to-[#1e1410] bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#5d4037_1px,transparent_1px)] [background-size:16px_16px] p-4 md:p-8 relative overflow-hidden transition-colors duration-500">
       
-      {/* 2. 背景裝飾貼紙 (浮水印) */}
-      <div className="fixed top-20 left-10 text-sky-200 opacity-20 pointer-events-none animate-pulse"><Fish className="w-24 h-24 -rotate-12" /></div>
-      <div className="fixed bottom-10 right-10 text-rose-200 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
-      <div className="fixed top-40 right-20 text-amber-200 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
+      {/* 2. 背景裝飾貼紙 (浮水印) - 調整深色模式的顏色與透明度 */}
+      <div className="fixed top-20 left-10 text-sky-200 dark:text-sky-900/40 opacity-20 pointer-events-none animate-pulse"><Fish className="w-24 h-24 -rotate-12" /></div>
+      <div className="fixed bottom-10 right-10 text-rose-200 dark:text-rose-900/40 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
+      <div className="fixed top-40 right-20 text-amber-200 dark:text-amber-900/40 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
 
-      {/* 內容容器：這裡設為 max-w-7xl 以確保結果頁 (max-w-6xl) 不會被切到 */}
       <div className="max-w-7xl mx-auto relative z-10">
         
-        {/* 3. 主標題區塊：變得更繽紛、圓潤 */}
-        <header className="text-center mb-8 md:mb-12 py-8 px-4 bg-white/60 backdrop-blur-md rounded-[3rem] shadow-xl border-4 border-white relative overflow-hidden">
-          {/* 標題背景裝飾 */}
-          <div className="absolute top-[-20px] left-[-20px] text-yellow-300 opacity-30"><Sun className="w-24 h-24 animate-spin-slow" /></div>
-          <div className="absolute bottom-[-10px] right-[-10px] text-blue-300 opacity-20"><CarFront className="w-20 h-20" /></div>
+        {/* ✅ 修改 2：主標題 Header */}
+        {/* dark:bg-[#3a2a25]/80 -> 半透明摩卡色 */}
+        {/* dark:border-[#5d4037] -> 深咖啡邊框 */}
+        <header className="text-center mb-8 md:mb-12 py-8 px-4 bg-white/60 dark:bg-[#3a2a25]/80 backdrop-blur-md rounded-[3rem] shadow-xl border-4 border-white dark:border-[#5d4037] relative overflow-hidden transition-colors duration-300">
           
-          <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-rose-400 to-amber-400 drop-shadow-sm flex items-center justify-center gap-3 relative z-10">
-            <Plane className="w-10 h-10 md:w-14 md:h-14 text-sky-400 animate-bounce-slow" /> 
+          {/* 標題背景裝飾 */}
+          <div className="absolute top-[-20px] left-[-20px] text-yellow-300 dark:text-yellow-600/30 opacity-30"><Sun className="w-24 h-24 animate-spin-slow" /></div>
+          <div className="absolute bottom-[-10px] right-[-10px] text-blue-300 dark:text-blue-900/30 opacity-20"><CarFront className="w-20 h-20" /></div>
+          
+          <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-rose-400 to-amber-400 dark:from-sky-300 dark:via-rose-300 dark:to-amber-300 drop-shadow-sm flex items-center justify-center gap-3 relative z-10">
+            <Plane className="w-10 h-10 md:w-14 md:h-14 text-sky-400 dark:text-sky-300 animate-bounce-slow" /> 
             AI 旅遊規劃小幫手 
             <span className="text-2xl md:text-4xl">✨</span>
           </h1>
            {!apiKey && (
-            <p className="text-slate-500 mt-3 text-sm md:text-base bg-white/80 inline-block px-4 py-1 rounded-full">
+            <p className="text-slate-500 dark:text-[#d6c0b3] mt-3 text-sm md:text-base bg-white/80 dark:bg-[#2c1f1b]/50 inline-block px-4 py-1 rounded-full">
               (請先在下方設定輸入 API Key 才能啟用 AI 大腦喔！)
             </p>
           )}
