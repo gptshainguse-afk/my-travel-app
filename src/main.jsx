@@ -2096,6 +2096,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
            - 預算限制: ${budget ? budget + currencySymbol : '無限制'}
            - 特殊要求: ${requests || '無'}
            請擔任一位專業點餐顧問，推薦一套組合並說明理由。請直接用繁體中文回答。
+           請適當分段，讓閱讀更舒適。
         `;
 
          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
@@ -2192,12 +2193,11 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             )}
         </div>
 
-        {/* ✅ 修改：Footer (UI 優化) */}
+        {/* Footer */}
         {menuData && (
             <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
-                <div className="flex flex-col gap-3"> {/* 改為 flex-col 垂直排列 */}
-                    
-                    {/* 輸入框放在第一行 */}
+                <div className="flex flex-col gap-3">
+                    {/* 輸入框 */}
                     <div className="flex gap-3">
                         <input 
                             type="number" 
@@ -2215,7 +2215,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         />
                     </div>
 
-                    {/* 按鈕獨立放在第二行，變成全寬大按鈕 */}
+                    {/* 按鈕 */}
                     <button 
                         onClick={handleRecommend} 
                         disabled={isRecommending} 
@@ -2227,8 +2227,11 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </div>
 
                 {recommendation && (
-                    <div className="mt-4 bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in">
-                        <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
+                    // ✅ 關鍵修正：
+                    // 1. max-h-60 + overflow-y-auto: 限制高度並允許卷動
+                    // 2. whitespace-pre-line: 讓 AI 的換行符號 (\n) 生效，文章不再擠成一團
+                    <div className="mt-4 bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in max-h-60 overflow-y-auto whitespace-pre-line">
+                        <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1 sticky top-0 bg-white dark:bg-[#33241f] pb-2 border-b border-red-50 dark:border-red-900/10">💡 推薦結果：</h5>
                         {recommendation}
                     </div>
                 )}
