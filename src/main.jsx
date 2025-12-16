@@ -1297,9 +1297,10 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                                  type="file" 
                                  accept="image/*" 
                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
+                                 onClick={(e) => { e.target.value = null; }} // <--- 關鍵！
                                  onChange={(e) => {
+                                     // 這裡只負責處理上傳，不要清空 value
                                      handlePhotoUpload(e, timelineIndex);
-                                     e.target.value = '';
                                  }}
                              />
                          </div>
@@ -1992,9 +1993,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     // 3. 產生預覽圖
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
-    
-    // 4. 清空 input 允許重複選取
-    e.target.value = ''; 
+     
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2127,8 +2126,9 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                             type="file" 
                             accept="image/*" 
                             multiple 
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
+                            onClick={(e) => { e.target.value = null; }} // <--- 關鍵！點擊時才重置，讓 iOS 認為是新操作
                             onChange={handleImageSelect} 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
                         />
                     </div>
                 </div>
