@@ -1328,9 +1328,19 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   };
 
   return (
-    <div className={`bg-[#fffef8] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
-      {!isPrintMode && (<><div className="absolute bottom-0 right-0 opacity-[0.07] pointer-events-none text-amber-600"><Tent className="w-48 h-48 -rotate-12 translate-x-10 translate-y-10" /></div><div className="absolute top-1/2 left-0 opacity-[0.07] pointer-events-none text-sky-600"><Cloud className="w-32 h-32 rotate-12 -translate-x-10" /></div></>)}
-
+    <div className={`bg-[#fffef8] dark:bg-[#3a2a25] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white dark:border-[#2c1f1b] relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
+      
+      {/* ✅ 修改處：背景裝飾 (調整深色模式下的顏色與透明度，讓它在咖啡色底上跳出來) */}
+      {!isPrintMode && (
+        <>
+          <div className="absolute bottom-0 right-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-amber-600 dark:text-amber-400">
+            <Tent className="w-48 h-48 -rotate-12 translate-x-10 translate-y-10" />
+          </div>
+          <div className="absolute top-1/2 left-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-sky-600 dark:text-sky-400">
+            <Cloud className="w-32 h-32 rotate-12 -translate-x-10" />
+          </div>
+        </>
+      )}
       {/* Day Header */}
       <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
         {!isPrintMode && (<><div className="absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div><div className="absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-yellow-300 opacity-20 rounded-full blur-3xl"></div><div className="absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div></>)}
