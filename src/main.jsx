@@ -2061,29 +2061,25 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
   
-  // 用來強制重置 input 的 key
-  const [inputKey, setInputKey] = useState(Date.now());
-
-  // ✅ 修正：更穩定的圖片選擇處理
+  // 處理圖片選擇
   const handleImageSelect = (e) => {
+    // 1. 獲取檔案
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // 1. 立刻將 FileList 轉為陣列，避免 iOS 參考丟失
+    // 2. 轉為陣列 (這是關鍵，避免 iOS 參考丟失)
     const newFiles = Array.from(files);
 
-    // 2. 更新檔案列表
+    // 3. 更新狀態
     setSelectedImages(prev => [...prev, ...newFiles]);
 
-    // 3. 更新預覽圖
+    // 4. 產生預覽圖
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // 4. ✅ 關鍵修正：針對 iOS，不要直接 e.target.value = ''
-    // 改為透過更新 key 來強制 React 重新渲染 input，這樣比清空 value 更乾淨且穩定
-    setTimeout(() => {
-        setInputKey(Date.now());
-    }, 100);
+    // 5. 清空 input，允許重複選取同張照片
+    // 注意：這裡不使用 setTimeout，直接清空即可，這是 React 標準做法
+    e.target.value = ''; 
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2206,22 +2202,18 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         </div>
                     ))}
                     
-                     {/* ✅ 上傳按鈕 (已修正 iOS 點擊問題) */}
-                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
+                     {/* ✅ 改回使用 label 包裹 hidden input 的方式 */}
+                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0">
                         <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
-                        
-                        {/* 絕對定位的 input，覆蓋整個按鈕區域 */}
                         <input 
-                            key={inputKey} // 使用 key 強制重渲染
                             type="file" 
                             accept="image/*" 
                             multiple 
+                            className="hidden" 
                             onChange={handleImageSelect} 
-                            // z-50 確保在最上層，cursor-pointer 確保有點擊手勢
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
                         />
-                    </div>
+                    </label>
                 </div>
 
                 <button 
