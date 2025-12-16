@@ -2030,7 +2030,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             }
         })));
 
-        const TARGET_MODEL = 'gemini-2.5-flash'; 
+        const TARGET_MODEL = 'gemini-2.5-pro'; 
 
         const prompt = `
           你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
