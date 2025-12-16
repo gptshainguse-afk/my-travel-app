@@ -2061,25 +2061,30 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
   
+  // ✅ 1. 建立 Ref 來控制 input
+  const fileInputRef = useRef(null);
+
   // 處理圖片選擇
   const handleImageSelect = (e) => {
-    // 1. 獲取檔案
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // 2. 轉為陣列 (這是關鍵，避免 iOS 參考丟失)
     const newFiles = Array.from(files);
 
-    // 3. 更新狀態
     setSelectedImages(prev => [...prev, ...newFiles]);
 
-    // 4. 產生預覽圖
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // 5. 清空 input，允許重複選取同張照片
-    // 注意：這裡不使用 setTimeout，直接清空即可，這是 React 標準做法
+    // 清空 input (允許重複選取)
     e.target.value = ''; 
+  };
+
+  // ✅ 2. 專門用來觸發點擊的函數
+  const handleTriggerUpload = () => {
+    if (fileInputRef.current) {
+        fileInputRef.current.click();
+    }
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2095,8 +2100,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             }
         })));
 
-        // 強制使用 2.5-flash (或是 1.5-flash) 以支援圖片
-        const TARGET_MODEL = 'gemini-1.5-flash'; 
+        const TARGET_MODEL = 'gemini-2.5-flash'; 
 
         const prompt = `
           你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
@@ -2202,18 +2206,25 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         </div>
                     ))}
                     
-                     {/* ✅ 改回使用 label 包裹 hidden input 的方式 */}
-                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0">
+                     {/* ✅ 3. 上傳按鈕：改成普通的 div，點擊觸發 handleTriggerUpload */}
+                     <div 
+                        onClick={handleTriggerUpload}
+                        className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0"
+                     >
                         <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
-                        <input 
-                            type="file" 
-                            accept="image/*" 
-                            multiple 
-                            className="hidden" 
-                            onChange={handleImageSelect} 
-                        />
-                    </label>
+                    </div>
+
+                    {/* ✅ 4. 真實的 input：隱藏起來，綁定 ref */}
+                    {/* 注意：這裡保留 accept="image/*"，iOS 應該能正常識別圖庫 */}
+                    <input 
+                        ref={fileInputRef}
+                        type="file" 
+                        accept="image/*" 
+                        multiple 
+                        className="hidden" 
+                        onChange={handleImageSelect} 
+                    />
                 </div>
 
                 <button 
