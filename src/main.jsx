@@ -589,18 +589,22 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
 // --- Expense Form ---
 const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialData }) => {
   // 預設表單狀態
+  const isSoloTraveler = travelers.length === 1;
   const defaultForm = {
     item: '', 
     category: '美食', 
     amount: '', 
-    payer: travelers[0] || '', 
-    splitters: travelers, 
+    // ✅ 修正：如果是單人，預設 payer 就是「個人消費」；多人則預設第一位旅伴
+    payer: isSoloTraveler ? '個人消費' : (travelers[0] || ''), 
+    // ✅ 修正：如果是單人，分攤者預設就是他自己 (雖然下面會隱藏，但邏輯要對)
+    splitters: isSoloTraveler ? travelers : travelers, 
     note: '',
     currencyCode: currencySettings.code, 
-    exchangeRate: currencySettings.rate 
+    exchangeRate: currencySettings.rate
   };
 
   const [form, setForm] = useState(defaultForm);
+  
 
   // 當 initialData 改變時 (代表進入編輯模式)，填入資料
   useEffect(() => {
