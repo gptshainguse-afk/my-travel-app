@@ -605,27 +605,50 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialDat
   // 當 initialData 改變時 (代表進入編輯模式)，填入資料
   useEffect(() => {
     if (initialData) {
-      // 特殊處理：如果是「各付各」，儲存的是總額，編輯時要算回「單價」顯示給用戶
       let displayAmount = initialData.amount;
+      // 處理各付各的顯示金額
       if (initialData.payer === '各付各' && initialData.splitters.length > 0) {
          displayAmount = displayAmount / initialData.splitters.length;
       }
-
       setForm({
         ...initialData,
-        amount: displayAmount // 顯示單價
+        amount: displayAmount
       });
     } else {
-      setForm(defaultForm); // 重置為新增模式
+      setForm(defaultForm); 
     }
   }, [initialData]);
 
+  // 判斷當前模式
   const isGoDutch = form.payer === '各付各';
+  const isPersonal = form.payer === '個人消費';
 
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+  // 處理欄位變更
+  const handleChange = (e) => {
+      const { name, value } = e.target;
+      setForm(prev => {
+          let newSplitters = prev.splitters;
+
+          // 特殊邏輯：當切換付款人模式時，重置分攤者勾選狀態
+          if (name === 'payer') {
+              if (value === '個人消費') {
+                  newSplitters = []; // 切換到個人消費：預設不勾選任何人
+              } else if (value === '各付各') {
+                  newSplitters = travelers; // 切換到各付各：預設全選
+              } else {
+                  // 切換回一般代墊：如果之前是空的(從個人消費切回來)，則全選
+                  if (prev.payer === '個人消費') newSplitters = travelers;
+              }
+          }
+          return { ...prev, [name]: value, splitters: newSplitters };
+      });
+  };
   
+  // 處理分攤者勾選
   const handleSplitterChange = (name) => {
     setForm(prev => {
+      // 如果是「個人消費」模式，且已經有勾選別人，則改成單選 (Radio 行為)
+      // 或是維持多選但由 handleSubmit 擋下 (這裡採用維持多選介面，但邏輯上通常只選一人)
       const newSplitters = prev.splitters.includes(name) 
         ? prev.splitters.filter(n => n !== name) 
         : [...prev.splitters, name];
@@ -636,25 +659,43 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialDat
   const handleSubmit = () => {
     if (!form.item || !form.amount) return alert("請輸入項目名稱與金額");
     
+    // 防呆：個人消費必須選擇歸屬者
+    if (isPersonal && form.splitters.length === 0) {
+        return alert("請勾選這筆消費是「誰的」？");
+    }
+    if (isPersonal && form.splitters.length > 1) {
+        return alert("「個人消費」只能勾選一個人。如果是多人請改用「各付各」或指定某人先付。");
+    }
+
     let finalAmount = Number(form.amount);
-    
-    // 如果是各付各，儲存時要乘回總金額
+    let finalPayer = form.payer;
+    let finalNote = form.note;
+
+    // 邏輯轉換：
+    // 1. 各付各：總金額 = 單價 * 人數
     if (isGoDutch) {
        finalAmount = finalAmount * form.splitters.length;
+       finalNote = `${form.note} (${form.currencyCode} 各付各: ${form.amount} x ${form.splitters.length}人)`;
+    }
+
+    // 2. 個人消費：轉換為「某人先付，且只有某人分攤」
+    if (isPersonal) {
+        const owner = form.splitters[0]; // 抓出那個唯一被勾選的人
+        finalPayer = owner; // 付款人變成他
+        // 分攤者維持 [owner]，金額維持原輸入金額
+        finalNote = `${form.note} (個人私帳)`;
     }
 
     onSave({
       ...form,
       amount: finalAmount,
-      note: isGoDutch 
-        ? `${form.note} (${form.currencyCode} 各付各: ${form.amount} x ${form.splitters.length}人)` 
-        : form.note
+      payer: finalPayer, // 儲存時，將「個人消費」轉為具體的人名
+      note: finalNote
     });
   };
 
   return (
     <div className="mt-3 bg-emerald-50/50 p-4 rounded-lg border border-emerald-100 text-sm animate-in fade-in slide-in-from-top-2 relative">
-      {/* 標題：顯示目前是新增還是編輯 */}
       <div className="absolute -top-3 left-4 bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-bold border border-emerald-200">
          {initialData ? '🖊️ 編輯消費' : '✨ 新增消費'}
       </div>
@@ -683,21 +724,42 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialDat
         <select name="category" value={form.category} onChange={handleChange} className="p-2 border rounded bg-white">
           <option>美食</option><option>娛樂</option><option>門票</option><option>購物</option><option>交通</option><option>小費</option><option>其他</option>
         </select>
-        <select name="payer" value={form.payer} onChange={handleChange} className="p-2 border rounded bg-white">
-          {travelers.map(t => <option key={t} value={t}>{t} 先付</option>)}
-          <option value="各付各">各付各 (Go Dutch)</option>
+        <select 
+          name="payer" 
+          value={form.payer} 
+          onChange={handleChange} 
+          className="p-2 border rounded bg-white"
+          // 如果只有一人，強制鎖定且不可選 (雖然下面只會 render 一個選項，但加 disabled 更保險)
+          disabled={travelers.length === 1} 
+        >
+          {travelers.length === 1 ? (
+             /* 情境 A: 只有一人旅行 -> 只顯示個人消費 */
+             <option value="個人消費">個人消費 (私帳)</option>
+          ) : (
+             /* 情境 B: 多人旅行 -> 顯示完整選項 */
+             <>
+               {travelers.map(t => <option key={t} value={t}>{t} 先付</option>)}
+               <option value="各付各">各付各 (Go Dutch)</option>
+               <option value="個人消費">個人消費 (私帳)</option>
+             </>
+          )}
         </select>
       </div>
       
-      <div className="mb-3 bg-white p-2 rounded border border-slate-100">
+      <div className={`mb-3 p-2 rounded border transition-colors ${isPersonal ? 'bg-orange-50 border-orange-200' : 'bg-white border-slate-100'}`}>
         <div className="flex justify-between items-center mb-1">
-           <div className="text-xs text-slate-500">分攤者 (預設全員):</div>
+           {/* 根據模式改變標題 */}
+           <div className={`text-xs ${isPersonal ? 'text-orange-600 font-bold' : 'text-slate-500'}`}>
+             {isPersonal ? '誰的消費? (請勾選 1 人)' : '分攤者 (預設全員):'}
+           </div>
+           
            {isGoDutch && <div className="text-xs text-emerald-600 font-bold">總金額: {currencySettings.symbol}{Number(form.amount) * form.splitters.length}</div>}
         </div>
+        
         <div className="flex flex-wrap gap-2">
           {travelers.map(t => (
             <label key={t} className="flex items-center gap-1 cursor-pointer px-2 py-1 rounded hover:bg-slate-50 select-none">
-              <input type="checkbox" checked={form.splitters.includes(t)} onChange={() => handleSplitterChange(t)} className="w-3 h-3 text-emerald-500 rounded" /> 
+              <input type="checkbox" checked={form.splitters.includes(t)} onChange={() => handleSplitterChange(t)} className={`w-3 h-3 rounded ${isPersonal ? 'text-orange-500 focus:ring-orange-500' : 'text-emerald-500 focus:ring-emerald-500'}`} /> 
               <span className="text-slate-700">{t}</span>
             </label>
           ))}
