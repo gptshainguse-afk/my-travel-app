@@ -1302,22 +1302,16 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                          <button onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2.5 rounded-full transition-colors ${item.user_notes ? 'bg-amber-100 text-amber-600' : 'text-amber-300 hover:bg-amber-50 hover:text-amber-500'}`}><FileText className="w-5 h-5" /></button>
                          
                          {/* ✅ 相機按鈕：使用透明覆蓋法 */}
-                         <div className="p-2.5 rounded-full hover:bg-rose-50 text-rose-300 hover:text-rose-500 cursor-pointer transition-colors relative">
-                             <Camera className="w-5 h-5" />
-                             {/* ✅ 關鍵修改：accept="image/*" 且沒有 hidden */}
+                         <label className="p-2.5 rounded-full hover:bg-rose-50 dark:hover:bg-rose-900/30 text-rose-300 hover:text-rose-500 dark:hover:text-rose-400 cursor-pointer transition-colors">
+                             {/* input 放在裡面，並且 hidden */}
                              <input 
                                  type="file" 
-                                 // 明確格式，強迫 iOS 轉檔
-                                 accept="image/png, image/jpeg, image/jpg" 
-                                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
-                                 // ❌ 移除 onClick 清空
-                                 onChange={(e) => {
-                                     handlePhotoUpload(e, timelineIndex);
-                                     // ✅ 延遲清空
-                                     setTimeout(() => { e.target.value = ''; }, 500);
-                                 }}
+                                 accept="image/*" 
+                                 className="hidden" 
+                                 onChange={(e) => handlePhotoUpload(e, timelineIndex)} 
                              />
-                         </div>
+                             <Camera className="w-5 h-5" />
+                         </label>
 
                          <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2.5 rounded-full transition-colors relative ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-300 hover:bg-violet-50 hover:text-violet-500'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>
                       </div>
@@ -1992,29 +1986,20 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [requests, setRequests] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
-
-  // 處理圖片選擇 (針對 iOS 優化)
+  
+  // 處理圖片選擇
   const handleImageSelect = (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // 1. 轉為陣列
     const newFiles = Array.from(files);
-
-    // 2. 更新狀態 (保存原始檔案)
     setSelectedImages(prev => [...prev, ...newFiles]);
 
-    // 3. 產生預覽圖
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // 4. 關鍵修正：使用 setTimeout 延遲清空 value
-    // 這讓 iOS 有足夠時間完成檔案讀取與背景轉檔，避免記憶體回收導致失敗
-    setTimeout(() => {
-        if (e.target) {
-            e.target.value = ''; 
-        }
-    }, 500); 
+    // 注意：舊版代碼證明不需要手動清空 value，iOS 也能正常運作
+    // 如果這裡清空，反而會導致 iOS 讀取失敗
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2023,17 +2008,13 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
     setIsAnalyzingMenu(true);
     try {
-        // 準備圖片資料傳送給 API
         const imageParts = await Promise.all(selectedImages.map(async (file) => ({
             inlineData: {
-                // 注意：需確保 fileToBase64 函數在外部已定義
                 data: await fileToBase64(file),
-                // 強制指定 mimeType，避免 iOS HEIC 轉檔後類型判斷錯誤
-                mimeType: file.type || "image/jpeg" 
+                mimeType: file.type || "image/jpeg"
             }
         })));
 
-        // 強制使用 2.5-flash
         const TARGET_MODEL = 'gemini-2.5-flash'; 
 
         const prompt = `
@@ -2077,8 +2058,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
         if (data.error) throw new Error(data.error.message);
 
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        // 注意：需確保 cleanJsonResult 函數在外部已定義
-        const cleanedText = cleanJsonResult(resultText); 
+        const cleanedText = cleanJsonResult(resultText);
         setMenuData(JSON.parse(cleanedText));
 
     } catch (error) {
@@ -2131,10 +2111,9 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             <button onClick={onClose}><X /></button>
         </div>
 
-        {/* Scrollable Content */}
+        {/* Content */}
         <div className="p-6 overflow-y-auto flex-1 space-y-8">
             <div>
-                {/* 圖片預覽與上傳區 */}
                 <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2 min-h-[100px]">
                     {imagePreviews.map((src, idx) => (
                         <div key={idx} className="relative shrink-0">
@@ -2142,24 +2121,20 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         </div>
                     ))}
                     
-                     {/* 上傳按鈕：使用透明覆蓋法 */}
-                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
+                     {/* ✅ 關鍵修正：改回使用 label 包裹 input */}
+                     <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 cursor-pointer">
                         <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
                         
-                        {/* iOS 圖庫修正關鍵：
-                            1. accept 明確指定 image/png, image/jpeg, image/jpg (強迫 iOS 轉檔)
-                            2. 不要在 onClick 清空 value
-                            3. 在 onChange 裡使用 setTimeout 延遲清空 value
-                        */}
+                        {/* input 隱藏在 label 內，這是最標準且兼容性最好的寫法 */}
                         <input 
                             type="file" 
-                            accept="image/png, image/jpeg, image/jpg" 
+                            accept="image/*" 
                             multiple 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
+                            className="hidden" // 直接隱藏，靠 label 觸發
                             onChange={handleImageSelect} 
                         />
-                    </div>
+                    </label>
                 </div>
 
                 <button 
@@ -2172,7 +2147,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </button>
             </div>
 
-            {/* 分析結果顯示區 */}
+            {/* ... (MenuData 顯示區塊，保持不變) ... */}
             {menuData && (
                 <div className="space-y-6 animate-in slide-in-from-bottom-4">
                     {menuData.categories.map((cat, catIdx) => (
@@ -2199,8 +2174,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </div>
             )}
         </div>
-
-        {/* Footer: 推薦區 */}
+        {/* ... Footer 保持不變 ... */}
         {menuData && (
             <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
                 <div className="flex gap-3 mb-3">
