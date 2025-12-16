@@ -1997,8 +1997,8 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [requests, setRequests] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
-  
-  // 處理圖片選擇
+
+  // 處理圖片選擇 (針對 iOS 優化)
   const handleImageSelect = (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -2009,8 +2009,12 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // 清空以允許重複選取
-    e.target.value = ''; 
+    // iOS 修正：延遲清空 value
+    setTimeout(() => {
+        if (e.target) {
+            e.target.value = ''; 
+        }
+    }, 500); 
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2069,7 +2073,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
         if (data.error) throw new Error(data.error.message);
 
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        const cleanedText = cleanJsonResult(resultText);
+        const cleanedText = cleanJsonResult(resultText); 
         setMenuData(JSON.parse(cleanedText));
 
     } catch (error) {
@@ -2134,19 +2138,18 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         ))}
                         
                         {/* 上傳按鈕 */}
-                        <label className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0">
+                        <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
                             <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                             <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
                             <input 
                                 type="file" 
-                                accept="image/*" 
+                                accept="image/png, image/jpeg, image/jpg" 
                                 multiple 
-                                className="hidden" 
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
                                 onChange={handleImageSelect} 
                             />
-                        </label>
+                        </div>
                     </div>
-                    {/* ✅ 新增：提示訊息 */}
                     <p className="text-[10px] text-red-500 dark:text-red-400 font-bold bg-red-50 dark:bg-red-900/20 p-2 rounded-lg text-center">
                         ⚠️ iOS 用戶請直接使用「拍照」功能，從圖庫選取可能會失敗。
                     </p>
@@ -2189,18 +2192,42 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             )}
         </div>
 
-        {/* Footer */}
+        {/* ✅ 修改：Footer (UI 優化) */}
         {menuData && (
             <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
-                <div className="flex gap-3 mb-3">
-                    <input type="number" placeholder={`預算 (例如: 2000${currencySymbol})`} value={budget} onChange={e=>setBudget(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" />
-                    <input type="text" placeholder="特殊要求 (例如: 不吃牛)" value={requests} onChange={e=>setRequests(e.target.value)} className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" />
-                    <button onClick={handleRecommend} disabled={isRecommending} className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors">
-                        {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
+                <div className="flex flex-col gap-3"> {/* 改為 flex-col 垂直排列 */}
+                    
+                    {/* 輸入框放在第一行 */}
+                    <div className="flex gap-3">
+                        <input 
+                            type="number" 
+                            placeholder={`預算 (例如: 2000${currencySymbol})`} 
+                            value={budget} 
+                            onChange={e=>setBudget(e.target.value)} 
+                            className="w-1/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" 
+                        />
+                        <input 
+                            type="text" 
+                            placeholder="特殊要求 (例如: 不吃牛、對蝦過敏)" 
+                            value={requests} 
+                            onChange={e=>setRequests(e.target.value)} 
+                            className="w-2/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" 
+                        />
+                    </div>
+
+                    {/* 按鈕獨立放在第二行，變成全寬大按鈕 */}
+                    <button 
+                        onClick={handleRecommend} 
+                        disabled={isRecommending} 
+                        className="w-full py-3 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white rounded-xl font-bold flex justify-center items-center gap-2 disabled:opacity-50 transition-all shadow-md"
+                    >
+                        {isRecommending ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />} 
+                        {isRecommending ? 'AI 正在思考中...' : '✨ AI 幫我推薦組合'}
                     </button>
                 </div>
+
                 {recommendation && (
-                    <div className="bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in">
+                    <div className="mt-4 bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in">
                         <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
                         {recommendation}
                     </div>
