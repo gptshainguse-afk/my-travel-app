@@ -2446,49 +2446,6 @@ const convertToJpegIfNeeded = async (file) => {
     return file;
   }
 };
-const convertToJpegIfNeeded = async (file) => {
-  const fileName = file.name.toLowerCase();
-  const fileType = (file.type || "").toLowerCase();
-
-  // 判斷是否為 HEIC 或 HEIF 格式
-  const isHeic = 
-    fileType.includes("heic") || 
-    fileType.includes("heif") || 
-    /\.heic$/i.test(fileName) || 
-    /\.heif$/i.test(fileName);
-
-  // 如果不是 HEIC，直接回傳原檔案
-  if (!isHeic) return file;
-
-  console.log(`正在轉換 HEIC 圖片: ${file.name}...`);
-
-  try {
-    // 設定 5 秒超時，避免 iOS 記憶體不足卡死
-    const conversionPromise = heic2any({
-      blob: file,
-      toType: "image/jpeg",
-      quality: 0.7, // 降低品質以節省記憶體 (原本 0.9 太高)
-    });
-
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("HEIC 轉換超時")), 5000)
-    );
-
-    const jpgBlob = await Promise.race([conversionPromise, timeoutPromise]);
-
-    const blob = Array.isArray(jpgBlob) ? jpgBlob[0] : jpgBlob;
-
-    return new File(
-      [blob], 
-      file.name.replace(/\.(heic|heif)$/i, ".jpg"), 
-      { type: "image/jpeg" }
-    );
-  } catch (error) {
-    console.warn("HEIC 轉換失敗或超時，嘗試使用原檔:", error);
-    // 如果轉換失敗，回傳原檔，至少讓後端或 API 試試看，不要讓 UI 沒反應
-    return file;
-  }
-};
 
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
