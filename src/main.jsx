@@ -1222,18 +1222,18 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   // ... (以下保留原有的圖片、筆記、AI 函數，邏輯不變) ...
   const handleGlobalFileChange = async (e) => {
     const file = e.target.files[0];
-    const targetIndex = uploadingIndexRef.current; // 從 Ref 取出現在是哪個行程要加照片
+    const targetIndex = uploadingIndexRef.current; 
 
     if (!file || targetIndex === null) return;
 
     try {
-        // A. 先嘗試轉換 HEIC (防當機版)
-        const jpegFile = await convertToJpegIfNeeded(file);
+        // ❌ 移除 convertToJpegIfNeeded
+        // ❌ 移除 heic2any 相關呼叫
+        
+        // 直接使用 file (iOS 此時已經自動把選取的 HEIC 轉成 JPEG 傳過來了)
+        // 使用原本的 compressImage 進行壓縮與 Base64 轉換
+        const base64 = await compressImage(file);
 
-        // B. 再進行壓縮
-        const base64 = await compressImage(jpegFile);
-
-        // C. 更新該行程的資料
         const currentItem = day.timeline[targetIndex];
         const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64];
         
@@ -1243,7 +1243,6 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         console.error("照片處理失敗:", error);
         alert("照片上傳失敗，請重試");
     } finally {
-        // 清空 input 讓下一張能重複選
         e.target.value = '';
         uploadingIndexRef.current = null;
     }
@@ -2276,11 +2275,12 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         
                         {/* ✅ 關鍵修改：accept 只留 image/*，不要有 .heic */}
                         <input 
-                            type="file" 
-                            accept="image/*"  // <--- 關鍵！只要這樣寫，iOS 就會自動轉檔
-                            multiple 
-                            onChange={handleImageSelect} 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
+                            ref={globalFileInputRef}
+                            type="file"
+                            accept="image/*" // ✅ 改回 image/*，拿掉 .heic
+                            className="hidden"
+                            onChange={handleGlobalFileChange}
+                            // multiple 暫時拿掉以確保穩定，或者您可以加回去測試
                         />
                     </div>
                 </div>
