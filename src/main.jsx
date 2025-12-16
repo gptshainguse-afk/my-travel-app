@@ -1983,17 +1983,17 @@ const fileToBase64 = (file) => {
 };
 
 const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
-  // ... (State 保持不變) ...
   const [selectedImages, setSelectedImages] = useState([]);
   const [imagePreviews, setImagePreviews] = useState([]);
   const [menuData, setMenuData] = useState(null);
   const [isAnalyzingMenu, setIsAnalyzingMenu] = useState(false);
+  
   const [budget, setBudget] = useState('');
   const [requests, setRequests] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
 
-  // 處理圖片選擇
+  // 處理圖片選擇 (針對 iOS 優化)
   const handleImageSelect = (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -2001,34 +2001,140 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
     // 1. 轉為陣列
     const newFiles = Array.from(files);
 
-    // 2. 更新狀態
+    // 2. 更新狀態 (保存原始檔案)
     setSelectedImages(prev => [...prev, ...newFiles]);
 
     // 3. 產生預覽圖
     const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // ✅ 4. 關鍵修改：使用 setTimeout 延遲清空，確保 iOS 完成檔案交接
+    // 4. 關鍵修正：使用 setTimeout 延遲清空 value
+    // 這讓 iOS 有足夠時間完成檔案讀取與背景轉檔，避免記憶體回收導致失敗
     setTimeout(() => {
-        e.target.value = ''; 
+        if (e.target) {
+            e.target.value = ''; 
+        }
     }, 500); 
   };
 
-  // ... (handleAnalyzeMenu, handleRecommend 保持不變) ...
+  const handleAnalyzeMenu = async () => {
+    if (selectedImages.length === 0) return alert("請先選擇菜單照片");
+    if (!apiKey) return alert("請輸入 API Key");
 
+    setIsAnalyzingMenu(true);
+    try {
+        // 準備圖片資料傳送給 API
+        const imageParts = await Promise.all(selectedImages.map(async (file) => ({
+            inlineData: {
+                // 注意：需確保 fileToBase64 函數在外部已定義
+                data: await fileToBase64(file),
+                // 強制指定 mimeType，避免 iOS HEIC 轉檔後類型判斷錯誤
+                mimeType: file.type || "image/jpeg" 
+            }
+        })));
+
+        // 強制使用 2.5-flash
+        const TARGET_MODEL = 'gemini-2.5-flash'; 
+
+        const prompt = `
+          你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
+          任務：
+          1. 辨識圖片中的所有菜色。
+          2. 將菜名翻譯成繁體中文。
+          3. 根據性質分類 (例如: 開胃菜, 主餐, 飲料, 甜點...)。
+          4. 找出價格，並區分含稅(tax_included)或不含稅(tax_excluded)。如果無法判斷，優先填入 tax_excluded。
+
+          請回傳一個純 JSON 物件 (不要 Markdown)，格式如下:
+          {
+            "categories": [
+              {
+                "name": "類別名稱 (如: 主餐)",
+                "items": [
+                  {
+                    "original_name": "原文菜名",
+                    "translated_name": "中文菜名",
+                    "description": "簡短描述成分或作法 (若有)",
+                    "price_tax_excluded": 數字或 null,
+                    "price_tax_included": 數字或 null
+                  }
+                ]
+              }
+            ]
+          }
+        `;
+        
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{ text: prompt }, ...imageParts]
+                }]
+            })
+        });
+        
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
+        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        // 注意：需確保 cleanJsonResult 函數在外部已定義
+        const cleanedText = cleanJsonResult(resultText); 
+        setMenuData(JSON.parse(cleanedText));
+
+    } catch (error) {
+        console.error(error);
+        alert("菜單分析失敗: " + error.message);
+    } finally {
+        setIsAnalyzingMenu(false);
+    }
+  };
+
+  const handleRecommend = async () => {
+    if (!menuData) return;
+    if (!apiKey) return alert("請輸入 API Key");
+
+    setIsRecommending(true);
+    try {
+        const prompt = `
+           我有一份已整理好的菜單資料 (JSON): ${JSON.stringify(menuData)}
+           我的需求如下:
+           - 預算限制: ${budget ? budget + currencySymbol : '無限制'}
+           - 特殊要求: ${requests || '無'}
+           請擔任一位專業點餐顧問，推薦一套組合並說明理由。請直接用繁體中文回答。
+        `;
+
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+        setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
+
+    } catch (error) {
+        alert("推薦失敗: " + error.message);
+    } finally {
+        setIsRecommending(false);
+    }
+  };
+  
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="bg-white dark:bg-[#3a2a25] rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative transition-colors duration-300">
-         {/* ... Header ... */}
-         <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
             <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
             <button onClick={onClose}><X /></button>
-         </div>
+        </div>
 
-         <div className="p-6 overflow-y-auto flex-1 space-y-8">
+        {/* Scrollable Content */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-8">
             <div>
+                {/* 圖片預覽與上傳區 */}
                 <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2 min-h-[100px]">
                     {imagePreviews.map((src, idx) => (
                         <div key={idx} className="relative shrink-0">
@@ -2036,19 +2142,21 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         </div>
                     ))}
                     
-                     {/* 上傳按鈕 */}
+                     {/* 上傳按鈕：使用透明覆蓋法 */}
                      <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
                         <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
                         
-                        {/* ✅ 修正 Input */}
+                        {/* iOS 圖庫修正關鍵：
+                            1. accept 明確指定 image/png, image/jpeg, image/jpg (強迫 iOS 轉檔)
+                            2. 不要在 onClick 清空 value
+                            3. 在 onChange 裡使用 setTimeout 延遲清空 value
+                        */}
                         <input 
                             type="file" 
-                            // 關鍵：明確指定格式，強迫 iOS 轉檔
                             accept="image/png, image/jpeg, image/jpg" 
                             multiple 
                             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50"
-                            // ❌ 移除 onClick 清空，這在某些 iOS 版本會打斷圖庫開啟
                             onChange={handleImageSelect} 
                         />
                     </div>
@@ -2063,7 +2171,8 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                     {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
                 </button>
             </div>
-            {/* ... 下方內容保持不變 ... */}
+
+            {/* 分析結果顯示區 */}
             {menuData && (
                 <div className="space-y-6 animate-in slide-in-from-bottom-4">
                     {menuData.categories.map((cat, catIdx) => (
@@ -2090,7 +2199,8 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </div>
             )}
         </div>
-        {/* Footer 保持不變 */}
+
+        {/* Footer: 推薦區 */}
         {menuData && (
             <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
                 <div className="flex gap-3 mb-3">
