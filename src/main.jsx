@@ -587,18 +587,38 @@ const LedgerSummary = ({ expenses, dayIndex = null, travelers, currencySettings 
   );
 };
 // --- Expense Form ---
-const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
-  const [form, setForm] = useState({
+const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialData }) => {
+  // 預設表單狀態
+  const defaultForm = {
     item: '', 
     category: '美食', 
     amount: '', 
     payer: travelers[0] || '', 
     splitters: travelers, 
     note: '',
-    // ✅ 新增：預設帶入當前的全域匯率設定
     currencyCode: currencySettings.code, 
     exchangeRate: currencySettings.rate 
-  });
+  };
+
+  const [form, setForm] = useState(defaultForm);
+
+  // 當 initialData 改變時 (代表進入編輯模式)，填入資料
+  useEffect(() => {
+    if (initialData) {
+      // 特殊處理：如果是「各付各」，儲存的是總額，編輯時要算回「單價」顯示給用戶
+      let displayAmount = initialData.amount;
+      if (initialData.payer === '各付各' && initialData.splitters.length > 0) {
+         displayAmount = displayAmount / initialData.splitters.length;
+      }
+
+      setForm({
+        ...initialData,
+        amount: displayAmount // 顯示單價
+      });
+    } else {
+      setForm(defaultForm); // 重置為新增模式
+    }
+  }, [initialData]);
 
   const isGoDutch = form.payer === '各付各';
 
@@ -618,6 +638,7 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     
     let finalAmount = Number(form.amount);
     
+    // 如果是各付各，儲存時要乘回總金額
     if (isGoDutch) {
        finalAmount = finalAmount * form.splitters.length;
     }
@@ -625,7 +646,6 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
     onSave({
       ...form,
       amount: finalAmount,
-      // 備註現在會多顯示幣別，方便辨識
       note: isGoDutch 
         ? `${form.note} (${form.currencyCode} 各付各: ${form.amount} x ${form.splitters.length}人)` 
         : form.note
@@ -633,13 +653,17 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
   };
 
   return (
-    <div className="mt-3 bg-emerald-50/50 p-4 rounded-lg border border-emerald-100 text-sm animate-in fade-in slide-in-from-top-2">
-      <div className="grid grid-cols-2 gap-3 mb-3">
+    <div className="mt-3 bg-emerald-50/50 p-4 rounded-lg border border-emerald-100 text-sm animate-in fade-in slide-in-from-top-2 relative">
+      {/* 標題：顯示目前是新增還是編輯 */}
+      <div className="absolute -top-3 left-4 bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-bold border border-emerald-200">
+         {initialData ? '🖊️ 編輯消費' : '✨ 新增消費'}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-3 mt-2">
         <div className="col-span-2 md:col-span-1">
            <input name="item" placeholder="消費項目 (如: 拉麵)" value={form.item} onChange={handleChange} className="w-full p-2 border rounded outline-none focus:border-emerald-500" />
         </div>
         <div className="col-span-2 md:col-span-1 relative">
-           {/* 顯示當前使用的幣別符號 */}
            <div className="absolute left-3 top-2 text-slate-400 font-bold">{currencySettings.symbol}</div>
            <input 
              name="amount" 
@@ -649,13 +673,12 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
              onChange={handleChange} 
              className="w-full pl-8 p-2 border rounded outline-none focus:border-emerald-500" 
            />
-           {/* ✅ 提示：讓用戶知道這筆帳是依據什麼匯率記的 */}
            <div className="absolute right-2 top-2.5 text-[10px] text-emerald-600 bg-emerald-100 px-1.5 rounded">
              匯率 {form.exchangeRate}
            </div>
         </div>
       </div>
-      {/* ... (中間的分類與付款人選擇保持不變) ... */}
+
       <div className="grid grid-cols-2 gap-3 mb-3">
         <select name="category" value={form.category} onChange={handleChange} className="p-2 border rounded bg-white">
           <option>美食</option><option>娛樂</option><option>門票</option><option>購物</option><option>交通</option><option>小費</option><option>其他</option>
@@ -665,11 +688,10 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
           <option value="各付各">各付各 (Go Dutch)</option>
         </select>
       </div>
-
+      
       <div className="mb-3 bg-white p-2 rounded border border-slate-100">
         <div className="flex justify-between items-center mb-1">
            <div className="text-xs text-slate-500">分攤者 (預設全員):</div>
-           {/* 這裡也加上幣別顯示 */}
            {isGoDutch && <div className="text-xs text-emerald-600 font-bold">總金額: {currencySettings.symbol}{Number(form.amount) * form.splitters.length}</div>}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -684,7 +706,9 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings }) => {
 
       <div className="flex justify-end gap-2 pt-2 border-t border-emerald-100/50">
         <button onClick={onCancel} className="px-4 py-1.5 text-slate-500 hover:bg-slate-100 rounded text-xs font-medium">取消</button>
-        <button onClick={handleSubmit} className="px-4 py-1.5 bg-emerald-500 text-white rounded hover:bg-emerald-600 text-xs font-bold shadow-sm">新增記帳</button>
+        <button onClick={handleSubmit} className="px-4 py-1.5 bg-emerald-500 text-white rounded hover:bg-emerald-600 text-xs font-bold shadow-sm">
+            {initialData ? '儲存修改' : '新增記帳'}
+        </button>
       </div>
     </div>
   );
@@ -1109,10 +1133,18 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
 
   // 1. 記帳功能
+// 1. 新增帳務
   const addExpense = (timelineIndex, newItem) => {
     const newExpense = { id: Date.now().toString(), dayIndex, timelineIndex, ...newItem };
     setExpenses(prev => [...prev, newExpense]);
   };
+
+  // 2. 更新帳務 (✅ 新增功能)
+  const updateExpense = (updatedItem) => {
+      setExpenses(prev => prev.map(e => e.id === updatedItem.id ? updatedItem : e));
+  };
+
+  // 3. 刪除帳務
   const removeExpense = (id) => {
     if(confirm("確定要刪除這筆帳務嗎？")) { setExpenses(prev => prev.filter(e => e.id !== id)); }
   };
@@ -1421,17 +1453,41 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                     )}
                     {item.menu_recommendations && item.menu_recommendations.length > 0 && (<div className={`mt-6 border-t-2 border-orange-100 pt-4 ${isPrintMode ? 'border-slate-300' : ''}`}><h5 className="text-sm font-bold text-orange-600 mb-3 flex items-center gap-2"><ChefHat className={`w-5 h-5 ${isPrintMode ? 'hidden' : ''}`} /> 點餐翻譯小幫手</h5><div className={`bg-orange-50/80 rounded-2xl overflow-hidden border-2 border-orange-100 overflow-x-auto shadow-sm ${isPrintMode ? 'bg-transparent border-slate-300' : ''}`}><table className="w-full text-sm text-left min-w-[300px]"><thead className={`bg-orange-200/50 text-orange-800 ${isPrintMode ? 'bg-slate-100 text-black' : ''}`}><tr><th className="p-3 pl-4 font-bold rounded-tl-2xl">當地菜名</th><th className="p-3 font-bold">中文</th><th className="p-3 font-bold rounded-tr-2xl">預估價格</th></tr></thead><tbody className={`divide-y divide-orange-100 text-slate-700 ${isPrintMode ? 'divide-slate-300' : ''}`}>{item.menu_recommendations.map((menu, mIdx) => (<tr key={mIdx} className={`hover:bg-orange-100/50 transition-colors ${isPrintMode ? 'hover:bg-transparent' : ''}`}><td className="p-3 pl-4 font-bold text-orange-700">{menu.local}</td><td className="p-3">{menu.cn}</td><td className="p-3 text-slate-500 font-mono">{menu.price}</td></tr>))}</tbody></table></div></div>)}
 
+                    {/* ✅ 記帳小本本 (已修改) */}
                     {!isPrintMode && (
                       <div className="mt-6 pt-4 border-t-2 border-emerald-100/50">
                           <div className="flex items-center justify-between mb-3">
                             <h5 className="text-sm font-bold text-emerald-700 flex items-center gap-2"><Wallet className="w-5 h-5" /> 記帳小本本</h5>
-                            <button onClick={() => setEditingExpense(editingExpense === timelineIndex ? null : timelineIndex)} className={`text-xs px-3 py-1.5 rounded-full transition-colors flex items-center gap-1 font-bold shadow-sm ${editingExpense === timelineIndex ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'}`}>
-                              {editingExpense === timelineIndex ? <MinusCircle className="w-3.5 h-3.5" /> : <PlusCircle className="w-3.5 h-3.5" />} {editingExpense === timelineIndex ? '收起' : '記一筆'}
+                            <button 
+                              onClick={() => {
+                                // 切換表單顯示：如果已打開，則關閉；如果沒打開，設為當前 index，並清空編輯對象(設為新增模式)
+                                if (editingExpense === timelineIndex) {
+                                   setEditingExpense(null);
+                                   setExpenseToEdit(null);
+                                } else {
+                                   setEditingExpense(timelineIndex);
+                                   setExpenseToEdit(null);
+                                }
+                              }}
+                              className={`text-xs px-3 py-1.5 rounded-full transition-colors flex items-center gap-1 font-bold shadow-sm ${editingExpense === timelineIndex && !expenseToEdit ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'}`}
+                            >
+                              {editingExpense === timelineIndex && !expenseToEdit ? <MinusCircle className="w-3.5 h-3.5" /> : <PlusCircle className="w-3.5 h-3.5" />} 
+                              {editingExpense === timelineIndex && !expenseToEdit ? '收起' : '記一筆'}
                             </button>
                           </div>
+                          
                           <div className="space-y-2">
                             {expenses.filter(e => e.dayIndex === dayIndex && e.timelineIndex === timelineIndex).map(expense => (
-                              <div key={expense.id} className="flex justify-between items-center text-sm bg-[#f0fdf4] p-2.5 rounded-xl border border-emerald-100 shadow-sm group/expense hover:shadow-md transition-all relative overflow-hidden">
+                              // ✅ 每一行帳務：加入 onClick 觸發編輯
+                              <div 
+                                key={expense.id} 
+                                onClick={() => {
+                                    setEditingExpense(timelineIndex); // 打開表單區域
+                                    setExpenseToEdit(expense);        // 填入資料 (進入編輯模式)
+                                }}
+                                className="flex justify-between items-center text-sm bg-[#f0fdf4] p-2.5 rounded-xl border border-emerald-100 shadow-sm group/expense hover:shadow-md transition-all relative overflow-hidden cursor-pointer hover:bg-emerald-50"
+                                title="點擊編輯此帳務"
+                              >
                                 <div className="absolute right-0 bottom-0 opacity-10 text-emerald-300 pointer-events-none"><Coins className="w-12 h-12 -rotate-12 translate-x-4 translate-y-4"/></div>
                                 <div className="flex flex-col relative z-10">
                                   <span className="font-bold text-emerald-800 flex items-center gap-1">{expense.item} <span className="text-xs font-normal text-emerald-600 bg-emerald-100 px-1.5 rounded-md">{expense.category}</span></span>
@@ -1441,16 +1497,42 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                                 <div className="flex flex-col items-end gap-0.5 relative z-10">
                                   <div className="flex items-center gap-2">
                                     <span className="font-mono font-bold text-lg text-emerald-700">{currencySettings.symbol}{Number(expense.amount).toLocaleString()}</span>
-                                    <button onClick={() => removeExpense(expense.id)} className="text-slate-300 hover:text-rose-500 opacity-0 group-hover/expense:opacity-100 transition-opacity p-1 bg-white rounded-full shadow-sm"><X className="w-3.5 h-3.5" /></button>
+                                    {/* 刪除按鈕：停止冒泡，避免觸發編輯 */}
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); removeExpense(expense.id); }} 
+                                      className="text-slate-300 hover:text-rose-500 p-1 bg-white rounded-full shadow-sm hover:shadow-md transition-all"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
                                   </div>
                                   <span className="text-[10px] text-slate-400 font-medium bg-white/50 px-1.5 rounded-full">{convertToHomeCurrency(expense.amount)}</span>
                                 </div>
                               </div>
                             ))}
                           </div>
+
                           {editingExpense === timelineIndex && (
                             <div className="mt-3 bg-emerald-50/50 p-3 rounded-2xl border-2 border-emerald-100 relative animate-in slide-in-from-top-2">
-                                <ExpenseForm travelers={travelers} currencySettings={currencySettings} onSave={(newItem) => { addExpense(timelineIndex, newItem); setEditingExpense(null); }} onCancel={() => setEditingExpense(null)} />
+                                <ExpenseForm 
+                                  travelers={travelers} 
+                                  currencySettings={currencySettings} 
+                                  initialData={expenseToEdit} // 傳入編輯資料
+                                  onSave={(data) => {
+                                      if (expenseToEdit) {
+                                          // 更新模式
+                                          updateExpense({ ...expenseToEdit, ...data });
+                                      } else {
+                                          // 新增模式
+                                          addExpense(timelineIndex, data);
+                                      }
+                                      setEditingExpense(null);
+                                      setExpenseToEdit(null);
+                                  }} 
+                                  onCancel={() => {
+                                      setEditingExpense(null);
+                                      setExpenseToEdit(null);
+                                  }} 
+                                />
                             </div>
                           )}
                       </div>
@@ -1458,32 +1540,14 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                   </div>
                 </div>
                 
-                {!isPrintMode && (
-                    <div className="relative flex items-center justify-center py-3 z-10 group/add">
-                        <button onClick={() => onAddClick(dayIndex, timelineIndex + 1, day.city)} className="w-9 h-9 rounded-full bg-white border-2 border-rose-200 text-rose-300 hover:bg-rose-400 hover:text-white hover:scale-110 hover:border-rose-400 transition-all flex items-center justify-center shadow-sm opacity-60 group-hover/add:opacity-100" title="在此處插入新行程">
-                            <Plus className="w-5 h-5" />
-                        </button>
-                    </div>
-                )}
+                {!isPrintMode && (<div className="relative flex items-center justify-center py-3 z-10 group/add"><button onClick={() => onAddClick(dayIndex, timelineIndex + 1, day.city)} className="w-9 h-9 rounded-full bg-white border-2 border-rose-200 text-rose-300 hover:bg-rose-400 hover:text-white hover:scale-110 hover:border-rose-400 transition-all flex items-center justify-center shadow-sm opacity-60 group-hover/add:opacity-100" title="在此處插入新行程"><Plus className="w-5 h-5" /></button></div>)}
             </React.Fragment>
           )})}
           
-          {(!day.timeline || day.timeline.length === 0) && !isPrintMode && (
-             <button onClick={() => onAddClick(dayIndex, 0, day.city)} className="w-full py-12 border-4 border-dashed border-sky-200 rounded-[2rem] text-sky-400 hover:border-sky-400 hover:text-sky-600 hover:bg-sky-50 flex flex-col items-center justify-center gap-3 transition-all group">
-                <div className="p-4 bg-sky-100 rounded-full group-hover:scale-110 transition-transform"><Plus className="w-10 h-10" /></div>
-                <span className="font-bold text-lg">點擊這裡新增第一個可愛行程！✨</span>
-             </button>
-          )}
+          {(!day.timeline || day.timeline.length === 0) && !isPrintMode && (<button onClick={() => onAddClick(dayIndex, 0, day.city)} className="w-full py-12 border-4 border-dashed border-sky-200 rounded-[2rem] text-sky-400 hover:border-sky-400 hover:text-sky-600 hover:bg-sky-50 flex flex-col items-center justify-center gap-3 transition-all group"><div className="p-4 bg-sky-100 rounded-full group-hover:scale-110 transition-transform"><Plus className="w-10 h-10" /></div><span className="font-bold text-lg">點擊這裡新增第一個可愛行程！✨</span></button>)}
         </div>
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
-        <DeepDiveModal 
-           isOpen={activeDeepDive !== null}
-           onClose={() => setActiveDeepDive(null)}
-           data={activeDeepDive?.data}
-           isLoading={activeDeepDive?.isLoading}
-           itemTitle={activeDeepDive?.title}
-           onRegenerate={handleRegenerateDeepDive} 
-        />
+        <DeepDiveModal isOpen={activeDeepDive !== null} onClose={() => setActiveDeepDive(null)} data={activeDeepDive?.data} isLoading={activeDeepDive?.isLoading} itemTitle={activeDeepDive?.title} onRegenerate={handleRegenerateDeepDive} />
       </div>
     </div>
   );
