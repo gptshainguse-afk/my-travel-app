@@ -2099,59 +2099,47 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [requests, setRequests] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
-  
-  const fileInputRef = useRef(null);
 
-  // ✅ 修改：處理圖片選擇 (支援 HEIC 轉檔)
-  onst handleImageSelect = async (e) => {
-    alert("1. 觸發 onChange"); // 測試點 1
-
+  // 處理圖片選擇
+  const handleImageSelect = async (e) => {
+    // 1. 抓取檔案
     const files = e.target.files;
-    if (!files || files.length === 0) {
-        alert("沒有選擇檔案");
-        return;
-    }
+    if (!files || files.length === 0) return;
 
-    alert(`2. 抓到 ${files.length} 個檔案`); // 測試點 2
-    
-    // 鎖定 UI 避免重複點擊
-    setIsAnalyzingMenu(true); 
+    // 2. 轉為陣列
+    const newFiles = Array.from(files);
 
-    const rawFiles = Array.from(files);
+    // 3. 測試：印出檔案類型，確認 iOS 是否已自動轉為 image/jpeg
+    // 如果您在 iPhone 選圖庫，這裡應該要顯示 image/jpeg，而不是 image/heic
+    newFiles.forEach(f => console.log("File type:", f.type, "Size:", f.size));
 
     try {
-        alert("3. 開始轉檔..."); // 測試點 3
-
-        const convertedFiles = await Promise.all(rawFiles.map(async (file) => {
-             // 這裡加一個檢查，看看是不是卡在 convertToJpegIfNeeded
-             try {
-                 const res = await convertToJpegIfNeeded(file);
-                 // alert(`轉檔成功: ${file.name}`); // 如果檔案多，這行會很吵，先註解
-                 return res;
-             } catch (err) {
-                 alert(`轉檔內部錯誤: ${err.message}`);
-                 return file; // 失敗就回傳原檔
-             }
+        // 4. 直接使用檔案，不進行前端轉檔 (依賴 iOS 自動轉換)
+        // 雖然不做 heic2any，但我們還是做一次壓縮以防檔案太大
+        const compressedFiles = await Promise.all(newFiles.map(async (file) => {
+            // 如果檔案大於 1MB 或者是圖片，就進行壓縮
+            if (file.type.startsWith('image/')) {
+                const base64 = await compressImage(file);
+                // compressImage 回傳的是 base64 string，我們這裡需要轉回 File 物件以便統一處理
+                // 但為了簡單，這裡我們先存 base64 到 preview，上傳時再轉
+                // 為了保持邏輯一致，我們這裡只做預覽圖的生成
+                return file; 
+            }
+            return file;
         }));
 
-        alert("4. 全部轉檔完成，更新 State"); // 測試點 4
+        setSelectedImages(prev => [...prev, ...compressedFiles]);
 
-        setSelectedImages(prev => [...prev, ...convertedFiles]);
-
-        const newPreviews = convertedFiles.map(file => URL.createObjectURL(file));
+        const newPreviews = compressedFiles.map(file => URL.createObjectURL(file));
         setImagePreviews(prev => [...prev, ...newPreviews]);
 
     } catch (error) {
-        alert("❌ 發生錯誤: " + error.message);
-    } finally {
-        e.target.value = ''; 
-        setIsAnalyzingMenu(false); // 解鎖 UI
+        console.error("圖片處理錯誤:", error);
+        alert("圖片載入失敗，請重試");
     }
-  };
-  const handleTriggerUpload = () => {
-    if (fileInputRef.current) {
-        fileInputRef.current.click();
-    }
+
+    // 5. 清空 input
+    e.target.value = ''; 
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2160,15 +2148,21 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
     setIsAnalyzingMenu(true);
     try {
-        const imageParts = await Promise.all(selectedImages.map(async (file) => ({
-            inlineData: {
-                data: await fileToBase64(file),
-                // ✅ 保險措施：確保 mimeType 有值，若無則預設 jpeg
-                mimeType: file.type || "image/jpeg"
-            }
-        })));
+        const imageParts = await Promise.all(selectedImages.map(async (file) => {
+            // 這裡進行壓縮並轉 base64
+            const base64Data = await compressImage(file);
+            // compressImage 回傳的是 "data:image/jpeg;base64,....."
+            // 我們需要切掉前面的 header
+            const cleanBase64 = base64Data.split(',')[1];
+            
+            return {
+                inlineData: {
+                    data: cleanBase64,
+                    mimeType: "image/jpeg" // compressImage 預設轉成 jpeg
+                }
+            };
+        }));
 
-        // 強制使用 2.5 Flash
         const TARGET_MODEL = 'gemini-2.5-flash'; 
 
         const prompt = `
@@ -2212,7 +2206,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
         if (data.error) throw new Error(data.error.message);
 
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        const cleanedText = cleanJsonResult(resultText); // 使用全域清理函數
+        const cleanedText = cleanJsonResult(resultText); 
         setMenuData(JSON.parse(cleanedText));
 
     } catch (error) {
@@ -2265,35 +2259,30 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             <button onClick={onClose}><X /></button>
         </div>
 
-        {/* Scrollable Content */}
+        {/* Content */}
         <div className="p-6 overflow-y-auto flex-1 space-y-8">
             <div>
                 <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2 min-h-[100px]">
-                    {/* 預覽圖 */}
                     {imagePreviews.map((src, idx) => (
                         <div key={idx} className="relative shrink-0">
                              <img src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
                         </div>
                     ))}
                     
-                     {/* 上傳按鈕：div + onClick 觸發 */}
-                     <div 
-                        onClick={handleTriggerUpload}
-                        className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0"
-                     >
+                     {/* ✅ UI 部分：維持透明覆蓋法 (這對點擊最有效) */}
+                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
                         <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
+                        
+                        {/* ✅ 關鍵修改：accept 只留 image/*，不要有 .heic */}
+                        <input 
+                            type="file" 
+                            accept="image/*"  // <--- 關鍵！只要這樣寫，iOS 就會自動轉檔
+                            multiple 
+                            onChange={handleImageSelect} 
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
+                        />
                     </div>
-
-                    {/* 隱藏的 input，支援多選 */}
-                    <input 
-                        ref={fileInputRef}
-                        type="file" 
-                        accept="image/*" // ✅ 只要寫這樣就好，讓 iOS 自己決定是否轉檔
-                        multiple 
-                        className="hidden" 
-                        onChange={handleImageSelect} 
-                    />
                 </div>
 
                 <button 
@@ -2306,6 +2295,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </button>
             </div>
 
+            {/* ... (下方 menuData 和 Recommendation 顯示部分保持不變) ... */}
             {menuData && (
                 <div className="space-y-6 animate-in slide-in-from-bottom-4">
                     {menuData.categories.map((cat, catIdx) => (
@@ -2332,8 +2322,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 </div>
             )}
         </div>
-
-        {/* Footer */}
+        {/* Footer 省略... 保持不變 */}
         {menuData && (
             <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
                 <div className="flex gap-3 mb-3">
