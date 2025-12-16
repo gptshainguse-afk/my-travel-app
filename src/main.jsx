@@ -15,6 +15,7 @@ import {
   CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw,
   Palmtree, Fish, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, Sun
 } from 'lucide-react';
+import heic2any from "heic2any";
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
 import './index.css'; 
@@ -2061,26 +2062,38 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
   
-  // ✅ 1. 建立 Ref 來控制 input
   const fileInputRef = useRef(null);
 
-  // 處理圖片選擇
-  const handleImageSelect = (e) => {
+  // ✅ 修改：處理圖片選擇 (支援 HEIC 轉檔)
+  const handleImageSelect = async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const newFiles = Array.from(files);
+    const rawFiles = Array.from(files);
 
-    setSelectedImages(prev => [...prev, ...newFiles]);
+    try {
+        // 1. 顯示一點 Loading 狀態或提示 (選用)
+        // 這裡我們直接進行轉換，因為手機轉檔通常很快
+        
+        // 2. 平行處理所有圖片的轉檔
+        const convertedFiles = await Promise.all(rawFiles.map(convertToJpegIfNeeded));
 
-    const newPreviews = newFiles.map(file => URL.createObjectURL(file));
-    setImagePreviews(prev => [...prev, ...newPreviews]);
-    
-    // 清空 input (允許重複選取)
+        // 3. 更新圖片 State
+        setSelectedImages(prev => [...prev, ...convertedFiles]);
+
+        // 4. 產生預覽圖 (現在 HEIC 已經變 JPEG 了，瀏覽器可以預覽)
+        const newPreviews = convertedFiles.map(file => URL.createObjectURL(file));
+        setImagePreviews(prev => [...prev, ...newPreviews]);
+
+    } catch (error) {
+        console.error("圖片處理錯誤:", error);
+        alert("部分圖片格式可能不支援，請嘗試使用 JPEG 或 PNG。");
+    }
+
+    // 清空 input
     e.target.value = ''; 
   };
 
-  // ✅ 2. 專門用來觸發點擊的函數
   const handleTriggerUpload = () => {
     if (fileInputRef.current) {
         fileInputRef.current.click();
@@ -2096,10 +2109,12 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
         const imageParts = await Promise.all(selectedImages.map(async (file) => ({
             inlineData: {
                 data: await fileToBase64(file),
-                mimeType: file.type
+                // ✅ 保險措施：確保 mimeType 有值，若無則預設 jpeg
+                mimeType: file.type || "image/jpeg"
             }
         })));
 
+        // 強制使用 2.5 Flash
         const TARGET_MODEL = 'gemini-2.5-flash'; 
 
         const prompt = `
@@ -2143,7 +2158,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
         if (data.error) throw new Error(data.error.message);
 
         const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim();
+        const cleanedText = cleanJsonResult(resultText); // 使用全域清理函數
         setMenuData(JSON.parse(cleanedText));
 
     } catch (error) {
@@ -2174,6 +2189,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
         });
         const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
         setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
 
     } catch (error) {
@@ -2206,7 +2222,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         </div>
                     ))}
                     
-                     {/* ✅ 3. 上傳按鈕：改成普通的 div，點擊觸發 handleTriggerUpload */}
+                     {/* 上傳按鈕：div + onClick 觸發 */}
                      <div 
                         onClick={handleTriggerUpload}
                         className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg cursor-pointer hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0"
@@ -2215,12 +2231,11 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
                     </div>
 
-                    {/* ✅ 4. 真實的 input：隱藏起來，綁定 ref */}
-                    {/* 注意：這裡保留 accept="image/*"，iOS 應該能正常識別圖庫 */}
+                    {/* 隱藏的 input，支援多選 */}
                     <input 
                         ref={fileInputRef}
                         type="file" 
-                        accept="image/*" 
+                        accept="image/*,.heic,.heif" // 增加 heic 支援提示
                         multiple 
                         className="hidden" 
                         onChange={handleImageSelect} 
@@ -2353,6 +2368,46 @@ async function regenerateDayWeather(city, date, apiKey) {
     throw error;
   }
 }
+
+const convertToJpegIfNeeded = async (file) => {
+  const fileName = file.name.toLowerCase();
+  const fileType = (file.type || "").toLowerCase();
+
+  // 判斷是否為 HEIC 或 HEIF 格式
+  const isHeic = 
+    fileType.includes("heic") || 
+    fileType.includes("heif") || 
+    /\.heic$/i.test(fileName) || 
+    /\.heif$/i.test(fileName);
+
+  // 如果不是 HEIC，直接回傳原檔案
+  if (!isHeic) return file;
+
+  console.log(`正在轉換 HEIC 圖片: ${file.name}...`);
+
+  try {
+    // 呼叫 heic2any 進行轉換
+    const jpgBlob = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.8, // 稍微壓縮以加快速度
+    });
+
+    // heic2any 可能回傳單一 Blob 或 Blob 陣列，統一處理
+    const blob = Array.isArray(jpgBlob) ? jpgBlob[0] : jpgBlob;
+
+    // 建立新的 File 物件 (偽裝成原始上傳的檔案，但格式已變為 JPG)
+    return new File(
+      [blob], 
+      file.name.replace(/\.(heic|heif)$/i, ".jpg"), 
+      { type: "image/jpeg" }
+    );
+  } catch (error) {
+    console.error("HEIC 轉換失敗:", error);
+    // 如果轉換失敗，回傳原檔試試運氣，或讓後續流程報錯
+    return file;
+  }
+};
 
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
