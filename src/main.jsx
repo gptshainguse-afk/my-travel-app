@@ -2336,39 +2336,38 @@ const App = () => {
   const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
   const [iconSelectModalData, setIconSelectModalData] = useState(null);
   const [simpleFlights, setSimpleFlights] = usePersistentState('travel_simple_flights', {
-    outbound: { mode: 'flight', date: '2025-12-08', depTime: '16:55', arrTime: '20:30', code: 'IT720', station: 'FUK', type: '去程' },
-    transit:  { mode: 'flight', date: '2025-12-12', depTime: '12:10', arrTime: '14:00', code: 'TW214', station: 'TAE', type: '中轉' },
-    inbound:  { mode: 'flight', date: '2025-12-12', depTime: '22:40', arrTime: '00:30', code: 'TW663', station: 'TPE', type: '回程' },
+    outbound: { mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', type: '去程' },
+    transit:  { mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', type: '中轉' },
+    inbound:  { mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', type: '回程' },
   });
 
   
   const [multiFlights, setMultiFlights] = usePersistentState('travel_multi_flights', [
-    { id: 1, type: '移動', mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', isOpen: true }
+    // 預設給一個空的欄位，方便用戶直接填寫，也可以改成 [] 讓用戶自己按新增
+    { id: Date.now(), type: '移動', mode: 'flight', date: '', depTime: '', arrTime: '', code: '', station: '', isOpen: true }
   ]);
   const [basicData, setBasicData] = usePersistentState('travel_basic_data', {
-    destinations: '福岡',
-    dates: '2025-12-08 to 2025-12-12',
-    type: '綜合 (購物+文化)',
-    travelers: 2,
-    hasTransitTour: true,
+    destinations: '', // 清空
+    dates: '',        // 清空
+    type: '休閒 (慢步調)', // 給一個預設值即可
+    travelers: 2,     // 預設人數可以留 1 或 2，避免報錯
+    hasTransitTour: false, // 預設關閉
     isMultiCityFlight: false,
-    hasFlights: true,
+    hasFlights: true, // 預設開啟航班填寫
     transportMode: 'public', 
     needParking: false,
-    specialRequests: '',
+    specialRequests: '', // 清空
     priceRanges: { high: false, medium: false, low: false },
-    // --- 新增欄位 ---
-    enableCreditCard: true, // 是否開啟信用卡推薦功能
-    issuingCountry: 'TW',   // 預設發卡國家
-    otherCountryName: ''    // 如果選其他，手填國家名
+    enableCreditCard: true, 
+    issuingCountry: 'TW',   
+    otherCountryName: ''    
   });
 
-  const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', [
-    { 
-      id: 1, type: '飯店', source: 'Agoda', name: '博多站前飯店', 
-      address: '福岡市博多區...', orderId: 'AG123456', booker: '王小明', isOpen: true 
-    }
-  ]);
+  const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', []);
+  // 或者保留一個空的輸入框：
+  // const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', [
+  //   { id: Date.now(), type: '飯店', source: '', name: '', address: '', orderId: '', booker: '', isOpen: true }
+  // ]);
 
   const [travelerNames, setTravelerNames] = usePersistentState('traveler_names', ['旅伴 A', '旅伴 B']);
   const [expenses, setExpenses] = usePersistentState('travel_expenses', []);
