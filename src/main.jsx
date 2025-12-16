@@ -2103,35 +2103,51 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const fileInputRef = useRef(null);
 
   // ✅ 修改：處理圖片選擇 (支援 HEIC 轉檔)
-  const handleImageSelect = async (e) => {
+  onst handleImageSelect = async (e) => {
+    alert("1. 觸發 onChange"); // 測試點 1
+
     const files = e.target.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0) {
+        alert("沒有選擇檔案");
+        return;
+    }
+
+    alert(`2. 抓到 ${files.length} 個檔案`); // 測試點 2
+    
+    // 鎖定 UI 避免重複點擊
+    setIsAnalyzingMenu(true); 
 
     const rawFiles = Array.from(files);
 
     try {
-        // 1. 顯示一點 Loading 狀態或提示 (選用)
-        // 這裡我們直接進行轉換，因為手機轉檔通常很快
-        
-        // 2. 平行處理所有圖片的轉檔
-        const convertedFiles = await Promise.all(rawFiles.map(convertToJpegIfNeeded));
+        alert("3. 開始轉檔..."); // 測試點 3
 
-        // 3. 更新圖片 State
+        const convertedFiles = await Promise.all(rawFiles.map(async (file) => {
+             // 這裡加一個檢查，看看是不是卡在 convertToJpegIfNeeded
+             try {
+                 const res = await convertToJpegIfNeeded(file);
+                 // alert(`轉檔成功: ${file.name}`); // 如果檔案多，這行會很吵，先註解
+                 return res;
+             } catch (err) {
+                 alert(`轉檔內部錯誤: ${err.message}`);
+                 return file; // 失敗就回傳原檔
+             }
+        }));
+
+        alert("4. 全部轉檔完成，更新 State"); // 測試點 4
+
         setSelectedImages(prev => [...prev, ...convertedFiles]);
 
-        // 4. 產生預覽圖 (現在 HEIC 已經變 JPEG 了，瀏覽器可以預覽)
         const newPreviews = convertedFiles.map(file => URL.createObjectURL(file));
         setImagePreviews(prev => [...prev, ...newPreviews]);
 
     } catch (error) {
-        console.error("圖片處理錯誤:", error);
-        alert("部分圖片格式可能不支援，請嘗試使用 JPEG 或 PNG。");
+        alert("❌ 發生錯誤: " + error.message);
+    } finally {
+        e.target.value = ''; 
+        setIsAnalyzingMenu(false); // 解鎖 UI
     }
-
-    // 清空 input
-    e.target.value = ''; 
   };
-
   const handleTriggerUpload = () => {
     if (fileInputRef.current) {
         fileInputRef.current.click();
