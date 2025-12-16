@@ -1220,7 +1220,45 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   };
 
   // ... (以下保留原有的圖片、筆記、AI 函數，邏輯不變) ...
-  const handlePhotoUpload = async (e, timelineIndex) => { const file = e.target.files[0]; if (!file) return; try { const base64 = await compressImage(file); const currentItem = day.timeline[timelineIndex]; const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64]; updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos }); } catch (error) { console.error("Image upload failed", error); alert("圖片處理失敗，請重試"); } };
+  const handleGlobalFileChange = async (e) => {
+    const file = e.target.files[0];
+    const targetIndex = uploadingIndexRef.current; // 從 Ref 取出現在是哪個行程要加照片
+
+    if (!file || targetIndex === null) return;
+
+    try {
+        // A. 先嘗試轉換 HEIC (防當機版)
+        const jpegFile = await convertToJpegIfNeeded(file);
+
+        // B. 再進行壓縮
+        const base64 = await compressImage(jpegFile);
+
+        // C. 更新該行程的資料
+        const currentItem = day.timeline[targetIndex];
+        const newPhotos = currentItem.photos ? [...currentItem.photos, base64] : [base64];
+        
+        updateItineraryItem(dayIndex, targetIndex, { photos: newPhotos });
+
+    } catch (error) {
+        console.error("照片處理失敗:", error);
+        alert("照片上傳失敗，請重試");
+    } finally {
+        // 清空 input 讓下一張能重複選
+        e.target.value = '';
+        uploadingIndexRef.current = null;
+    }
+  };
+
+  // ✅ 新增：觸發上傳的函數 (綁定在相機按鈕上)
+  // 這個函數只是負責「按下去」那個隱藏的 input
+  const triggerItemUpload = (timelineIndex) => {
+    uploadingIndexRef.current = timelineIndex; // 記住現在是第幾個行程
+    if (globalFileInputRef.current) {
+        setTimeout(() => {
+            globalFileInputRef.current.click(); // 模擬點擊
+        }, 100);
+    }
+  };
   const removePhoto = (timelineIndex, photoIndex) => { if(!confirm("刪除這張照片？")) return; const currentItem = day.timeline[timelineIndex]; const newPhotos = currentItem.photos.filter((_, i) => i !== photoIndex); updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos }); };
   const handleNoteChange = (timelineIndex, text) => { updateItineraryItem(dayIndex, timelineIndex, { user_notes: text }); };
   
@@ -2235,7 +2273,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                     <input 
                         ref={fileInputRef}
                         type="file" 
-                        accept="image/*,.heic,.heif" // 增加 heic 支援提示
+                        accept="image/*" // ✅ 只要寫這樣就好，讓 iOS 自己決定是否轉檔
                         multiple 
                         className="hidden" 
                         onChange={handleImageSelect} 
@@ -2405,6 +2443,49 @@ const convertToJpegIfNeeded = async (file) => {
   } catch (error) {
     console.error("HEIC 轉換失敗:", error);
     // 如果轉換失敗，回傳原檔試試運氣，或讓後續流程報錯
+    return file;
+  }
+};
+const convertToJpegIfNeeded = async (file) => {
+  const fileName = file.name.toLowerCase();
+  const fileType = (file.type || "").toLowerCase();
+
+  // 判斷是否為 HEIC 或 HEIF 格式
+  const isHeic = 
+    fileType.includes("heic") || 
+    fileType.includes("heif") || 
+    /\.heic$/i.test(fileName) || 
+    /\.heif$/i.test(fileName);
+
+  // 如果不是 HEIC，直接回傳原檔案
+  if (!isHeic) return file;
+
+  console.log(`正在轉換 HEIC 圖片: ${file.name}...`);
+
+  try {
+    // 設定 5 秒超時，避免 iOS 記憶體不足卡死
+    const conversionPromise = heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.7, // 降低品質以節省記憶體 (原本 0.9 太高)
+    });
+
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("HEIC 轉換超時")), 5000)
+    );
+
+    const jpgBlob = await Promise.race([conversionPromise, timeoutPromise]);
+
+    const blob = Array.isArray(jpgBlob) ? jpgBlob[0] : jpgBlob;
+
+    return new File(
+      [blob], 
+      file.name.replace(/\.(heic|heif)$/i, ".jpg"), 
+      { type: "image/jpeg" }
+    );
+  } catch (error) {
+    console.warn("HEIC 轉換失敗或超時，嘗試使用原檔:", error);
+    // 如果轉換失敗，回傳原檔，至少讓後端或 API 試試看，不要讓 UI 沒反應
     return file;
   }
 };
