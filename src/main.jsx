@@ -2060,21 +2060,30 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   const [requests, setRequests] = useState('');
   const [recommendation, setRecommendation] = useState(null);
   const [isRecommending, setIsRecommending] = useState(false);
+  
+  // 用來強制重置 input 的 key
+  const [inputKey, setInputKey] = useState(Date.now());
 
-  // ✅ 修正：使用函數式更新 (prev => ...) 確保圖片能正確疊加
+  // ✅ 修正：更穩定的圖片選擇處理
   const handleImageSelect = (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    // 更新檔案列表
-    setSelectedImages(prev => [...prev, ...files]);
+    // 1. 立刻將 FileList 轉為陣列，避免 iOS 參考丟失
+    const newFiles = Array.from(files);
 
-    // 更新預覽圖
-    const newPreviews = files.map(file => URL.createObjectURL(file));
+    // 2. 更新檔案列表
+    setSelectedImages(prev => [...prev, ...newFiles]);
+
+    // 3. 更新預覽圖
+    const newPreviews = newFiles.map(file => URL.createObjectURL(file));
     setImagePreviews(prev => [...prev, ...newPreviews]);
     
-    // 清空 input 讓同檔名可以重複選 (如果需要)
-    e.target.value = '';
+    // 4. ✅ 關鍵修正：針對 iOS，不要直接 e.target.value = ''
+    // 改為透過更新 key 來強制 React 重新渲染 input，這樣比清空 value 更乾淨且穩定
+    setTimeout(() => {
+        setInputKey(Date.now());
+    }, 100);
   };
 
   const handleAnalyzeMenu = async () => {
@@ -2177,37 +2186,48 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative">
+    <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-[#3a2a25] rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative transition-colors duration-300">
+        
+        {/* Header */}
         <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
             <h3 className="font-bold text-lg flex items-center gap-2"><ChefHat/> AI 菜單翻譯助手</h3>
             <button onClick={onClose}><X /></button>
         </div>
 
+        {/* Scrollable Content */}
         <div className="p-6 overflow-y-auto flex-1 space-y-8">
             <div>
-                <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2">
+                <div className="flex items-center gap-4 mb-4 overflow-x-auto pb-2 min-h-[100px]">
+                    {/* 預覽圖 */}
                     {imagePreviews.map((src, idx) => (
-                        <img key={idx} src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200 shrink-0" />
+                        <div key={idx} className="relative shrink-0">
+                             <img src={src} alt="preview" className="h-24 w-24 object-cover rounded-lg border-2 border-orange-200" />
+                        </div>
                     ))}
-                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg hover:bg-slate-50 hover:border-orange-400 transition-colors shrink-0 relative">
-                        <Camera className="w-6 h-6 text-slate-400" />
-                        <span className="text-xs text-slate-500 mt-1">加入照片</span>
+                    
+                     {/* ✅ 上傳按鈕 (已修正 iOS 點擊問題) */}
+                     <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
+                        <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
+                        <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
                         
-                        {/* 這裡原本是 hidden，現在改為絕對定位 + 透明，直接蓋在整個方塊上 */}
+                        {/* 絕對定位的 input，覆蓋整個按鈕區域 */}
                         <input 
+                            key={inputKey} // 使用 key 強制重渲染
                             type="file" 
-                            accept="image/*" // iOS 認得這個，會跳出圖庫/拍照選項
+                            accept="image/*" 
                             multiple 
                             onChange={handleImageSelect} 
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
+                            // z-50 確保在最上層，cursor-pointer 確保有點擊手勢
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
                         />
                     </div>
                 </div>
+
                 <button 
                     onClick={handleAnalyzeMenu} 
                     disabled={isAnalyzingMenu || selectedImages.length === 0}
-                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all"
+                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 dark:disabled:bg-[#4a3b32] text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-md"
                 >
                     {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
                     {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
@@ -2218,16 +2238,16 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 <div className="space-y-6 animate-in slide-in-from-bottom-4">
                     {menuData.categories.map((cat, catIdx) => (
                         <div key={catIdx}>
-                            <h4 className="font-bold text-orange-700 text-lg mb-2 pb-1 border-b border-orange-100">{cat.name}</h4>
+                            <h4 className="font-bold text-orange-700 dark:text-orange-400 text-lg mb-2 pb-1 border-b border-orange-100 dark:border-orange-900/30">{cat.name}</h4>
                             <div className="space-y-3">
                                 {cat.items.map((item, itemIdx) => (
-                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 p-3 rounded-lg">
+                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-lg border border-transparent dark:border-[#4a3b32]">
                                         <div>
-                                            <div className="font-bold text-slate-800">{item.translated_name}</div>
-                                            <div className="text-xs text-slate-500">{item.original_name}</div>
-                                            {item.description && <div className="text-sm text-slate-600 mt-1">{item.description}</div>}
+                                            <div className="font-bold text-slate-800 dark:text-[#ebd5c1]">{item.translated_name}</div>
+                                            <div className="text-xs text-slate-500 dark:text-[#a08d85]">{item.original_name}</div>
+                                            {item.description && <div className="text-sm text-slate-600 dark:text-[#d6c0b3] mt-1">{item.description}</div>}
                                         </div>
-                                        <div className="text-right font-mono font-bold text-orange-600">
+                                        <div className="text-right font-mono font-bold text-orange-600 dark:text-orange-400">
                                             {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
                                              item.price_tax_excluded ? <>{currencySymbol}{item.price_tax_excluded}<span className="text-xs ml-1 text-slate-400">(未稅)</span></> :
                                              '--'}
@@ -2241,18 +2261,19 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             )}
         </div>
 
+        {/* Footer */}
         {menuData && (
-            <div className="p-4 bg-orange-50 border-t border-orange-100 shrink-0">
+            <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
                 <div className="flex gap-3 mb-3">
-                    <input type="number" placeholder={`預算 (例如: 2000${currencySymbol})`} value={budget} onChange={e=>setBudget(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400" />
-                    <input type="text" placeholder="特殊要求 (例如: 不吃牛、對蝦過敏)" value={requests} onChange={e=>setRequests(e.target.value)} className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400" />
+                    <input type="number" placeholder={`預算 (例如: 2000${currencySymbol})`} value={budget} onChange={e=>setBudget(e.target.value)} className="flex-1 p-2 border rounded-lg text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" />
+                    <input type="text" placeholder="特殊要求 (例如: 不吃牛)" value={requests} onChange={e=>setRequests(e.target.value)} className="flex-[2] p-2 border rounded-lg text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" />
                     <button onClick={handleRecommend} disabled={isRecommending} className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold flex items-center gap-1 disabled:bg-slate-300 transition-colors">
                         {isRecommending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} AI 推薦
                     </button>
                 </div>
                 {recommendation && (
-                    <div className="bg-white p-4 rounded-xl border border-red-100 shadow-sm text-slate-700 leading-relaxed animate-in fade-in">
-                        <h5 className="font-bold text-red-700 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
+                    <div className="bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in">
+                        <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1">💡 推薦結果：</h5>
                         {recommendation}
                     </div>
                 )}
