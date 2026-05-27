@@ -905,7 +905,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     setIsAnalyzing(true);
     setAnalysisResult(null); 
     
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';    
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.5-flash';    
     
     const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
     const prompt = `
@@ -934,7 +934,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
       
       if (data.error) {
          console.warn(`主模型 ${TARGET_MODEL} 失敗，啟動自動修復 (2.5 Flash preview)...`);
-         const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+         const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
