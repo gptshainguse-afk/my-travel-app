@@ -926,9 +926,15 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
     try {
       console.log(`正在嘗試主模型: ${TARGET_MODEL}...`);
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+              contents: [{ parts: [{ text: systemPrompt }] }], 
+              generationConfig: { 
+                  responseMimeType: "application/json",
+                  maxOutputTokens: 8192  // ✅ 加入這行，防止行程太長被切斷
+              } 
+          })
       });
       const data = await response.json();
       
