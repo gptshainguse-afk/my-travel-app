@@ -1251,8 +1251,106 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
   };
   const handleNoteChange = (timelineIndex, text) => { updateItineraryItem(dayIndex, timelineIndex, { user_notes: text }); };
-  const handleDeepDive = async (timelineIndex, item) => { /* 保留原本代碼 */ if (item.ai_details) { setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title }); return; } if (!apiKey) return alert("需要 API Key 才能使用此功能"); setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title }); const TARGET_MODEL = 'gemini-3.1-flash-lite'; const prompt = `針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title }); } catch (error) { console.error(error); alert("AI 分析失敗: " + error.message); setActiveDeepDive(null); } };
-  const handleRegenerateDeepDive = async () => { /* 保留原本代碼 */ const { timelineIndex, title } = activeDeepDive; if (!apiKey) return alert("需要 API Key"); setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null }); const TARGET_MODEL = 'gemini-3.1-flash-lite'; const prompt = `針對景點/地點: "${title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title }); } catch (error) { console.error(error); alert("重新生成失敗: " + error.message); setActiveDeepDive(prev => ({ ...prev, isLoading: false })); } };
+  const handleDeepDive = async (timelineIndex, item) => {
+    if (item.ai_details) {
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
+      return;
+    }
+    if (!apiKey) return alert("需要 API Key 才能使用此功能");
+    
+    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
+    const TARGET_MODEL = 'gemini-3.1-flash-lite';
+    
+    // ✅ 完整還原 Prompt (移除省略號，明確要求 JSON 欄位)
+    const prompt = `
+      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${item.title}" 
+         ]
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應");
+      
+      const cleanedText = cleanJsonResult(resultText);
+      let aiResult = JSON.parse(cleanedText);
+      
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
+    } catch (error) {
+      console.error(error);
+      alert("AI 分析失敗: " + error.message);
+      setActiveDeepDive(null);
+    }
+  };
+
+  const handleRegenerateDeepDive = async () => {
+    const { timelineIndex, title } = activeDeepDive;
+    if (!apiKey) return alert("需要 API Key");
+    
+    setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null });
+    const TARGET_MODEL = 'gemini-3.1-flash-lite';
+    
+    // ✅ 完整還原 Prompt
+    const prompt = `
+      針對景點/地點: "${title}" (位於 ${day.city}) 進行深度分析。
+      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
+      請務必回傳合法的 JSON 物件，不要有其他文字。
+      包含以下欄位:
+      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
+      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
+      3. "safety_alert": 針對此地的具體治安或避雷提示
+      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
+      5. "walking_route": [
+           "起點: 建議的最近車站出口或地標",
+           "途經1: 沿途好逛或好拍的點",
+           "途經2: (選填)",
+           "終點: ${title}" 
+         ]
+    `;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      
+      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error("AI 無回應");
+      
+      const cleanedText = cleanJsonResult(resultText);
+      let aiResult = JSON.parse(cleanedText);
+      
+      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title });
+    } catch (error) {
+      console.error(error);
+      alert("重新生成失敗: " + error.message);
+      setActiveDeepDive(prev => ({ ...prev, isLoading: false }));
+    }
+  };
   const convertToHomeCurrency = (amount) => { if (!currencySettings.rate || currencySettings.rate === 0) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
   const handleWeatherClick = async () => { setIsRefreshingWeather(true); await onRefreshWeather(dayIndex, day.city, day.date); setIsRefreshingWeather(false); };
   const typeColors = { flight: 'bg-sky-100 text-sky-500 ring-sky-200', transport: 'bg-indigo-100 text-indigo-500 ring-indigo-200', meal: 'bg-orange-100 text-orange-500 ring-orange-200', hotel: 'bg-rose-100 text-rose-500 ring-rose-200', activity: 'bg-teal-100 text-teal-500 ring-teal-200', spot: 'bg-emerald-100 text-emerald-500 ring-emerald-200', shopping: 'bg-pink-100 text-pink-500 ring-pink-200', default: 'bg-slate-100 text-slate-500 ring-slate-200' };
@@ -2830,15 +2928,26 @@ const App = () => {
     
     const TARGET_MODEL = modelType === '3.5 flash' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
     console.log("Current Model Strategy:", TARGET_MODEL);
-
+    let styleInstruction = "";
+    if (basicData.type.includes('休閒')) {
+        styleInstruction = "VERY SLOW PACE. Max 2-3 main spots per day. Start late (e.g., 10:00 AM), include afternoon tea, and allow 2+ hours for meals. Focus on relaxing vibes.";
+    } else if (basicData.type.includes('購物')) {
+        styleInstruction = "HIGH DENSITY FAST PACE. Focus heavily on shopping districts, outlets, trendy boutiques, and malls. 4-6 timeline items per day. Interleave shopping with quick cafe breaks.";
+    } else if (basicData.type.includes('文化')) {
+        styleInstruction = "MODERATE PACE. Focus heavily on museums, shrines, historical streets, and heritage sites. Provide deep historical context in the descriptions. 3-4 items per day.";
+    } else if (basicData.type.includes('深度')) {
+        styleInstruction = "IMMERSIVE LOCAL PACE. Avoid typical tourist traps. Focus strictly on local wet markets, hidden alleys, local neighborhood eateries, and unique cultural workshops. 3-4 items per day.";
+    } else {
+        styleInstruction = "BALANCED PACE. 3-5 items per day. A perfect mix of top landmarks, shopping areas, and cultural sites.";
+    }
     const systemPrompt = `
       You are an expert AI Travel Planner API. Respond with valid JSON only.
       User Constraints:
       - Destinations: ${basicData.destinations}
       - Dates: ${basicData.dates}
-      - Type: ${basicData.type}
+      - Travel Style & Pacing: ${basicData.type}. CRITICAL INSTRUCTION: ${styleInstruction} You MUST adjust the number of daily timeline items and specific location choices strictly based on this exact style!
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString}
+      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka, TAE=Daegu)." : "(No flights involved)"}
       - Transport Mode: ${transportConstraint}
       - Parking Info Needed: ${parkingConstraint}
       - Accommodation: ${accommodationString}
