@@ -1245,7 +1245,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
   };
   const handleNoteChange = (timelineIndex, text) => { updateItineraryItem(dayIndex, timelineIndex, { user_notes: text }); };
-  const handleDeepDive = async (timelineIndex, item) => { /* 保留原本代碼 */ if (item.ai_details) { setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title }); return; } if (!apiKey) return alert("需要 API Key 才能使用此功能"); setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title }); const TARGET_MODEL = 'gemini-2.5-flash'; const prompt = `針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title }); } catch (error) { console.error(error); alert("AI 分析失敗: " + error.message); setActiveDeepDive(null); } };
+  const handleDeepDive = async (timelineIndex, item) => { /* 保留原本代碼 */ if (item.ai_details) { setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title }); return; } if (!apiKey) return alert("需要 API Key 才能使用此功能"); setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title }); const TARGET_MODEL = 'gemini-3.1-flash-lite'; const prompt = `針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title }); } catch (error) { console.error(error); alert("AI 分析失敗: " + error.message); setActiveDeepDive(null); } };
   const handleRegenerateDeepDive = async () => { /* 保留原本代碼 */ const { timelineIndex, title } = activeDeepDive; if (!apiKey) return alert("需要 API Key"); setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null }); const TARGET_MODEL = 'gemini-3.1-flash-lite'; const prompt = `針對景點/地點: "${title}" (位於 ${day.city}) 進行深度分析...(略)...`; try { const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }) }); const data = await response.json(); if (data.error) throw new Error(data.error.message); const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text; if (!resultText) throw new Error("AI 無回應"); const cleanedText = cleanJsonResult(resultText); let aiResult = JSON.parse(cleanedText); updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult }); setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title }); } catch (error) { console.error(error); alert("重新生成失敗: " + error.message); setActiveDeepDive(prev => ({ ...prev, isLoading: false })); } };
   const convertToHomeCurrency = (amount) => { if (!currencySettings.rate || currencySettings.rate === 0) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
   const handleWeatherClick = async () => { setIsRefreshingWeather(true); await onRefreshWeather(dayIndex, day.city, day.date); setIsRefreshingWeather(false); };
@@ -1925,7 +1925,7 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey) {
   // 強制使用 2.5 Flash，避免 Pro 模型的配額限制 (Rate Limit)
-  const TARGET_MODEL = 'gemini-2.5-flash'; 
+  const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
   
   console.log(`[AI Edit] 正在使用模型: ${TARGET_MODEL} 進行生成...`);
 
@@ -2030,7 +2030,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             }
         })));
 
-        const TARGET_MODEL = 'gemini-2.5-flash-lite'; 
+        const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
 
         const prompt = `
           你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
@@ -2099,7 +2099,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
            請適當分段，讓閱讀更舒適。
         `;
 
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`, {
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
@@ -2278,7 +2278,7 @@ const IconSelectorModal = ({ isOpen, onClose, onSelect }) => {
   );
 };
 async function regenerateDayWeather(city, date, apiKey) {
-  const TARGET_MODEL = 'gemini-2.5-flash'; 
+  const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
   
   const prompt = `
     請查詢並預測 "${city}" 在日期 "${date}" 的天氣狀況。
@@ -2822,7 +2822,7 @@ const App = () => {
       : "";
     const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
     
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    const TARGET_MODEL = modelType === '3.5 flash' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
     console.log("Current Model Strategy:", TARGET_MODEL);
 
     const systemPrompt = `
@@ -2920,8 +2920,8 @@ const App = () => {
          console.log(`嘗試使用模型: ${TARGET_MODEL}`);
          data = await fetchWithModel(TARGET_MODEL);
       } catch (err) {
-         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-2.5-flash-preview-09-2025...`, err);
-         data = await fetchWithModel('gemini-2.5-flash-preview-09-2025');
+         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-3.1-flash-lite...`, err);
+         data = await fetchWithModel('gemini-3.1-flash-lite');
       }
       const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!resultText) throw new Error("AI 回傳內容為空");
