@@ -2890,22 +2890,42 @@ const App = () => {
     setStep('loading');
     setErrorMsg('');
 
+    // --- 1. 計算總天數與拆分日期陣列 ---
+    let dateList = [];
+    try {
+        if (basicData.dates) {
+            const parts = basicData.dates.split(' to ');
+            const start = new Date(parts[0]);
+            const end = new Date(parts[1] || parts[0]); // 若沒有 to，代表只有一天
+            let current = new Date(start);
+            while (current <= end) {
+                const y = current.getFullYear();
+                const m = String(current.getMonth() + 1).padStart(2, '0');
+                const d = String(current.getDate()).padStart(2, '0');
+                dateList.push(`${y}-${m}-${d}`);
+                current.setDate(current.getDate() + 1);
+                if (dateList.length > 30) break; // 防呆機制：最高支援 30 天
+            }
+        }
+    } catch(e) {
+        console.warn("Date parsing error", e);
+    }
+    
+    // 防呆：若未選日期預設給 3 天
+    if (dateList.length === 0) {
+        dateList = ["未定日期 (Day 1)", "未定日期 (Day 2)", "未定日期 (Day 3)"];
+    }
+    
+    const totalDays = dateList.length;
+    const batchSize = 4; // ⭐ 關鍵：每批次請 AI 處理 4 天，避免 JSON 斷尾
+
+    // --- 2. 準備使用者約束條件 ---
     let flightsString = "No flights involved.";
     if (basicData.hasFlights) {
-      const fmtMode = (m) => m === 'train' ? '火車/高鐵' : '飛機';
       if (basicData.isMultiCityFlight) {
-        flightsString = multiFlights.map(f => 
-          `${f.type} | 交通:${fmtMode(f.mode)} | 日期:${f.date} | 出發:${f.depTime} | 抵達:${f.arrTime} | 班次:${f.code} | 地點:${f.station}`
-        ).join('\n');
+        flightsString = multiFlights.map(f => `${f.type} | 日期:${f.date} | 時間:${f.time} | 航班:${f.code} | 機場:${f.airport}`).join('\n');
       } else {
-        const renderLeg = (leg) => 
-          `${leg.type} | 交通:${fmtMode(leg.mode)} | 日期:${leg.date} | 出發:${leg.depTime} | 抵達:${leg.arrTime} | 班次:${leg.code} | 地點:${leg.station}`;
-
-        flightsString = [
-          renderLeg(simpleFlights.outbound),
-          simpleFlights.transit.date ? renderLeg(simpleFlights.transit) : null,
-          renderLeg(simpleFlights.inbound)
-        ].filter(Boolean).join('\n');
+        flightsString = `去程 | 日期:${simpleFlights.outbound.date} | 時間:${simpleFlights.outbound.time} | 航班:${simpleFlights.outbound.code} | 機場:${simpleFlights.outbound.airport}\n中轉 | 日期:${simpleFlights.transit.date ? simpleFlights.transit.date : '無'} | 時間:${simpleFlights.transit.time} | 航班:${simpleFlights.transit.code} | 機場:${simpleFlights.transit.airport}\n回程 | 日期:${simpleFlights.inbound.date} | 時間:${simpleFlights.inbound.time} | 航班:${simpleFlights.inbound.code} | 機場:${simpleFlights.inbound.airport}`;
       }
     }
 
@@ -2922,187 +2942,189 @@ const App = () => {
       : "Public Transport";
     
     const parkingConstraint = (basicData.transportMode === 'self_driving' && basicData.needParking)
-      ? "Include nearby parking lot recommendations with estimated prices for each stop (Activity/Meal)."
+      ? "Include nearby parking lot recommendations with estimated prices for each stop."
       : "";
     const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
     
-    const TARGET_MODEL = modelType === '3.5 flash' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
-    console.log("Current Model Strategy:", TARGET_MODEL);
+    // 動態風格指令
     let styleInstruction = "";
     if (basicData.type.includes('休閒')) {
-        styleInstruction = "VERY SLOW PACE. Max 2-3 main spots per day. Start late (e.g., 10:00 AM), include afternoon tea, and allow 2+ hours for meals. Focus on relaxing vibes.";
+        styleInstruction = "VERY SLOW PACE. Max 2-3 main spots per day. Focus on relaxing vibes.";
     } else if (basicData.type.includes('購物')) {
-        styleInstruction = "HIGH DENSITY FAST PACE. Focus heavily on shopping districts, outlets, trendy boutiques, and malls. 4-6 timeline items per day. Interleave shopping with quick cafe breaks.";
+        styleInstruction = "HIGH DENSITY. Focus heavily on shopping districts, malls. 4-5 items per day.";
     } else if (basicData.type.includes('文化')) {
-        styleInstruction = "MODERATE PACE. Focus heavily on museums, shrines, historical streets, and heritage sites. Provide deep historical context in the descriptions. 3-4 items per day.";
+        styleInstruction = "MODERATE PACE. Focus on museums, historical sites. 3-4 items per day.";
     } else if (basicData.type.includes('深度')) {
-        styleInstruction = "IMMERSIVE LOCAL PACE. Avoid typical tourist traps. Focus strictly on local wet markets, hidden alleys, local neighborhood eateries, and unique cultural workshops. 3-4 items per day.";
+        styleInstruction = "IMMERSIVE LOCAL. Focus on hidden alleys, local eateries. 3-4 items per day.";
     } else {
-        styleInstruction = "BALANCED PACE. 3-5 items per day. A perfect mix of top landmarks, shopping areas, and cultural sites.";
+        styleInstruction = "BALANCED PACE. 3-4 items per day.";
     }
-    const systemPrompt = `
-      You are an expert AI Travel Planner API. Respond with valid JSON only.
+
+    const TARGET_MODEL = modelType === '3.5 flash' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
+    console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型: ${TARGET_MODEL})`);
+
+    const baseConstraints = `
       User Constraints:
       - Destinations: ${basicData.destinations}
-      - Dates: ${basicData.dates}
-      - Travel Style & Pacing: ${basicData.type}. CRITICAL INSTRUCTION: ${styleInstruction} You MUST adjust the number of daily timeline items strictly based on this exact style!
+      - Total Trip Length: ${totalDays} days (${basicData.dates})
+      - Travel Style & Pacing: ${basicData.type}. CRITICAL: ${styleInstruction}
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka)." : "(No flights involved)"}
+      - Flights: ${flightsString}
       - Transport Mode: ${transportConstraint}
-      - Parking Info Needed: ${parkingConstraint}
       - Accommodation: ${accommodationString}
-      - Transit Tour: ${basicData.hasTransitTour}
       - Special Requests: ${basicData.specialRequests || "None"}
       - Restaurant Budget: ${priceConstraint}
-      - User's Home Country (for Bank List): ${selectedCountryName}
-      
-      Requirements:
-      1. Logistics: Realistic travel times + buffer.
-      2. Culture & History: detailed background story.
-      3. Food: Menu translation.
-      4. Weather: Temp range & clothing.
-      5. Currency: Local currency code & rate to TWD.
-      6. **City Guide**: For each major city, include history, transport, safety, subsidies, tax_refund, and major_banks_list.
-      7. **Basic Phrases (MANDATORY)**: You MUST generate exactly 5 objects for "basic_phrases". 
-      8. Output Language: Traditional Chinese (Taiwan).
-      9. major_banks_list: [CRITICAL] An array of 15-20 major consumer banks located in "${selectedCountryName}" (User's Origin). DO NOT list banks from the destination city.
-      10. **Currency Rate**: You MUST provide the numerical exchange rate in "currency_rate_val". Example: if 1 EUR = 34.5 TWD, value is 34.5.
-      
-      ⭐⭐⭐ [CRITICAL COMPLETENESS RULE] ⭐⭐⭐
-      - You MUST generate a "day" object for EVERY SINGLE DAY from the start date to the end date.
-      - ABSOLUTELY NO SKIPPING DAYS. Day 1, Day 2, Day 3... must be strictly sequential.
-      - If the trip length exceeds 5 days, you MUST dynamically shorten the length of "description", "warnings_tips", and "history_culture" to ensure the entire JSON fits within output token limits. Completeness of all days is MUCH more important than the length of descriptions!
-      
-      JSON Schema Structure:
-      {
-        "trip_summary": "String",
-        "currency_rate": "String (e.g. '1 EUR ≈ 34.5 TWD')",
-        "currency_rate_val": Number, 
-        "currency_code": "String (e.g. 'EUR')",
-        "city_guides": {
-           "CityName": {
-             "history_culture": "String",
-             "transport_tips": "String",
-             "safety_scams": "String",
-             "subsidies": "String",
-             "tax_refund": "String",
-             "major_banks_list": ["Bank A", "Bank B"],
-             "basic_phrases": [ 
-                { "label": "你好", "local": "...", "roman": "..." }
-             ]
-           }
-        },
-        "created": ${Date.now()}, 
-        "days": [
-          {
-            "day_index": 1,
-            "date": "YYYY-MM-DD",
-            "city": "City Name",
-            "title": "Theme",
-            "weather_forecast": "String", 
-            "clothing_suggestion": "String",
-            "timeline": [
-              {
-                "time": "HH:MM",
-                "type": "transport" | "activity" | "meal" | "hotel" | "flight" | "spot",
-                "title": "Title",
-                "description": "Short description",
-                "location_query": "Google Maps Query",
-                "transport_detail": "Transport Info",
-                "price_level": "Low" | "Mid" | "High",
-                "warnings_tips": "Important tips",
-                "menu_recommendations": [{ "local": "", "cn": "", "price": "" }]
-              }
-            ]
-          }
-        ]
-      }
+      - User's Home Country: ${selectedCountryName}
+      - Output Language: Traditional Chinese (Taiwan)
     `;
 
     try {
-      const fetchWithModel = async (modelId) => {
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
+      // 封裝共用的 API 呼叫邏輯，加上 maxOutputTokens 防止截斷
+      const fetchWithModel = async (promptText) => {
+         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
+            body: JSON.stringify({ 
+                contents: [{ parts: [{ text: promptText }] }], 
+                generationConfig: { 
+                    responseMimeType: "application/json",
+                    maxOutputTokens: 8192 
+                } 
+            })
          });
          const resData = await response.json();
          if (resData.error) throw new Error(resData.error.message);
-         return resData;
+         return cleanJsonResult(resData.candidates[0].content.parts[0].text);
       };
 
-      let data;
-      try {
-         console.log(`嘗試使用模型: ${TARGET_MODEL}`);
-         data = await fetchWithModel(TARGET_MODEL);
-      } catch (err) {
-         console.warn(`${TARGET_MODEL} 失敗，嘗試自動降級至 gemini-3.1-flash-lite...`, err);
-         data = await fetchWithModel('gemini-3.1-flash-lite');
-      }
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!resultText) throw new Error("AI 回傳內容為空");
-      
-      const cleanedText = cleanJsonResult(resultText);
-      let parsedData;
-      
-      try {
-        parsedData = JSON.parse(cleanedText);
-      } catch (parseError) {
-        console.error("JSON Parse Error:", parseError);
-        throw new Error("無法解析 AI 回傳的行程資料格式");
-      }
-
-      // 強制使用當下時間
-      parsedData.created = Date.now();
-      
-      // --- 匯率解析邏輯優化 ---
-      if (parsedData.currency_code) {
-        let rate = 0.21; // 預設值 (以防萬一)
+      // ==========================================
+      // 第一階段 (Phase 1): 生成基本資訊與城市指南
+      // ==========================================
+      console.log("Phase 1: Generating Base Info & City Guides...");
+      const basePrompt = `
+        You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
+        ${baseConstraints}
         
-        // 1. 優先使用 AI 回傳的精準數值
-        if (parsedData.currency_rate_val && typeof parsedData.currency_rate_val === 'number') {
-            rate = parsedData.currency_rate_val;
-        } 
-        // 2. 如果沒有數值，嘗試解析字串 (支援 =, ≈, :)
-        else if (parsedData.currency_rate) {
-             // 嘗試抓取 TWD 前面的數字 (最準確)
-             const twdMatch = parsedData.currency_rate.match(/([\d.]+)\s*TWD/i);
-             if (twdMatch) {
-                 rate = parseFloat(twdMatch[1]);
-             } else {
-                 // 否則抓取任何看起來像匯率的數字 (排除前面的 1)
-                 const fallbackMatch = parsedData.currency_rate.match(/[=≈:]\s*([\d.]+)/);
-                 if (fallbackMatch) {
-                    rate = parseFloat(fallbackMatch[1]);
-                 }
-             }
+        Requirements:
+        1. "trip_summary": Overall trip summary.
+        2. "currency_rate": String (e.g. '1 JPY ≈ 0.21 TWD').
+        3. "currency_rate_val": Number (e.g. 0.21).
+        4. "currency_code": String (e.g. 'JPY' or 'THB' or 'INR').
+        5. "city_guides": For each unique major city visited, provide "history_culture", "transport_tips", "safety_scams", "subsidies", "tax_refund", "major_banks_list", and "basic_phrases" (exactly 5 phrases).
+        
+        Output JSON Schema:
+        {
+          "trip_summary": "...",
+          "currency_rate": "...",
+          "currency_rate_val": 0.0,
+          "currency_code": "...",
+          "city_guides": {
+             "CityA": { "history_culture": "...", "transport_tips": "...", "safety_scams": "...", "subsidies": "...", "tax_refund": "...", "major_banks_list": [], "basic_phrases": [] }
+          }
         }
+      `;
+      const baseText = await fetchWithModel(basePrompt);
+      const baseData = JSON.parse(baseText);
 
+      // ==========================================
+      // 第二階段 (Phase 2): 分批生成每日行程
+      // ==========================================
+      console.log("Phase 2: Generating Days in chunks...");
+      let allDays = [];
+      let previousContext = "Trip is just starting. Start from the arrival flight or airport if applicable.";
+
+      // 迴圈：每次處理 4 天
+      for (let i = 0; i < totalDays; i += batchSize) {
+          const chunkDates = dateList.slice(i, i + batchSize);
+          const startDayIdx = i + 1;
+          const endDayIdx = i + chunkDates.length;
+          
+          console.log(`Generating Day ${startDayIdx} to ${endDayIdx}...`);
+
+          const dayPrompt = `
+            You are an expert AI Travel Planner. Generate a portion of a ${totalDays}-day trip.
+            ${baseConstraints}
+            
+            We are CURRENTLY generating Day ${startDayIdx} to Day ${endDayIdx}.
+            Specific Dates for this chunk: ${chunkDates.join(", ")}.
+            
+            Previous Context (Where the user ended up before this chunk):
+            "${previousContext}"
+            
+            Requirements:
+            1. ONLY output an array of day objects under the key "days".
+            2. Each day must strictly follow the schema.
+            3. CRITICAL: Include exactly ${chunkDates.length} days. DO NOT SKIP ANY DAY in this chunk.
+            4. Timeline items should include "time", "type" (transport|activity|meal|hotel|flight|spot), "title", "description", "location_query", "transport_detail", "price_level" (Low|Mid|High), "warnings_tips", and "menu_recommendations".
+            
+            Output JSON Schema:
+            {
+              "days": [
+                {
+                  "day_index": ${startDayIdx},
+                  "date": "${chunkDates[0]}",
+                  "city": "City Name",
+                  "title": "Daily Theme",
+                  "weather_forecast": "...",
+                  "clothing_suggestion": "...",
+                  "timeline": [
+                    { "time": "10:00", "type": "spot", "title": "...", "description": "...", "location_query": "...", "transport_detail": "...", "price_level": "Mid", "warnings_tips": "...", "menu_recommendations": [] }
+                  ]
+                }
+              ]
+            }
+          `;
+
+          const chunkText = await fetchWithModel(dayPrompt);
+          const chunkData = JSON.parse(chunkText);
+          
+          if (chunkData && chunkData.days && Array.isArray(chunkData.days)) {
+              allDays = allDays.concat(chunkData.days);
+              
+              // 紀錄這一批最後一天的終點，傳遞給下一批作為上下文
+              const lastDay = chunkData.days[chunkData.days.length - 1];
+              const lastItem = lastDay.timeline[lastDay.timeline.length - 1];
+              previousContext = `Ended Day ${lastDay.day_index} in ${lastDay.city} at ${lastItem?.title || 'Hotel'}. Continue logically from here.`;
+          } else {
+              throw new Error(`Chunk Day ${startDayIdx}-${endDayIdx} 格式錯誤。`);
+          }
+      }
+
+      // ==========================================
+      // 第三階段 (Phase 3): 合併並顯示結果
+      // ==========================================
+      const finalItinerary = {
+          ...baseData,
+          created: Date.now(),
+          days: allDays
+      };
+
+      // 根據 AI 回傳的幣別設定符號
+      if (finalItinerary.currency_code) {
         let symbol = '$';
-        const code = parsedData.currency_code.toUpperCase();
+        const code = finalItinerary.currency_code.toUpperCase();
         if (code === 'JPY') symbol = '¥';
         if (code === 'KRW') symbol = '₩';
         if (code === 'EUR') symbol = '€';
         if (code === 'GBP') symbol = '£';
-        if (code === 'USD') symbol = '$';
-        if (code === 'CNY') symbol = '¥';
         if (code === 'THB') symbol = '฿';
-        if (code === 'VND') symbol = '₫';
+        if (code === 'INR') symbol = '₹';
+        if (code === 'CNY') symbol = '¥';
         
         setCurrencySettings({
-           rate: rate,
+           rate: finalItinerary.currency_rate_val || 0.21,
            symbol: symbol,
            code: code
         });
       }
 
-      setItineraryData(parsedData);
+      setItineraryData(finalItinerary);
       setExpenses([]);
       setStep('result');
 
     } catch (error) {
       console.error(error);
-      setErrorMsg(`生成失敗: ${error.message}`);
+      setErrorMsg("分段生成失敗，可能是網路超時或解析錯誤: " + error.message);
       setStep('input');
     }
   };
