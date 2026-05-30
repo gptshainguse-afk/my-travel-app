@@ -2945,9 +2945,9 @@ const App = () => {
       User Constraints:
       - Destinations: ${basicData.destinations}
       - Dates: ${basicData.dates}
-      - Travel Style & Pacing: ${basicData.type}. CRITICAL INSTRUCTION: ${styleInstruction} You MUST adjust the number of daily timeline items and specific location choices strictly based on this exact style!
+      - Travel Style & Pacing: ${basicData.type}. CRITICAL INSTRUCTION: ${styleInstruction} You MUST adjust the number of daily timeline items strictly based on this exact style!
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka, TAE=Daegu)." : "(No flights involved)"}
+      - Flights: ${flightsString} ${basicData.hasFlights ? "(Use Airport Codes to identify cities. E.g., FUK=Fukuoka)." : "(No flights involved)"}
       - Transport Mode: ${transportConstraint}
       - Parking Info Needed: ${parkingConstraint}
       - Accommodation: ${accommodationString}
@@ -2963,16 +2963,21 @@ const App = () => {
       4. Weather: Temp range & clothing.
       5. Currency: Local currency code & rate to TWD.
       6. **City Guide**: For each major city, include history, transport, safety, subsidies, tax_refund, and major_banks_list.
-      7. **Basic Phrases (MANDATORY)**: You MUST generate an array of EXACTLY 5 objects for "basic_phrases". 
+      7. **Basic Phrases (MANDATORY)**: You MUST generate exactly 5 objects for "basic_phrases". 
       8. Output Language: Traditional Chinese (Taiwan).
       9. major_banks_list: [CRITICAL] An array of 15-20 major consumer banks located in "${selectedCountryName}" (User's Origin). DO NOT list banks from the destination city.
-      10. **Currency Rate (MANDATORY)**: You MUST provide the numerical exchange rate in "currency_rate_val". Example: if 1 EUR = 34.5 TWD, value is 34.5.
+      10. **Currency Rate**: You MUST provide the numerical exchange rate in "currency_rate_val". Example: if 1 EUR = 34.5 TWD, value is 34.5.
+      
+      ⭐⭐⭐ [CRITICAL COMPLETENESS RULE] ⭐⭐⭐
+      - You MUST generate a "day" object for EVERY SINGLE DAY from the start date to the end date.
+      - ABSOLUTELY NO SKIPPING DAYS. Day 1, Day 2, Day 3... must be strictly sequential.
+      - If the trip length exceeds 5 days, you MUST dynamically shorten the length of "description", "warnings_tips", and "history_culture" to ensure the entire JSON fits within output token limits. Completeness of all days is MUCH more important than the length of descriptions!
       
       JSON Schema Structure:
       {
         "trip_summary": "String",
         "currency_rate": "String (e.g. '1 EUR ≈ 34.5 TWD')",
-        "currency_rate_val": Number, // CRITICAL: The raw number (e.g. 34.5) for calculation
+        "currency_rate_val": Number, 
         "currency_code": "String (e.g. 'EUR')",
         "city_guides": {
            "CityName": {
@@ -2983,11 +2988,7 @@ const App = () => {
              "tax_refund": "String",
              "major_banks_list": ["Bank A", "Bank B"],
              "basic_phrases": [ 
-                { "label": "你好", "local": "...", "roman": "..." },
-                { "label": "謝謝", "local": "...", "roman": "..." },
-                { "label": "對不起", "local": "...", "roman": "..." },
-                { "label": "請問", "local": "...", "roman": "..." },
-                { "label": "多少錢", "local": "...", "roman": "..." }
+                { "label": "你好", "local": "...", "roman": "..." }
              ]
            }
         },
@@ -3003,9 +3004,9 @@ const App = () => {
             "timeline": [
               {
                 "time": "HH:MM",
-                "type": "transport" | "activity" | "meal" | "hotel" | "flight",
+                "type": "transport" | "activity" | "meal" | "hotel" | "flight" | "spot",
                 "title": "Title",
-                "description": "Detailed description",
+                "description": "Short description",
                 "location_query": "Google Maps Query",
                 "transport_detail": "Transport Info",
                 "price_level": "Low" | "Mid" | "High",
