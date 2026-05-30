@@ -939,7 +939,7 @@ const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey
       const data = await response.json();
       
       if (data.error) {
-         console.warn(`主模型 ${TARGET_MODEL} 失敗，啟動自動修復 (2.5 Flash preview)...`);
+         console.warn(`主模型 ${TARGET_MODEL} 失敗，啟動自動修復 (3.1 Flash)...`);
          const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2960,7 +2960,7 @@ const App = () => {
         styleInstruction = "BALANCED PACE. 3-4 items per day.";
     }
 
-    const TARGET_MODEL = modelType === '3.5 flash' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
+    const TARGET_MODEL = modelType === 'gemini-3.1-pro-preview' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
     console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型: ${TARGET_MODEL})`);
 
     const baseConstraints = `
@@ -3333,7 +3333,7 @@ const App = () => {
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.5 flash (完整版)</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.1 pro (完整版)</span>
                       <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出慢但更完整，適合複雜規劃。</span>
                       <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~2次/分</span>
                     </div>
@@ -3352,7 +3352,7 @@ const App = () => {
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.1 Flash (極速版)</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.5 Flash (極速版)</span>
                       <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出快但可能會漏細節。</span>
                       <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~3次/分</span>
                     </div>
