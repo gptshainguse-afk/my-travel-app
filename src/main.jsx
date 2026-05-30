@@ -2960,7 +2960,7 @@ const App = () => {
         styleInstruction = "BALANCED PACE. 3-4 items per day.";
     }
 
-    const TARGET_MODEL = modelType === 'gemini-3.1-pro-preview' ? 'gemini-3.5-flash' : 'gemini-3.1-flash-lite';
+    const TARGET_MODEL = modelType === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.5-flash';
     console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型: ${TARGET_MODEL})`);
 
     const baseConstraints = `
