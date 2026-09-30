@@ -11,7 +11,7 @@ import {
   FileJson, Upload, Car, ParkingCircle, CloudSun, Shirt,
   Wallet, PieChart, Coins, MinusCircle, X, UserCog,
   Camera, FileText, Bot, Info, ShieldAlert, Ticket, Save,
-  ExternalLink, MessageCircle, CreditCard, Landmark, Gift, 
+  ExternalLink, MessageCircle, Gift, 
   CheckCircle2, Image as ImageIcon, ChefHat, Edit3, RefreshCw,
   Palmtree, Fish, Bird, CarFront, Tent,Cloud, Pin, PlusCircle, Clock, Sun
 } from 'lucide-react';
@@ -19,25 +19,263 @@ import {
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
 import './index.css'; 
 
+// --- Gemini 模型集中管理：官方清單 + 自動更新 + 同系列停用備援 ---
+// 不把固定版本寫進各項功能；models.list 是名稱與能力的資料來源。
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_MODEL_CONFIG = {
+  pro: { alias: 'gemini-pro-latest', label: 'Gemini Pro' },
+  flash: { alias: 'gemini-flash-latest', label: 'Gemini Flash' },
+  lite: { alias: 'gemini-flash-lite-latest', label: 'Gemini Flash-Lite' },
+};
+const GEMINI_MODEL_CACHE_MS = 60 * 60 * 1000;
+const geminiModelCache = new globalThis.Map();
+const geminiModelListeners = new Set();
+const normalizeGeminiKey = (apiKey) => String(apiKey || '').trim();
+const normalizeGeminiType = (type) => Object.hasOwn(GEMINI_MODEL_CONFIG, type) ? type : 'flash';
+
+function getGeminiCache(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  if (!geminiModelCache.has(key)) {
+    geminiModelCache.set(key, {
+      models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
+      unavailable: new Set(), lastUsed: {},
+    });
+  }
+  return geminiModelCache.get(key);
+}
+
+function notifyGeminiModels(key) {
+  geminiModelListeners.forEach(listener => listener(key));
+}
+
+function formatGeminiModel(id, displayName) {
+  const name = String(id || '').replace(/^models\//, '');
+  const match = name.match(/^gemini-(\d+(?:\.\d+)*)-(flash-lite|flash|pro)(?:-|$)/i);
+  const family = match?.[2] === 'flash-lite' ? 'Flash-Lite' : match?.[2] === 'pro' ? 'Pro' : 'Flash';
+  const label = displayName || (match ? `Gemini ${match[1]} ${family}` :
+    Object.values(GEMINI_MODEL_CONFIG).find(config => config.alias === name)?.label || name);
+  return /-preview(?:-|$)/.test(name) && !/preview|預覽/i.test(label) ? `${label}（預覽版）` : label;
+}
+
+function parseGeminiModel(model) {
+  if (!model?.supportedGenerationMethods?.includes('generateContent')) return null;
+  const id = String(model.name || '').replace(/^models\//, '').toLowerCase();
+  const aliasType = Object.keys(GEMINI_MODEL_CONFIG).find(type => GEMINI_MODEL_CONFIG[type].alias === id);
+  if (aliasType) return { id, type: aliasType, version: [], stage: 'alias', revision: [], ...model, label: formatGeminiModel(id, model.displayName) };
+  const match = id.match(/^gemini-(\d+(?:\.\d+)*)-(flash-lite|flash|pro)(.*)$/);
+  // 正向比對一般文字模型，排除 TTS、image、live、embedding、customtools 等專用端點。
+  if (!match || !/^(?:-(?:preview|latest))?(?:-\d+)*$/.test(match[3])) return null;
+  const stage = match[3].includes('preview') ? 'preview' : match[3].includes('latest') ? 'alias' : 'stable';
+  const revision = (match[3].match(/\d+/g) || []).map(Number);
+  // 將 preview-MM-YYYY 的日期後綴轉為 YYYY-MM，避免用字串比較日期。
+  if (revision.length === 2 && revision[0] <= 12 && revision[1] >= 2000) revision.reverse();
+  return {
+    ...model, id, type: match[2] === 'flash-lite' ? 'lite' : match[2],
+    version: match[1].split('.').map(Number), stage, revision,
+    label: formatGeminiModel(id, model.displayName),
+  };
+}
+
+function compareGeminiModels(a, b) {
+  // 數字比較讓 3.10 排在 3.9 前面；同世代優先正式版，再選較新的修訂。
+  for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
+    const difference = (b.version[i] || 0) - (a.version[i] || 0);
+    if (difference) return difference;
+  }
+  const stageRank = { stable: 0, preview: 1, alias: 2 };
+  if (stageRank[a.stage] !== stageRank[b.stage]) return stageRank[a.stage] - stageRank[b.stage];
+  for (let i = 0; i < Math.max(a.revision.length, b.revision.length); i++) {
+    const difference = (b.revision[i] || 0) - (a.revision[i] || 0);
+    if (difference) return difference;
+  }
+  return a.id.localeCompare(b.id);
+}
+
+async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${GEMINI_API_BASE}/${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...options.headers, 'x-goog-api-key': normalizeGeminiKey(apiKey) },
+      signal: controller.signal,
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw Object.assign(new Error(`Gemini 回傳無法解析的資料（HTTP ${response.status}）`), { status: response.status });
+    }
+    if (!response.ok || data.error) {
+      const status = data.error?.code || response.status;
+      throw Object.assign(new Error(data.error?.message || `Gemini 請求失敗（HTTP ${status}）`), { status });
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Gemini 請求逾時，請稍後再試。');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadGeminiModels(apiKey, force = false) {
+  const key = normalizeGeminiKey(apiKey);
+  if (!key) throw new Error('請先輸入 Gemini API Key。');
+  const cache = getGeminiCache(key);
+  if (cache.pending) return cache.pending;
+  if (!force && cache.retryAfter > Date.now()) throw cache.error;
+  if (!force && cache.updatedAt && Date.now() - cache.updatedAt < GEMINI_MODEL_CACHE_MS) return cache.models;
+  cache.error = null;
+  cache.pending = (async () => {
+    try {
+      const models = [];
+      const seenPages = new Set();
+      let pageToken = '';
+      do {
+        const params = new URLSearchParams({ pageSize: '1000' });
+        if (pageToken) params.set('pageToken', pageToken);
+        const data = await fetchGeminiJson(`models?${params}`, key);
+        if (!Array.isArray(data.models)) throw new Error('Gemini 模型清單格式不正確。');
+        models.push(...data.models.map(parseGeminiModel).filter(Boolean));
+        pageToken = data.nextPageToken || '';
+        if (pageToken && seenPages.has(pageToken)) throw new Error('Gemini 模型清單分頁重複，請稍後再試。');
+        seenPages.add(pageToken);
+      } while (pageToken);
+      cache.models = [...new globalThis.Map(models.map(model => [model.id, model])).values()].sort(compareGeminiModels);
+      cache.updatedAt = Date.now();
+      cache.unavailable.clear();
+      cache.retryAfter = 0;
+      return cache.models;
+    } catch (error) {
+      cache.error = error;
+      cache.retryAfter = Date.now() + 60000;
+      throw error;
+    } finally {
+      cache.pending = null;
+      notifyGeminiModels(key);
+    }
+  })();
+  notifyGeminiModels(key);
+  return cache.pending;
+}
+
+function getGeminiCandidates(apiKey, type) {
+  const family = normalizeGeminiType(type);
+  const cache = getGeminiCache(apiKey);
+  const families = family === 'lite' ? ['lite', 'flash'] : [family];
+  const candidates = families.flatMap(candidateType => {
+    const listed = cache.models.filter(model => model.type === candidateType);
+    // 先使用清單中的具體版本，首頁名稱與實際請求相同；清單失敗時使用官方 latest alias。
+    const concrete = listed.filter(model => model.stage !== 'alias');
+    const aliases = listed.filter(model => model.stage === 'alias');
+    return [...concrete, ...aliases, { id: GEMINI_MODEL_CONFIG[candidateType].alias, type: candidateType }];
+  });
+  return [...new globalThis.Map(candidates.map(model => [model.id, model])).values()].filter(model => !cache.unavailable.has(model.id));
+}
+
+function getGeminiText(data) {
+  const candidate = data.candidates?.[0];
+  if (candidate?.finishReason === 'MAX_TOKENS') throw new Error('AI 回覆超過輸出長度，請縮短需求後重試。');
+  const text = candidate?.content?.parts?.filter(part => !part.thought && typeof part.text === 'string').map(part => part.text).join('');
+  if (!text?.trim()) throw new Error(`AI 未傳回文字內容${data.promptFeedback?.blockReason ? `（${data.promptFeedback.blockReason}）` : ''}。`);
+  return text;
+}
+
+async function requestGemini(apiKey, type, payload) {
+  const key = normalizeGeminiKey(apiKey);
+  const family = normalizeGeminiType(type);
+  if (!key) throw new Error('請先輸入 Gemini API Key。');
+  const cache = getGeminiCache(key);
+  try {
+    await loadGeminiModels(key);
+  } catch (error) {
+    if ([400, 401, 403].includes(error.status)) throw error;
+    // 清單暫時無法讀取時，仍可嘗試快取中的模型或官方 alias。
+  }
+  const attempted = new Set();
+  let refreshed = false;
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const model = getGeminiCandidates(key, family).find(candidate => !attempted.has(candidate.id));
+    if (!model) break;
+    attempted.add(model.id);
+    try {
+      const generationConfig = payload.generationConfig ? { ...payload.generationConfig } : undefined;
+      if (generationConfig?.maxOutputTokens && model.outputTokenLimit) {
+        generationConfig.maxOutputTokens = Math.min(generationConfig.maxOutputTokens, model.outputTokenLimit);
+      }
+      const body = generationConfig ? { ...payload, generationConfig } : payload;
+      const data = await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, key,
+        { method: 'POST', body: JSON.stringify(body) }, 180000);
+      getGeminiText(data); // 空回應或安全阻擋不交給後面的 JSON parser。
+      cache.lastUsed[family] = { id: data.modelVersion || model.id, label: formatGeminiModel(data.modelVersion || model.id), requested: model.id };
+      notifyGeminiModels(key);
+      return data;
+    } catch (error) {
+      lastError = error;
+      const unavailable = error.status === 404 || (error.status === 400 && /model.*(?:not found|not supported|does not support)|not supported for generateContent/i.test(error.message));
+      // 不因 Key 錯誤、配額不足、格式錯誤、網路錯誤而換模型重送。
+      if (!unavailable) throw error;
+      cache.unavailable.add(model.id);
+      if (!refreshed) {
+        refreshed = true;
+        try { await loadGeminiModels(key, true); } catch (refreshError) {
+          if ([400, 401, 403].includes(refreshError.status)) throw refreshError;
+        }
+        attempted.forEach(id => cache.unavailable.add(id));
+      }
+      notifyGeminiModels(key);
+    }
+  }
+  throw lastError || new Error(`目前找不到可用的 ${GEMINI_MODEL_CONFIG[family].label} 模型，請更新模型清單後再試。`);
+}
+
+function getGeminiSnapshot(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  const cache = key ? geminiModelCache.get(key) : null;
+  const labels = {};
+  for (const type of Object.keys(GEMINI_MODEL_CONFIG)) {
+    const recommended = cache?.models.find(model => model.type === type && model.stage !== 'alias' && !cache.unavailable.has(model.id));
+    labels[type] = recommended?.label || GEMINI_MODEL_CONFIG[type].label;
+  }
+  return {
+    key, labels, lastUsed: { ...cache?.lastUsed }, updatedAt: cache?.updatedAt || 0,
+    status: !key ? 'idle' : cache?.pending ? 'loading' : cache?.error ? 'error' : cache?.updatedAt ? 'ready' : 'loading',
+    error: cache?.error?.message || '',
+  };
+}
+
+function useGeminiModels(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  const [snapshot, setSnapshot] = useState(() => getGeminiSnapshot(key));
+  useEffect(() => {
+    let active = true;
+    const update = (changedKey) => {
+      if (active && changedKey === key) setSnapshot(getGeminiSnapshot(key));
+    };
+    geminiModelListeners.add(update);
+    update(key);
+    const load = () => { if (key) loadGeminiModels(key).catch(() => {}); };
+    const timer = setTimeout(load, 700); // 等待貼上或輸入完成，避免每個字元都送一次請求。
+    const interval = setInterval(load, GEMINI_MODEL_CACHE_MS);
+    const onFocus = () => { if (!document.hidden) load(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      geminiModelListeners.delete(update);
+    };
+  }, [key]);
+  const refresh = () => { if (key) loadGeminiModels(key, true).catch(() => {}); };
+  return { ...(snapshot.key === key ? snapshot : getGeminiSnapshot(key)), refresh };
+}
+
+
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 
-const ISSUING_COUNTRIES = [
-  { code: 'TW', name: '台灣 (Taiwan)' },
-  { code: 'JP', name: '日本 (Japan)' },
-  { code: 'KR', name: '韓國 (South Korea)' },
-  { code: 'CN', name: '中國 (China)' },
-  { code: 'HK', name: '香港 (Hong Kong)' },
-  { code: 'SG', name: '新加坡 (Singapore)' },
-  { code: 'MY', name: '馬來西亞 (Malaysia)' },
-  { code: 'TH', name: '泰國 (Thailand)' },
-  { code: 'VN', name: '越南 (Vietnam)' },
-  { code: 'US', name: '美國 (USA)' },
-  { code: 'CA', name: '加拿大 (Canada)' },
-  { code: 'UK', name: '英國 (UK)' },
-  { code: 'AU', name: '澳洲 (Australia)' },
-  { code: 'EU', name: '歐洲 (Europe)' },
-  { code: 'OTHER', name: '其他 (Other)' }
-];
 const deepMerge = (target, source) => {
   const result = { ...target };
   if (source && typeof source === 'object') {
@@ -805,7 +1043,7 @@ const FunLoading = ({ destination }) => {
     `正在搜尋哪裡的廁所最乾淨...`,
     `AI 導遊正在繫緊鞋帶準備出發...`,
     `正在幫您省下每一分冤枉錢...`,
-    `正在為了您的信用卡回饋精打細算...` 
+    `正在整理當地交通與旅遊小提醒...` 
   ];
 
   useEffect(() => {
@@ -876,219 +1114,8 @@ const FunLoading = ({ destination }) => {
     </div>
   );
 };
-const CreditCardPlanner = ({ city, issuingCountry, countryName, bankList, apiKey, onSave, savedAnalysis, modelType }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [selectedBanks, setSelectedBanks] = useState([]);
-  const [otherBanks, setOtherBanks] = useState(''); 
-  const [includeTop3, setIncludeTop3] = useState(true);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState(savedAnalysis || null); 
-
-  useEffect(() => {
-    if (savedAnalysis) setAnalysisResult(savedAnalysis);
-  }, [savedAnalysis]);
-
-  const toggleBank = (bank) => {
-    setSelectedBanks(prev => 
-      prev.includes(bank) ? prev.filter(b => b !== bank) : [...prev, bank]
-    );
-  };
-
-  const handleAnalyze = async () => {
-    if (!apiKey) return alert("需要 API Key 才能分析信用卡回饋");
-    
-    const manualBanks = otherBanks.split(/[,，、]/).map(s => s.trim()).filter(s => s);
-    const allBanks = [...selectedBanks, ...manualBanks];
-
-    if (allBanks.length === 0 && !includeTop3) return alert("請至少選擇一家銀行、輸入其他銀行，或勾選推薦前三名");
-
-    setIsAnalyzing(true);
-    setAnalysisResult(null); 
-    
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.5-flash';    
-    
-    const banksStr = allBanks.length > 0 ? allBanks.join(', ') : "不指定特定銀行";
-    const prompt = `
-      我來自 ${countryName} (代碼: ${issuingCountry})，即將前往 "${city}" 旅遊。
-      請針對以下條件進行信用卡回饋分析：
-      1. 使用者持有的銀行/發卡機構: ${banksStr}
-      2. 額外需求: 請推薦該國(${countryName})發行，在 "${city}" 最好用的 "前3名信用卡" (Top 3)。
-
-      請以 JSON 格式回傳，包含兩個陣列：
-      1. "bank_recommendations": 針對使用者勾選的銀行，列出該銀行最強的旅遊卡 (現金回饋 與 里程回饋 各一張，若無則略過)。
-         欄位: { "bank": "銀行名", "card_name": "卡名", "type": "現金/里程", "reward_desc": "回饋內容簡述", "condition": "簡單條件 (如: 需登錄/有上限)" }
-      2. "top_3_general": 不分銀行，推薦前三名最強卡片。
-         欄位: { "card_name": "卡名", "bank": "發行銀行", "type": "現金/里程", "reason": "推薦理由" }
-
-      純 JSON，不要 Markdown。
-    `;
-
-    try {
-      console.log(`正在嘗試主模型: ${TARGET_MODEL}...`);
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-              contents: [{ parts: [{ text: systemPrompt }] }], 
-              generationConfig: { 
-                  responseMimeType: "application/json",
-                  maxOutputTokens: 8192  // ✅ 加入這行，防止行程太長被切斷
-              } 
-          })
-      });
-      const data = await response.json();
-      
-      if (data.error) {
-         console.warn(`主模型 ${TARGET_MODEL} 失敗，啟動自動修復 (3.1 Flash)...`);
-         const fallbackResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-         });
-         const fallbackData = await fallbackResp.json();
-         if (fallbackData.error) throw new Error(fallbackData.error.message);
-         const rawText = fallbackData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-         setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
-      } else {
-         const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-         setAnalysisResult(JSON.parse(cleanJsonResult(rawText)));
-      }
-    } catch (e) {
-      console.error(e);
-      alert("分析失敗: " + e.message);
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  return (
-    <div className="mt-4 bg-gradient-to-br from-slate-50 to-blue-50/30 rounded-2xl border border-blue-100 overflow-hidden print:border-none print:bg-white print:mt-8 print:break-inside-avoid">
-      {/* 列印時隱藏標題按鈕 */}
-      <button 
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-4 flex items-center justify-between bg-white hover:bg-blue-50 transition-colors text-blue-800 font-bold print:hidden"
-      >
-        <span className="flex items-center gap-2"><CreditCard className="w-5 h-5" /> 信用卡與支付回饋攻略 {analysisResult && <CheckCircle2 className="w-4 h-4 text-green-500" />}</span>
-        {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-      </button>
-
-      {/* 列印時強制顯示內容 (如果 analysisResult 存在) */}
-      <div className={`p-4 md:p-6 animate-in slide-in-from-top-2 ${isOpen ? 'block' : 'hidden'} ${analysisResult ? 'print:block' : 'print:hidden'}`}>
-        {/* 只有在沒結果時顯示輸入表單，且列印時隱藏 */}
-        {!analysisResult && !isAnalyzing ? (
-          <div className="print:hidden">
-            {/* ... 輸入表單部分保持不變，省略以節省篇幅 ... */}
-            <div className="mb-4">
-                <h5 className="font-bold text-slate-700 mb-2 flex items-center gap-2">
-                  <Landmark className="w-4 h-4 text-slate-500" /> 選擇您持有的銀行 ({countryName})
-                </h5>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-white rounded-xl border border-slate-200 mb-2">
-                  {bankList && bankList.length > 0 ? bankList.map((bank, idx) => (
-                    <label key={idx} className="flex items-center gap-2 p-2 hover:bg-slate-50 rounded cursor-pointer text-sm">
-                      <input 
-                        type="checkbox" 
-                        checked={selectedBanks.includes(bank)} 
-                        onChange={() => toggleBank(bank)}
-                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                      />
-                      <span className="text-slate-700">{bank}</span>
-                    </label>
-                  )) : <div className="col-span-full text-slate-400 text-sm">AI 未提供預設清單，請直接手動輸入</div>}
-                </div>
-                <input 
-                  type="text"
-                  placeholder="其他銀行 (如: 渣打, 匯豐... 用逗號分隔)"
-                  value={otherBanks}
-                  onChange={(e) => setOtherBanks(e.target.value)}
-                  className="w-full p-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
-                />
-            </div>
-            <div className="mb-6 flex items-center gap-2 bg-white p-3 rounded-xl border border-slate-200">
-                <input type="checkbox" id="top3" checked={includeTop3} onChange={(e) => setIncludeTop3(e.target.checked)} className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500" />
-                <label htmlFor="top3" className="font-bold text-slate-700 cursor-pointer text-sm md:text-base">同時推薦 {countryName} 該地區最強 Top 3 信用卡</label>
-            </div>
-            <button onClick={handleAnalyze} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-200 transition-all flex justify-center items-center gap-2">
-              <Sparkles className="w-5 h-5" /> 生成最佳刷卡策略
-            </button>
-          </div>
-        ) : isAnalyzing ? (
-           <div className="py-10 text-center flex flex-col items-center justify-center space-y-3 print:hidden">
-               <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
-               <p className="text-blue-600 font-bold animate-pulse">AI 正在計算現金回饋與里程轉換率...</p>
-           </div>
-        ) : (
-          <div className="space-y-6">
-            {/* 新增：列印時的標題 (因為按鈕被隱藏了) */}
-            <h4 className="hidden print:flex items-center gap-2 text-xl font-bold text-slate-800 mb-4 border-b border-slate-800 pb-2">
-               <CreditCard className="w-6 h-6" /> AI 信用卡回饋攻略 ({city})
-            </h4>
-
-            {/* Top 3 Section */}
-            {analysisResult.top_3_general && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 print:border-slate-300 print:bg-white">
-                <h5 className="font-bold text-yellow-800 mb-3 flex items-center gap-2 text-lg print:text-black">
-                  <Gift className="w-5 h-5" /> {city} 必備 Top 3 神卡
-                </h5>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {analysisResult.top_3_general.map((card, i) => (
-                    <div key={i} className="bg-white p-3 rounded-lg shadow-sm border border-yellow-100 print:border-slate-300">
-                      <div className="text-xs text-yellow-600 font-bold mb-1 print:text-slate-600">{card.bank}</div>
-                      <div className="font-bold text-slate-800 mb-1">{card.card_name}</div>
-                      <div className="text-xs bg-slate-100 inline-block px-1.5 py-0.5 rounded text-slate-500 mb-2 print:border print:border-slate-200">{card.type}</div>
-                      <div className="text-sm text-slate-600 leading-snug">{card.reason}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Bank Specific Section */}
-            {analysisResult.bank_recommendations && analysisResult.bank_recommendations.length > 0 && (
-              <div>
-                <h5 className="font-bold text-blue-800 mb-3 flex items-center gap-2 print:text-black">
-                  <CheckCircle2 className="w-5 h-5" /> 您的持有銀行主力卡
-                </h5>
-                <div className="space-y-3">
-                  {analysisResult.bank_recommendations.map((item, i) => (
-                    <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm flex flex-col md:flex-row gap-3 md:items-center print:border-slate-300 print:break-inside-avoid">
-                      <div className="shrink-0 md:w-32">
-                         <div className="text-xs text-slate-400 font-bold">{item.bank}</div>
-                         <div className="font-bold text-slate-700">{item.card_name}</div>
-                      </div>
-                      <div className="flex-1">
-                         <div className="flex items-center gap-2 mb-1">
-                           <span className={`text-xs px-2 py-0.5 rounded font-bold ${item.type.includes('現金') ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'} print:border print:border-slate-300`}>{item.type}</span>
-                           <span className="text-sm font-bold text-blue-600 print:text-black">{item.reward_desc}</span>
-                         </div>
-                         <div className="text-xs text-slate-500">⚠️ {item.condition}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {/* 新增：列印時的免責聲明 */}
-            <div className="hidden print:block mt-4 p-2 text-[10px] text-slate-500 border-t border-slate-300 italic">
-               *此資訊由 AI 生成僅供參考，實際回饋規則與優惠請以各銀行官方公告為準。可能會漏掉部分快閃活動或最新異動。
-            </div>
-
-            <div className="flex gap-3 pt-2 print:hidden">
-              <button onClick={() => setAnalysisResult(null)} className="flex-1 py-2 text-slate-500 hover:bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold transition-colors">
-                  重選銀行
-              </button>
-              <button onClick={() => { onSave(analysisResult); alert("信用卡攻略已儲存到本次行程！"); }} className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-bold shadow-md shadow-emerald-200 transition-colors flex items-center justify-center gap-2">
-                  <Save className="w-4 h-4" /> 儲存此攻略
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 // --- City Guide ---
-const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnalysis, modelType }) => {
+const CityGuide = ({ guideData, cities }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
   const [isOpen, setIsOpen] = useState(false);
   const currentGuide = guideData[selectedCity];
@@ -1096,8 +1123,6 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
 
   if (!currentGuide) return null;
 
-  // 取得國家的顯示名稱
-  const countryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
 
   return (
     <div className="bg-indigo-50/50 border border-indigo-100 rounded-3xl mb-8 print:break-inside-avoid overflow-hidden transition-all duration-300">
@@ -1189,19 +1214,6 @@ const CityGuide = ({ guideData, cities, basicData, apiKey, onSaveCreditCardAnaly
             </div>
           </div>
 
-          {/* 新增：信用卡回饋分析 (CreditCardPlanner) */}
-          {basicData.enableCreditCard && (
-             <CreditCardPlanner 
-                city={selectedCity}
-                issuingCountry={basicData.issuingCountry}
-                countryName={countryName}
-                bankList={currentGuide.major_banks_list}
-                apiKey={apiKey}
-                savedAnalysis={currentGuide.credit_card_analysis} // 傳入已儲存的資料
-                onSave={(analysis) => onSaveCreditCardAnalysis(selectedCity, analysis)} // 處理儲存
-                modelType={modelType}
-             />
-          )}
 
         </div>
       )}
@@ -1259,7 +1271,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     if (!apiKey) return alert("需要 API Key 才能使用此功能");
     
     setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
-    const TARGET_MODEL = 'gemini-3.1-flash-lite';
+    const modelFamily = 'lite';
     
     // ✅ 完整還原 Prompt (移除省略號，明確要求 JSON 欄位)
     const prompt = `
@@ -1280,15 +1292,9 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
+      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
       
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const resultText = getGeminiText(data);
       if (!resultText) throw new Error("AI 無回應");
       
       const cleanedText = cleanJsonResult(resultText);
@@ -1308,7 +1314,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     if (!apiKey) return alert("需要 API Key");
     
     setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null });
-    const TARGET_MODEL = 'gemini-3.1-flash-lite';
+    const modelFamily = 'lite';
     
     // ✅ 完整還原 Prompt
     const prompt = `
@@ -1329,15 +1335,9 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-      });
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
+      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
       
-      const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const resultText = getGeminiText(data);
       if (!resultText) throw new Error("AI 無回應");
       
       const cleanedText = cleanJsonResult(resultText);
@@ -2028,10 +2028,10 @@ const TravelerModal = ({ travelers, setTravelers, onClose }) => {
 
 // --- 新增 API 函數: 重新生成單一行程項目資料 ---
 async function regenerateSingleItem(newTitle, cityName, apiKey) {
-  // 強制使用 2.5 Flash，避免 Pro 模型的配額限制 (Rate Limit)
-  const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
+  // 背景工作交由集中模型管理器選擇最新 Flash-Lite。
+  const modelFamily = 'lite'; 
   
-  console.log(`[AI Edit] 正在使用模型: ${TARGET_MODEL} 進行生成...`);
+  console.log(`[AI Edit] 正在使用模型類型: ${modelFamily} 進行生成...`);
 
   const prompt = `
     你是一個旅遊行程資料補全助手。使用者將行程中的某個點更改為新的地點："${newTitle}" (位於城市: ${cityName})。
@@ -2055,25 +2055,14 @@ async function regenerateSingleItem(newTitle, cityName, apiKey) {
   `;
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-    });
-    
-    const data = await response.json();
+    const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
 
-    if (data.error) {
-        // 直接將 API 的原始錯誤拋出，方便除錯，不隱藏問題
-        throw new Error(data.error.message || `API Error (${TARGET_MODEL})`);
-    }
-
-    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const resultText = getGeminiText(data);
     if (!resultText) {
         throw new Error("AI 無法生成內容 (Empty Response)");
     }
 
-    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
+    const cleanedText = cleanJsonResult(resultText); 
     return JSON.parse(cleanedText);
 
   } catch (error) {
@@ -2134,7 +2123,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
             }
         })));
 
-        const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
+        const modelFamily = 'lite'; 
 
         const prompt = `
           你是一個專業的菜單翻譯與整理助手。請分析傳入的菜單圖片。
@@ -2163,20 +2152,13 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
           }
         `;
         
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        const data = await requestGemini(apiKey, modelFamily, {
                 contents: [{
                     parts: [{ text: prompt }, ...imageParts]
                 }]
-            })
-        });
-        
-        const data = await response.json();
-        if (data.error) throw new Error(data.error.message);
-
-        const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            });
+  
+        const resultText = getGeminiText(data);
         const cleanedText = cleanJsonResult(resultText); 
         setMenuData(JSON.parse(cleanedText));
 
@@ -2203,14 +2185,8 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
            請適當分段，讓閱讀更舒適。
         `;
 
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        });
-        const data = await response.json();
-        if (data.error) throw new Error(data.error.message);
-        setRecommendation(data.candidates?.[0]?.content?.parts?.[0]?.text);
+         const data = await requestGemini(apiKey, 'lite', { contents: [{ parts: [{ text: prompt }] }] });
+          setRecommendation(getGeminiText(data));
 
     } catch (error) {
         alert("推薦失敗: " + error.message);
@@ -2382,7 +2358,7 @@ const IconSelectorModal = ({ isOpen, onClose, onSelect }) => {
   );
 };
 async function regenerateDayWeather(city, date, apiKey) {
-  const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
+  const modelFamily = 'lite'; 
   
   const prompt = `
     請查詢並預測 "${city}" 在日期 "${date}" 的天氣狀況。
@@ -2394,17 +2370,10 @@ async function regenerateDayWeather(city, date, apiKey) {
   `;
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
-    });
-    
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
 
-    const resultText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    const cleanedText = resultText.replace(/```json\n|\n```/g, '').trim(); 
+    const resultText = getGeminiText(data);
+    const cleanedText = cleanJsonResult(resultText); 
     return JSON.parse(cleanedText);
 
   } catch (error) {
@@ -2420,6 +2389,7 @@ const App = () => {
   const [itineraryData, setItineraryData] = usePersistentState('current_itinerary_data', null);
   const [step, setStep] = useState(() => itineraryData ? 'result' : 'input');
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
+  const geminiModels = useGeminiModels(apiKey);
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
   const textareaRef = useRef(null);
@@ -2451,10 +2421,7 @@ const App = () => {
     transportMode: 'public', 
     needParking: false,
     specialRequests: '', // 清空
-    priceRanges: { high: false, medium: false, low: false },
-    enableCreditCard: true, 
-    issuingCountry: 'TW',   
-    otherCountryName: ''    
+    priceRanges: { high: false, medium: false, low: false }    
   });
 
   const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', []);
@@ -2483,7 +2450,7 @@ const App = () => {
   const inputTutorialPages = [
     { icon: '🌍', title: '第一步：設定目的地與日期', desc: '輸入您想去的城市（如：東京、巴黎），並點擊日曆圖示選擇出發與回程日期。' },
     { icon: '✈️', title: '第二步：航班與交通', desc: '如果需要 AI 安排航班，請勾選「需要航班」。若您是自駕遊，請在交通偏好選擇「自駕」，我們會提供停車建議。' },
-    { icon: '💰', title: '第三步：預算與信用卡', desc: '設定餐廳的價位偏好，並勾選「信用卡推薦」，AI 將根據您的發卡國家，計算最佳刷卡回饋攻略。' },
+    { icon: '💰', title: '第三步：預算與偏好', desc: '設定餐廳價位、旅遊步調與特殊需求，AI 會依照您的偏好安排景點、美食與交通。' },
     { icon: '✨', title: '第四步：一鍵生成', desc: '填妥後點擊下方按鈕，AI 將在幾秒內為您生成包含景點、美食、交通與預算的完整行程！' }
   ];
   const handleIconUpdate = (newType) => {
@@ -2602,7 +2569,7 @@ const App = () => {
     { 
       icon: '📘', 
       title: '城市生存指南 & 省錢攻略', 
-      desc: '點擊展開下方的藍色指南區塊。除了歷史文化、交通建議外，我們新增了「💳 信用卡回饋分析」與「🎁 補助/退稅情報」，AI 幫您算出刷哪張卡最划算！' 
+      desc: '點擊展開下方的藍色指南區塊，可查看歷史文化、交通建議、在地用語、治安提醒與補助/退稅情報。' 
     },
     { 
       icon: '💸', 
@@ -2729,6 +2696,7 @@ const App = () => {
   };
 
   const clearApiKey = () => {
+    geminiModelCache.delete(normalizeGeminiKey(apiKey));
     setApiKey('');
     localStorage.removeItem('gemini_api_key');
   };
@@ -2944,7 +2912,6 @@ const App = () => {
     const parkingConstraint = (basicData.transportMode === 'self_driving' && basicData.needParking)
       ? "Include nearby parking lot recommendations with estimated prices for each stop."
       : "";
-    const selectedCountryName = ISSUING_COUNTRIES.find(c => c.code === basicData.issuingCountry)?.name || basicData.otherCountryName || basicData.issuingCountry;
     
     // 動態風格指令
     let styleInstruction = "";
@@ -2960,8 +2927,8 @@ const App = () => {
         styleInstruction = "BALANCED PACE. 3-4 items per day.";
     }
 
-    const TARGET_MODEL = modelType === 'pro' ? 'gemini-3.1-pro-preview' : 'gemini-3.5-flash';
-    console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型: ${TARGET_MODEL})`);
+    const modelFamily = modelType === 'pro' ? 'pro' : 'flash';
+    console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型類型: ${modelFamily})`);
 
     const baseConstraints = `
       User Constraints:
@@ -2974,27 +2941,20 @@ const App = () => {
       - Accommodation: ${accommodationString}
       - Special Requests: ${basicData.specialRequests || "None"}
       - Restaurant Budget: ${priceConstraint}
-      - User's Home Country: ${selectedCountryName}
       - Output Language: Traditional Chinese (Taiwan)
     `;
 
     try {
       // 封裝共用的 API 呼叫邏輯，加上 maxOutputTokens 防止截斷
       const fetchWithModel = async (promptText) => {
-         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TARGET_MODEL}:generateContent?key=${apiKey}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+         const resData = await requestGemini(apiKey, modelFamily, { 
                 contents: [{ parts: [{ text: promptText }] }], 
                 generationConfig: { 
                     responseMimeType: "application/json",
                     maxOutputTokens: 8192 
                 } 
-            })
-         });
-         const resData = await response.json();
-         if (resData.error) throw new Error(resData.error.message);
-         return cleanJsonResult(resData.candidates[0].content.parts[0].text);
+            });
+         return cleanJsonResult(getGeminiText(resData));
       };
 
       // ==========================================
@@ -3010,7 +2970,7 @@ const App = () => {
         2. "currency_rate": String (e.g. '1 JPY ≈ 0.21 TWD').
         3. "currency_rate_val": Number (e.g. 0.21).
         4. "currency_code": String (e.g. 'JPY' or 'THB' or 'INR').
-        5. "city_guides": For each unique major city visited, provide "history_culture", "transport_tips", "safety_scams", "subsidies", "tax_refund", "major_banks_list", and "basic_phrases" (exactly 5 phrases).
+        5. "city_guides": For each unique major city visited, provide "history_culture", "transport_tips", "safety_scams", "subsidies", "tax_refund", and "basic_phrases" (exactly 5 phrases).
         
         Output JSON Schema:
         {
@@ -3019,7 +2979,7 @@ const App = () => {
           "currency_rate_val": 0.0,
           "currency_code": "...",
           "city_guides": {
-             "CityA": { "history_culture": "...", "transport_tips": "...", "safety_scams": "...", "subsidies": "...", "tax_refund": "...", "major_banks_list": [], "basic_phrases": [] }
+             "CityA": { "history_culture": "...", "transport_tips": "...", "safety_scams": "...", "subsidies": "...", "tax_refund": "...", "basic_phrases": [] }
           }
         }
       `;
@@ -3124,27 +3084,11 @@ const App = () => {
 
     } catch (error) {
       console.error(error);
-      setErrorMsg("分段生成失敗，可能是網路超時或解析錯誤: " + error.message);
+      setErrorMsg("行程生成失敗：" + error.message);
       setStep('input');
     }
   };
 
-  const handleUpdateCreditCardAnalysis = (city, analysis) => {
-      setItineraryData(prev => {
-          if (!prev || !prev.city_guides || !prev.city_guides[city]) return prev;
-          
-          return {
-              ...prev,
-              city_guides: {
-                  ...prev.city_guides,
-                  [city]: {
-                      ...prev.city_guides[city],
-                      credit_card_analysis: analysis
-                  }
-              }
-          };
-      });
-  };
   useEffect(() => {
     if (textareaRef.current) {
       // 先重置高度為 auto，讓 scrollHeight 能夠正確計算縮小的情況
@@ -3317,11 +3261,24 @@ const App = () => {
             
             {/* 模型選擇區塊 */}
             <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
-              <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] mb-2 flex items-center gap-1">
-                <Bot className="w-3 h-3" /> 選擇 AI 模型引擎
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] flex items-center gap-1">
+                  <Bot className="w-3 h-3" /> 選擇 AI 模型引擎 · 自動更新
+                </div>
+                {normalizeGeminiKey(apiKey) && (
+                  <button type="button" onClick={geminiModels.refresh} disabled={geminiModels.status === 'loading'} className="flex items-center gap-1 text-xs text-blue-600 dark:text-sky-300 disabled:opacity-50" aria-label="更新 Gemini 模型清單">
+                    <RefreshCw className={`w-3 h-3 ${geminiModels.status === 'loading' ? 'animate-spin' : ''}`} /> 更新模型
+                  </button>
+                )}
               </div>
+              <p className="text-xs text-slate-500 dark:text-[#a08d85] mb-3" role="status" aria-live="polite">
+                {geminiModels.status === 'idle' && '輸入 API Key 後會自動取得可用模型。'}
+                {geminiModels.status === 'loading' && '正在取得最新可用模型…'}
+                {geminiModels.status === 'ready' && `已同步最新可用模型；背景功能優先使用 ${geminiModels.labels.lite}。`}
+                {geminiModels.status === 'error' && `模型清單更新失敗：${geminiModels.error} 可按「更新模型」重試。`}
+              </p>
               <div className="flex flex-col md:flex-row gap-3">
-                {/* 2.5 Pro 選項 */}
+                {/* 自動更新 Pro */}
                 <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'pro' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
@@ -3333,14 +3290,16 @@ const App = () => {
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.1 pro (完整版)</span>
-                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出慢但更完整，適合複雜規劃。</span>
-                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~2次/分</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{geminiModels.labels.pro}</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">自動選擇最新 Pro，適合深度與複雜規劃。</span>
+                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">配額依您的 API 方案
+                      </span>
+                      {geminiModels.lastUsed.pro && <span className="block text-[10px] text-slate-500 dark:text-[#a08d85] mt-1">上次使用：{geminiModels.lastUsed.pro.label}</span>}
                     </div>
                   </div>
                 </label>
     
-                {/* 2.5 Flash 選項 */}
+                {/* 自動更新 Flash */}
                 <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'flash' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
@@ -3352,9 +3311,11 @@ const App = () => {
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
-                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">使用 3.5 Flash (極速版)</span>
-                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">輸出快但可能會漏細節。</span>
-                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">限制: ~3次/分</span>
+                      <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{geminiModels.labels.flash}</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">自動選擇最新 Flash，適合快速規劃。</span>
+                      <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">配額依您的 API 方案
+                      </span>
+                      {geminiModels.lastUsed.flash && <span className="block text-[10px] text-slate-500 dark:text-[#a08d85] mt-1">上次使用：{geminiModels.lastUsed.flash.label}</span>}
                     </div>
                   </div>
                 </label>
@@ -3502,59 +3463,6 @@ const App = () => {
 
           <hr className="border-slate-100 dark:border-[#5d4037]" />
           
-          {/* 信用卡區塊 */}
-          <section className="space-y-4">
-              <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
-              <span className="bg-emerald-100 dark:bg-emerald-900/50 p-2 rounded-lg text-emerald-600 dark:text-emerald-300"><CreditCard className="w-5 h-5" /></span>支付與回饋設定
-              </h3>
-              
-              <div className="space-y-2 flex items-center h-full">
-                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-xl border border-slate-200 dark:border-[#5d4037] w-full hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
-                      <input 
-                      type="checkbox" 
-                      name="enableCreditCard" 
-                      checked={basicData.enableCreditCard} 
-                      onChange={handleBasicChange} 
-                      className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500 dark:bg-[#1e1410] dark:border-[#5d4037]" 
-                      />
-                      <span className="text-sm font-semibold text-slate-700 dark:text-[#ebd5c1]">
-                      開啟「信用卡回饋與優惠」推薦功能
-                      </span>
-                  </label>
-              </div>
-          
-              {basicData.enableCreditCard && (
-                  <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
-                      <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">您的信用卡發卡國家/地區</label>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="relative">
-                              <select 
-                                  name="issuingCountry" 
-                                  value={basicData.issuingCountry} 
-                                  onChange={handleBasicChange} 
-                                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]"
-                              >
-                                  {ISSUING_COUNTRIES && ISSUING_COUNTRIES.map(c => (
-                                      <option key={c.code} value={c.code}>{c.name}</option>
-                                  ))}
-                              </select>
-                              <ChevronDown className="absolute right-4 top-4 w-4 h-4 text-slate-400 dark:text-[#8e7c75] pointer-events-none" />
-                          </div>
-                          {basicData.issuingCountry === 'OTHER' && (
-                              <input 
-                                  name="otherCountryName" 
-                                  placeholder="請輸入國家名稱" 
-                                  value={basicData.otherCountryName} 
-                                  onChange={handleBasicChange} 
-                                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 outline-none text-sm dark:text-[#ebd5c1]" 
-                              />
-                          )}
-                      </div>
-                      <p className="text-xs text-slate-400 dark:text-[#8e7c75] pl-1">AI 將根據此設定，列出您可能持有的銀行列表供後續勾選。</p>
-                  </div>
-              )}
-          </section>
-
           {/* 航班資訊區塊 */}
           <section className="space-y-4">
             <div className="flex justify-between items-center">
@@ -3896,10 +3804,6 @@ const App = () => {
           <CityGuide 
             guideData={itineraryData.city_guides} 
             cities={Object.keys(itineraryData.city_guides)}
-            basicData={basicData} 
-            apiKey={apiKey}
-            onSaveCreditCardAnalysis={handleUpdateCreditCardAnalysis}
-            modelType={modelType}
           />
         )}
 
