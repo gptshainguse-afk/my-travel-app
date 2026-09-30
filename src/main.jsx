@@ -28,6 +28,8 @@ const GEMINI_MODEL_CONFIG = {
   lite: { alias: 'gemini-flash-lite-latest', label: 'Gemini Flash-Lite' },
 };
 const GEMINI_MODEL_CACHE_MS = 60 * 60 * 1000;
+const GEMINI_TRIP_OUTPUT_TOKENS = 32768;
+const GEMINI_OUTPUT_RECOVERY_CEILING = 65536;
 const geminiModelCache = new globalThis.Map();
 const geminiModelListeners = new Set();
 const normalizeGeminiKey = (apiKey) => String(apiKey || '').trim();
@@ -176,7 +178,11 @@ function getGeminiCandidates(apiKey, type) {
 
 function getGeminiText(data) {
   const candidate = data.candidates?.[0];
-  if (candidate?.finishReason === 'MAX_TOKENS') throw new Error('AI 回覆超過輸出長度，請縮短需求後重試。');
+  if (candidate?.finishReason === 'MAX_TOKENS') {
+    throw Object.assign(new Error('AI 回覆已達輸出上限，尚未取得完整內容。'), {
+      code: 'GEMINI_OUTPUT_TRUNCATED', modelVersion: data.modelVersion,
+    });
+  }
   const text = candidate?.content?.parts?.filter(part => !part.thought && typeof part.text === 'string').map(part => part.text).join('');
   if (!text?.trim()) throw new Error(`AI 未傳回文字內容${data.promptFeedback?.blockReason ? `（${data.promptFeedback.blockReason}）` : ''}。`);
   return text;
@@ -205,10 +211,24 @@ async function requestGemini(apiKey, type, payload) {
       if (generationConfig?.maxOutputTokens && model.outputTokenLimit) {
         generationConfig.maxOutputTokens = Math.min(generationConfig.maxOutputTokens, model.outputTokenLimit);
       }
-      const body = generationConfig ? { ...payload, generationConfig } : payload;
-      const data = await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, key,
-        { method: 'POST', body: JSON.stringify(body) }, 180000);
-      getGeminiText(data); // 空回應或安全阻擋不交給後面的 JSON parser。
+      let data;
+      for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
+        const body = generationConfig ? { ...payload, generationConfig } : payload;
+        data = await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, key,
+          { method: 'POST', body: JSON.stringify(body) }, 180000);
+        try {
+          getGeminiText(data); // 只接受完整回應，避免把半截 JSON 當成行程。
+          break;
+        } catch (error) {
+          const currentLimit = generationConfig?.maxOutputTokens || 0;
+          const ceiling = Math.min(model.outputTokenLimit || GEMINI_OUTPUT_RECOVERY_CEILING, GEMINI_OUTPUT_RECOVERY_CEILING);
+          if (error.code === 'GEMINI_OUTPUT_TRUNCATED' && lengthAttempt === 0 && currentLimit > 0 && currentLimit < ceiling) {
+            generationConfig.maxOutputTokens = Math.min(currentLimit * 2, ceiling);
+            continue; // 只擴充一次；仍截斷時交由行程產生器拆小批次。
+          }
+          throw error;
+        }
+      }
       cache.lastUsed[family] = { id: data.modelVersion || model.id, label: formatGeminiModel(data.modelVersion || model.id), requested: model.id };
       notifyGeminiModels(key);
       return data;
@@ -2383,6 +2403,164 @@ async function regenerateDayWeather(city, date, apiKey) {
 }
 
 
+// --- 行程輸出恢復：保留欄位與天數，超長時拆分生成後再合併 ---
+function tripShapeError(message) {
+  return Object.assign(new Error(message), { code: 'GEMINI_TRIP_SHAPE' });
+}
+
+function canSplitTripOutput(error) {
+  return ['GEMINI_OUTPUT_TRUNCATED', 'GEMINI_TRIP_JSON', 'GEMINI_TRIP_SHAPE'].includes(error.code);
+}
+
+function getTripContinuation(days, previousContext) {
+  const day = days.at(-1);
+  if (!day) return previousContext;
+  const item = day.timeline?.at(-1);
+  return `Ended Day ${day.day_index} in ${day.city} at ${item?.title || 'Hotel'}. Continue logically from here.`;
+}
+
+async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4 }) {
+  const totalDays = dateList.length;
+  const guideFields = ['history_culture', 'transport_tips', 'safety_scams', 'subsidies', 'tax_refund', 'basic_phrases'];
+  const itemFields = ['time', 'type', 'title', 'description', 'location_query', 'transport_detail', 'price_level', 'warnings_tips', 'menu_recommendations'];
+  const guideSchema = '{"history_culture":"...","transport_tips":"...","safety_scams":"...","subsidies":"...","tax_refund":"...","basic_phrases":[{"label":"...","local":"...","roman":"..."}]}';
+  const itemSchema = '{"time":"10:00","type":"spot","title":"...","description":"...","location_query":"...","transport_detail":"...","price_level":"Mid","warnings_tips":"...","menu_recommendations":[{"local":"...","cn":"...","price":"..."}]}';
+  const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const hasFields = (value, fields) => isRecord(value) && fields.every(field => Object.hasOwn(value, field));
+  const isGuide = value => hasFields(value, guideFields) && Array.isArray(value.basic_phrases);
+  const isItem = value => hasFields(value, itemFields) && Array.isArray(value.menu_recommendations);
+
+  const fetchTripJson = async prompt => {
+    const response = await requestGemini(apiKey, modelFamily, {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: GEMINI_TRIP_OUTPUT_TOKENS },
+    });
+    try {
+      return JSON.parse(cleanJsonResult(getGeminiText(response)));
+    } catch (error) {
+      if (error.code === 'GEMINI_OUTPUT_TRUNCATED') throw error;
+      throw Object.assign(new Error('AI 行程資料格式不完整。'), { code: 'GEMINI_TRIP_JSON' });
+    }
+  };
+
+  const baseRequirements = `
+    "trip_summary": Overall trip summary.
+    "currency_rate": String (e.g. "1 JPY ≈ 0.21 TWD").
+    "currency_rate_val": Number (e.g. 0.21).
+    "currency_code": String (e.g. "JPY").
+  `;
+  const validBase = data => hasFields(data, ['trip_summary', 'currency_rate', 'currency_rate_val', 'currency_code']);
+  let baseData;
+  try {
+    baseData = await fetchTripJson(`You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
+      ${baseConstraints}
+      Requirements: ${baseRequirements}
+      "city_guides": An object with one entry for EVERY unique major city visited. Each guide must include all these fields: ${guideSchema}.
+      Provide exactly 5 basic phrases per city. Keep all history, transport, safety, subsidies and tax-refund details.
+      Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","city_guides":{"CityA":${guideSchema}}}`);
+    if (!validBase(baseData) || !isRecord(baseData.city_guides) || !Object.keys(baseData.city_guides).length || !Object.values(baseData.city_guides).every(isGuide)) {
+      throw tripShapeError('城市指南資料不完整。');
+    }
+  } catch (error) {
+    if (!canSplitTripOutput(error)) throw error;
+    // 城市多時先產生摘要與城市清單，再逐城市取得完整指南，不刪減指南內容。
+    const core = await fetchTripJson(`You are an expert AI Travel Planner. Generate the trip summary, currency and guide-city list ONLY. Respond with valid JSON only.
+      ${baseConstraints}
+      Requirements: ${baseRequirements}
+      "guide_cities": An array of EVERY unique major city actually visited. Do not omit any destination.
+      Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`);
+    if (!validBase(core) || !Array.isArray(core.guide_cities) || !core.guide_cities.length || !core.guide_cities.every(city => typeof city === 'string' && city.trim())) {
+      throw tripShapeError('AI 未提供完整的旅遊城市清單，請稍後重試。');
+    }
+    const { guide_cities: guideCities, ...summary } = core;
+    const cityGuides = {};
+    for (const city of [...new Set(guideCities.map(value => value.trim()))]) {
+      const guide = await fetchTripJson(`Generate the complete travel city guide for "${city}". Respond with one valid JSON object only.
+        ${baseConstraints}
+        Include history, transport and ticketing, safety/scams, travel subsidies, tax refunds and exactly 5 local phrases.
+        Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`);
+      if (!isGuide(guide)) throw tripShapeError(`「${city}」的城市指南資料不完整，請稍後重試。`);
+      cityGuides[city] = guide;
+    }
+    baseData = { ...summary, city_guides: cityGuides };
+  }
+
+  function validateDays(data, dates, startDayIdx, fullItems = true) {
+    if (!Array.isArray(data?.days) || data.days.length !== dates.length) throw tripShapeError('AI 回傳的行程天數不完整。');
+    const byIndex = new globalThis.Map(data.days.map(day => [Number(day?.day_index), day]));
+    if (byIndex.size !== dates.length) throw tripShapeError('AI 回傳了重複的行程日期。');
+    return dates.map((date, offset) => {
+      const index = startDayIdx + offset;
+      const day = byIndex.get(index);
+      if (!hasFields(day, ['day_index', 'date', 'city', 'title', 'weather_forecast', 'clothing_suggestion', 'timeline']) || !Array.isArray(day.timeline)) {
+        throw tripShapeError(`第 ${index} 天的行程資料不完整。`);
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date) && day.date !== date) throw tripShapeError(`第 ${index} 天的日期不正確。`);
+      const validItem = fullItems ? isItem : item => hasFields(item, ['time', 'type', 'title']);
+      if (!day.timeline.every(validItem)) throw tripShapeError(`第 ${index} 天的景點資料不完整。`);
+      return { ...day, day_index: index, date };
+    });
+  }
+
+  const generateSingleDayByItem = async (date, dayIndex, previousContext) => {
+    const skeleton = await fetchTripJson(`Plan ONLY Day ${dayIndex} on "${date}". Return a valid JSON object with one day under "days".
+      ${baseConstraints}
+      Previous Context: "${previousContext}"
+      Plan the COMPLETE schedule with the original travel pace, all needed meals, transport, flights and accommodation.
+      Keep weather_forecast and clothing_suggestion. For now, each timeline item needs ONLY time, type and title; details will be filled separately.
+      Do not omit stops to fit the response.
+      Output: {"days":[{"day_index":${dayIndex},"date":"${date}","city":"...","title":"...","weather_forecast":"...","clothing_suggestion":"...","timeline":[{"time":"10:00","type":"spot","title":"..."}]}]}`);
+    const day = validateDays(skeleton, [date], dayIndex, false)[0];
+    const timeline = [];
+    for (const item of day.timeline) {
+      const details = await fetchTripJson(`Complete ONE itinerary item for Day ${dayIndex} in "${day.city}" on "${date}". Respond with one valid JSON object only.
+        ${baseConstraints}
+        Previous day context: "${previousContext}"
+        Full schedule: ${JSON.stringify(day.timeline)}
+        Target item: ${JSON.stringify(item)}
+        Include complete description, Google Maps query, transport details, price level, warnings and menu recommendations.
+        Required fields: ${itemSchema}. Use [] for menu_recommendations when there is no food. Keep the supplied time, type and title. Do not wrap in days or timeline.`);
+      if (!isItem(details)) throw tripShapeError(`「${item.title}」的景點資料不完整，請稍後重試。`);
+      timeline.push({ ...item, ...details, time: item.time, type: item.type, title: item.title });
+    }
+    return [{ ...day, timeline }];
+  };
+
+  const generateDays = async (dates, startDayIdx, previousContext) => {
+    const endDayIdx = startDayIdx + dates.length - 1;
+    try {
+      const data = await fetchTripJson(`You are an expert AI Travel Planner. Generate a portion of a ${totalDays}-day trip.
+        ${baseConstraints}
+        We are CURRENTLY generating Day ${startDayIdx} to Day ${endDayIdx}.
+        Specific Dates for this chunk: ${dates.join(', ')}.
+        Previous Context (Where the user ended up before this chunk): "${previousContext}"
+        Requirements:
+        1. ONLY output an array of day objects under "days". Include exactly ${dates.length} days, indexed ${startDayIdx} to ${endDayIdx}. Do not skip or duplicate any date.
+        2. Keep all original travel details: weather_forecast, clothing_suggestion, meals, activities, flights, hotels, transport, warnings and menu recommendations.
+        3. Timeline type must be transport|activity|meal|hotel|flight|spot; price_level must be Low|Mid|High. Required item fields: ${itemSchema}.
+        Output: {"days":[{"day_index":${startDayIdx},"date":"${dates[0]}","city":"City Name","title":"Daily Theme","weather_forecast":"...","clothing_suggestion":"...","timeline":[${itemSchema}]}]}`);
+      return validateDays(data, dates, startDayIdx);
+    } catch (error) {
+      if (!canSplitTripOutput(error)) throw error; // 配額、Key、網路錯誤照實回報，不連續重送。
+      if (dates.length === 1) return generateSingleDayByItem(dates[0], startDayIdx, previousContext);
+      const middle = Math.ceil(dates.length / 2);
+      const left = await generateDays(dates.slice(0, middle), startDayIdx, previousContext);
+      const right = await generateDays(dates.slice(middle), startDayIdx + middle, getTripContinuation(left, previousContext));
+      return [...left, ...right];
+    }
+  };
+
+  const days = [];
+  let previousContext = 'Trip is just starting. Start from the arrival flight or airport if applicable.';
+  for (let offset = 0; offset < totalDays; offset += batchSize) {
+    const chunk = await generateDays(dateList.slice(offset, offset + batchSize), offset + 1, previousContext);
+    days.push(...chunk);
+    previousContext = getTripContinuation(chunk, previousContext);
+  }
+  if (days.length !== totalDays) throw tripShapeError('行程天數不完整，請稍後重試。');
+  return { ...baseData, days };
+}
+
 const App = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
@@ -2885,7 +3063,7 @@ const App = () => {
     }
     
     const totalDays = dateList.length;
-    const batchSize = 4; // ⭐ 關鍵：每批次請 AI 處理 4 天，避免 JSON 斷尾
+    const batchSize = 4; // 正常每批 4 天，輸出超長時自動拆成 2 天、1 天或逐景點。
 
     // --- 2. 準備使用者約束條件 ---
     let flightsString = "No flights involved.";
@@ -2945,119 +3123,10 @@ const App = () => {
     `;
 
     try {
-      // 封裝共用的 API 呼叫邏輯，加上 maxOutputTokens 防止截斷
-      const fetchWithModel = async (promptText) => {
-         const resData = await requestGemini(apiKey, modelFamily, { 
-                contents: [{ parts: [{ text: promptText }] }], 
-                generationConfig: { 
-                    responseMimeType: "application/json",
-                    maxOutputTokens: 8192 
-                } 
-            });
-         return cleanJsonResult(getGeminiText(resData));
-      };
-
-      // ==========================================
-      // 第一階段 (Phase 1): 生成基本資訊與城市指南
-      // ==========================================
-      console.log("Phase 1: Generating Base Info & City Guides...");
-      const basePrompt = `
-        You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
-        ${baseConstraints}
-        
-        Requirements:
-        1. "trip_summary": Overall trip summary.
-        2. "currency_rate": String (e.g. '1 JPY ≈ 0.21 TWD').
-        3. "currency_rate_val": Number (e.g. 0.21).
-        4. "currency_code": String (e.g. 'JPY' or 'THB' or 'INR').
-        5. "city_guides": For each unique major city visited, provide "history_culture", "transport_tips", "safety_scams", "subsidies", "tax_refund", and "basic_phrases" (exactly 5 phrases).
-        
-        Output JSON Schema:
-        {
-          "trip_summary": "...",
-          "currency_rate": "...",
-          "currency_rate_val": 0.0,
-          "currency_code": "...",
-          "city_guides": {
-             "CityA": { "history_culture": "...", "transport_tips": "...", "safety_scams": "...", "subsidies": "...", "tax_refund": "...", "basic_phrases": [] }
-          }
-        }
-      `;
-      const baseText = await fetchWithModel(basePrompt);
-      const baseData = JSON.parse(baseText);
-
-      // ==========================================
-      // 第二階段 (Phase 2): 分批生成每日行程
-      // ==========================================
-      console.log("Phase 2: Generating Days in chunks...");
-      let allDays = [];
-      let previousContext = "Trip is just starting. Start from the arrival flight or airport if applicable.";
-
-      // 迴圈：每次處理 4 天
-      for (let i = 0; i < totalDays; i += batchSize) {
-          const chunkDates = dateList.slice(i, i + batchSize);
-          const startDayIdx = i + 1;
-          const endDayIdx = i + chunkDates.length;
-          
-          console.log(`Generating Day ${startDayIdx} to ${endDayIdx}...`);
-
-          const dayPrompt = `
-            You are an expert AI Travel Planner. Generate a portion of a ${totalDays}-day trip.
-            ${baseConstraints}
-            
-            We are CURRENTLY generating Day ${startDayIdx} to Day ${endDayIdx}.
-            Specific Dates for this chunk: ${chunkDates.join(", ")}.
-            
-            Previous Context (Where the user ended up before this chunk):
-            "${previousContext}"
-            
-            Requirements:
-            1. ONLY output an array of day objects under the key "days".
-            2. Each day must strictly follow the schema.
-            3. CRITICAL: Include exactly ${chunkDates.length} days. DO NOT SKIP ANY DAY in this chunk.
-            4. Timeline items should include "time", "type" (transport|activity|meal|hotel|flight|spot), "title", "description", "location_query", "transport_detail", "price_level" (Low|Mid|High), "warnings_tips", and "menu_recommendations".
-            
-            Output JSON Schema:
-            {
-              "days": [
-                {
-                  "day_index": ${startDayIdx},
-                  "date": "${chunkDates[0]}",
-                  "city": "City Name",
-                  "title": "Daily Theme",
-                  "weather_forecast": "...",
-                  "clothing_suggestion": "...",
-                  "timeline": [
-                    { "time": "10:00", "type": "spot", "title": "...", "description": "...", "location_query": "...", "transport_detail": "...", "price_level": "Mid", "warnings_tips": "...", "menu_recommendations": [] }
-                  ]
-                }
-              ]
-            }
-          `;
-
-          const chunkText = await fetchWithModel(dayPrompt);
-          const chunkData = JSON.parse(chunkText);
-          
-          if (chunkData && chunkData.days && Array.isArray(chunkData.days)) {
-              allDays = allDays.concat(chunkData.days);
-              
-              // 紀錄這一批最後一天的終點，傳遞給下一批作為上下文
-              const lastDay = chunkData.days[chunkData.days.length - 1];
-              const lastItem = lastDay.timeline[lastDay.timeline.length - 1];
-              previousContext = `Ended Day ${lastDay.day_index} in ${lastDay.city} at ${lastItem?.title || 'Hotel'}. Continue logically from here.`;
-          } else {
-              throw new Error(`Chunk Day ${startDayIdx}-${endDayIdx} 格式錯誤。`);
-          }
-      }
-
-      // ==========================================
-      // 第三階段 (Phase 3): 合併並顯示結果
-      // ==========================================
-      const finalItinerary = {
-          ...baseData,
-          created: Date.now(),
-          days: allDays
-      };
+      const tripData = await generateTripData({
+        apiKey, modelFamily, baseConstraints, dateList, batchSize,
+      });
+      const finalItinerary = { ...tripData, created: Date.now() };
 
       // 根據 AI 回傳的幣別設定符號
       if (finalItinerary.currency_code) {
