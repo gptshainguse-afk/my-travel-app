@@ -2404,6 +2404,271 @@ async function regenerateDayWeather(city, date, apiKey) {
 
 
 // --- 行程輸出恢復：保留欄位與天數，超長時拆分生成後再合併 ---
+const bookingText = value => typeof value === 'string' ? value.trim() : '';
+const isTripDate = value => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
+const tripTimeMinutes = value => {
+  const match = bookingText(value).match(/^(\d{2}):(\d{2})$/);
+  if (!match || Number(match[2]) > 59 || Number(match[1]) > 24 || (Number(match[1]) === 24 && Number(match[2]) !== 0)) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+};
+const tripTimeLabel = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const shiftTripDate = (date, offset) => {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+};
+
+// 舊版 time / airport 僅作資料遷移；表單與生成皆使用相同的新欄位。
+function normalizeTransportInput(value = {}) {
+  value = value || {};
+  return {
+    ...value, mode: value.mode === 'train' ? 'train' : 'flight', role: value.role || 'auto',
+    date: value.date || '', arrivalDate: value.arrivalDate || '',
+    depTime: value.depTime || value.time || '', arrTime: value.arrTime || '',
+    code: value.code || '', station: value.station || value.airport || '',
+    departureStation: value.departureStation || '', arrivalStation: value.arrivalStation || '',
+  };
+}
+
+function buildTripBookingContext({ basicData, simpleFlights, multiFlights, accommodations, dateList }) {
+  const assumptions = [];
+  const firstDate = dateList[0];
+  const lastDate = dateList.at(-1);
+  const datedTrip = dateList.every(isTripDate);
+  const buffer = (field, fallback) => {
+    if (basicData[field] === undefined || basicData[field] === null || basicData[field] === '') return fallback;
+    const value = Number(basicData[field]);
+    if (!Number.isInteger(value) || value < 0 || value > 720) throw new Error('機場預留時間請填 0 至 720 之間的整數分鐘。');
+    return value;
+  };
+  const buffers = {
+    flight_departure: buffer('flightDepartureBuffer', 180), flight_arrival: buffer('flightArrivalBuffer', 90),
+    train_departure: 30, train_arrival: 15,
+  };
+  const inputs = !basicData.hasFlights ? [] : basicData.isMultiCityFlight
+    ? (multiFlights || []).map(normalizeTransportInput).filter(item => ['date', 'arrivalDate', 'depTime', 'arrTime', 'code', 'station', 'departureStation', 'arrivalStation'].some(key => bookingText(item[key])))
+    : ['outbound', 'transit', 'inbound'].map(role => ({ ...normalizeTransportInput(simpleFlights?.[role]), role })).filter(item => ['date', 'arrivalDate', 'depTime', 'arrTime', 'code', 'station', 'departureStation', 'arrivalStation'].some(key => bookingText(item[key])));
+  const transport = inputs.map((input, index) => {
+    const inferredRole = /回程|返程|回國/.test(input.type || '') ? 'inbound' : /去程|出國/.test(input.type || '') ? 'outbound'
+      : /中轉|轉機/.test(input.type || '') ? 'transit' : index === 0 ? 'outbound' : index === inputs.length - 1 ? 'inbound' : 'transfer';
+    const role = ['outbound', 'inbound', 'transit', 'transfer'].includes(input.role) ? input.role : inferredRole;
+    if (basicData.isMultiCityFlight && input.role === 'auto') assumptions.push(`第 ${index + 1} 段交通暫按「${({ outbound: '去程', inbound: '回程', transit: '中轉', transfer: '旅途中移動' })[role]}」規劃，可在航段用途修改。`);
+    let departureDate = bookingText(input.date);
+    if (departureDate && !isTripDate(departureDate)) throw new Error('交通日期格式不正確，請重新選擇日期。');
+    if (!departureDate && datedTrip && ['outbound', 'inbound'].includes(role)) {
+      departureDate = role === 'outbound' ? firstDate : lastDate;
+      assumptions.push(`${input.type || role}未填出發日期，暫用 ${departureDate}。`);
+    }
+    if (!departureDate && datedTrip) throw new Error(`「${input.type || '中途交通'}」請填寫出發日期，以免跨城市移動排錯天。`);
+    const arrivalDate = bookingText(input.arrivalDate) || departureDate;
+    if (arrivalDate && !isTripDate(arrivalDate)) throw new Error('抵達日期格式不正確，請重新選擇日期。');
+    if (input.mode === 'train' && arrivalDate && departureDate && arrivalDate < departureDate) throw new Error('火車抵達日期不可早於出發日期，請確認班次資料。');
+    for (const field of ['depTime', 'arrTime']) {
+      if (input[field] && (tripTimeMinutes(input[field]) === null || tripTimeMinutes(input[field]) === 1440)) throw new Error('出發／抵達時間請使用有效的 HH:mm 格式。');
+    }
+    if (!input.arrivalDate && input.depTime && input.arrTime && tripTimeMinutes(input.arrTime) < tripTimeMinutes(input.depTime)) {
+      throw new Error(`「${input.code || input.type || '交通班次'}」抵達時間早於出發時間，請填寫抵達日期；跨日或時差航班請依各地當地日期填寫。`);
+    }
+    if (!input.arrivalDate && arrivalDate) assumptions.push(`${input.code || input.type || role}未填抵達日期，暫用出發當日 ${arrivalDate}。`);
+    if (datedTrip && role === 'outbound' && arrivalDate > lastDate) throw new Error('去程抵達日期晚於旅遊結束日期，請調整旅遊日期或航班日期。');
+    if (datedTrip && role === 'inbound' && departureDate < firstDate) throw new Error('回程出發日期早於旅遊開始日期，請確認日期範圍。');
+    const stationHint = bookingText(input.station);
+    return {
+      booking_id: `transport-${index + 1}`, role, mode: input.mode, label: input.type || role,
+      departure_date: departureDate || null, arrival_date: arrivalDate || null,
+      departure_time: bookingText(input.depTime) || null, arrival_time: bookingText(input.arrTime) || null,
+      code: bookingText(input.code) || null, station_hint: stationHint || null,
+      departure_station: bookingText(input.departureStation) || (role === 'inbound' ? stationHint : null),
+      arrival_station: bookingText(input.arrivalStation) || (role === 'outbound' || role === 'transit' ? stationHint : null),
+      departure_buffer_minutes: buffers[`${input.mode}_departure`], arrival_buffer_minutes: buffers[`${input.mode}_arrival`],
+    };
+  });
+  const knownStays = (accommodations || []).filter(stay => bookingText(stay.name) || bookingText(stay.address));
+  if (!datedTrip && (transport.some(item => item.departure_date) || knownStays.some(stay => stay.checkInDate || stay.checkOutDate))) {
+    throw new Error('請先選擇旅遊日期，才能把已訂交通與住宿安排到正確的日期。');
+  }
+  const entryDates = transport.filter(item => ['outbound', 'transit'].includes(item.role) && item.arrival_date).map(item => item.arrival_date).sort();
+  const departure = transport.find(item => item.role === 'inbound');
+  const stays = knownStays.map((stay, index) => {
+    let checkIn = bookingText(stay.checkInDate);
+    let checkOut = bookingText(stay.checkOutDate);
+    if (knownStays.length > 1 && (!checkIn || !checkOut)) throw new Error('有多間住宿時，請填寫每間的入住與退房日期，才能正確安排換飯店與跨城市路線。');
+    if (datedTrip && knownStays.length === 1) {
+      const inferredCheckIn = entryDates.at(-1) && entryDates.at(-1) > firstDate ? entryDates.at(-1) : firstDate;
+      if (!checkIn) { checkIn = inferredCheckIn; assumptions.push(`「${stay.name || stay.address}」未填入住日期，暫用 ${checkIn}。`); }
+      if (!checkOut) {
+        checkOut = departure?.departure_date && departure.departure_date >= checkIn ? departure.departure_date : lastDate;
+        if (checkOut === checkIn && !departure) checkOut = shiftTripDate(checkIn, 1);
+        assumptions.push(`「${stay.name || stay.address}」未填退房日期，暫用 ${checkOut}。`);
+      }
+    }
+    if ((checkIn && !isTripDate(checkIn)) || (checkOut && !isTripDate(checkOut))) throw new Error('住宿日期格式不正確，請重新選擇日期。');
+    if (checkIn && checkOut && checkOut <= checkIn) throw new Error(`「${stay.name || '住宿'}」的退房日期必須晚於入住日期。`);
+    const checkInTime = bookingText(stay.checkInTime) || '15:00';
+    const checkOutTime = bookingText(stay.checkOutTime) || '11:00';
+    if ([checkInTime, checkOutTime].some(value => tripTimeMinutes(value) === null || tripTimeMinutes(value) === 1440)) throw new Error('住宿入住／退房時間格式不正確。');
+    return { booking_id: `stay-${index + 1}`, name: bookingText(stay.name), type: bookingText(stay.type), address: bookingText(stay.address), check_in_date: checkIn || null, check_out_date: checkOut || null, check_in_time: checkInTime, check_out_time: checkOutTime };
+  });
+  for (let i = 0; i < stays.length; i++) for (let j = i + 1; j < stays.length; j++) {
+    if (stays[i].check_in_date < stays[j].check_out_date && stays[j].check_in_date < stays[i].check_out_date) throw new Error('住宿日期重疊，請確認每晚要入住哪一間；同日退房再入住另一間可以正常安排。');
+  }
+  const days = dateList.map(date => ({ date, start_stay: null, end_stay: null, required_events: [], blocked_intervals: [], terminal_windows: [] }));
+  const byDate = new globalThis.Map(days.map(day => [day.date, day]));
+  const addEvent = (date, event) => byDate.get(date)?.required_events.push(event);
+  const addBlock = (startDate, startMinute, endDate, endMinute, reason, transportId) => {
+    if (!datedTrip || !startDate || !endDate || startDate > endDate || (startDate === endDate && startMinute >= endMinute)) return;
+    for (const day of days) if (day.date >= startDate && day.date <= endDate) {
+      const start = day.date === startDate ? startMinute : 0;
+      const end = day.date === endDate ? endMinute : 1440;
+      if (start < end) day.blocked_intervals.push({ start, end, reason, booking_id: transportId });
+    }
+  };
+  const addTerminalWindow = (startDate, startMinute, endDate, endMinute, record, station) => {
+    if (!datedTrip || !startDate || !endDate || startDate > endDate) return;
+    for (const day of days) if (day.date >= startDate && day.date <= endDate) {
+      const start = day.date === startDate ? startMinute : 0;
+      const end = day.date === endDate ? endMinute : 1440;
+      if (start < end) day.terminal_windows.push({ start, end, booking_id: record.booking_id, station: station || record.station_hint });
+    }
+  };
+  const flightPoint = (record, event, time, station) => ({ booking_id: record.booking_id, booking_event: event, type: record.mode === 'flight' ? 'flight' : 'transport', time, station: station || record.station_hint, code: record.code });
+  for (const record of transport) {
+    const dep = tripTimeMinutes(record.departure_time);
+    const arr = tripTimeMinutes(record.arrival_time);
+    const ready = arr === null ? null : arr + record.arrival_buffer_minutes;
+    const readyDate = ready === null || !record.arrival_date ? null : shiftTripDate(record.arrival_date, Math.floor(ready / 1440));
+    if (readyDate) { record.city_ready_date = readyDate; record.city_ready_time = tripTimeLabel(ready % 1440); }
+    if (readyDate && record.role !== 'inbound') addTerminalWindow(record.arrival_date, arr, readyDate, ready % 1440, record, record.arrival_station);
+    if (record.role !== 'inbound') {
+      addEvent(record.arrival_date, flightPoint(record, 'arrival', record.arrival_time, record.arrival_station));
+      if (record.role === 'outbound') {
+        if (record.arrival_date && record.arrival_date > firstDate) addBlock(firstDate, 0, record.arrival_date, arr ?? 0, '尚未抵達旅遊目的地', record.booking_id);
+        if (readyDate) addBlock(firstDate, 0, readyDate, ready % 1440, '抵達前及入境／下車預留時間', record.booking_id);
+        if (record.departure_date < record.arrival_date) addEvent(record.departure_date, flightPoint(record, 'departure', record.departure_time, record.departure_station));
+      }
+    }
+    if (record.role !== 'outbound') {
+      addEvent(record.departure_date, flightPoint(record, 'departure', record.departure_time, record.departure_station));
+      if (dep !== null && record.departure_date) {
+        const terminalMinute = dep - record.departure_buffer_minutes;
+        const terminalDate = shiftTripDate(record.departure_date, terminalMinute < 0 ? -1 : 0);
+        const terminalTime = (terminalMinute + 1440) % 1440;
+        record.terminal_arrival_date = terminalDate;
+        record.terminal_arrival_time = tripTimeLabel(terminalTime);
+        addTerminalWindow(terminalDate, terminalTime, record.departure_date, dep, record, record.departure_station);
+        addEvent(terminalDate, { ...flightPoint(record, 'terminal_arrival', tripTimeLabel(terminalTime), record.departure_station), type: 'transport' });
+        if (record.role === 'inbound') addBlock(terminalDate, terminalTime, lastDate, 1440, '回程報到及離境後，不再安排目的地活動', record.booking_id);
+        else if (readyDate) addBlock(terminalDate, terminalTime, readyDate, ready % 1440, '中途交通、報到及抵達後預留時間', record.booking_id);
+        else addBlock(terminalDate, terminalTime, record.departure_date, 1440, '中途交通的抵達時間未確認', record.booking_id);
+      }
+    }
+  }
+  const connections = transport.filter(record => ['outbound', 'transit'].includes(record.role));
+  for (let i = 1; i < connections.length; i++) {
+    const previous = connections[i - 1], next = connections[i];
+    const arr = tripTimeMinutes(previous.arrival_time), dep = tripTimeMinutes(next.departure_time);
+    if (arr === null || dep === null || !previous.arrival_date || !next.departure_date) continue;
+    const availableMinutes = (new Date(`${next.departure_date}T00:00:00Z`) - new Date(`${previous.arrival_date}T00:00:00Z`)) / 60000 + dep - arr - previous.arrival_buffer_minutes - next.departure_buffer_minutes;
+    // 360 分鐘是本工具的保守規劃門檻，不是航空公司或入境規定。
+    if (!basicData.hasTransitTour || availableMinutes < 360) {
+      addBlock(previous.arrival_date, arr, next.departure_date, dep, !basicData.hasTransitTour ? '未勾選中轉觀光，僅安排機場內候機與銜接' : '中轉扣除預留時間後不足六小時，僅安排機場內活動', previous.booking_id);
+      addTerminalWindow(previous.arrival_date, arr, next.departure_date, dep, previous, previous.arrival_station);
+    }
+  }
+  for (const day of days) {
+    if (!isTripDate(day.date)) continue;
+    // 凌晨回程若需前一晚報到，住宿保留原訂日期，但實際路線提早退房。
+    const actualCheckOut = stay => departure?.terminal_arrival_date && stay.check_out_date === departure.departure_date && departure.terminal_arrival_date < stay.check_out_date ? departure.terminal_arrival_date : stay.check_out_date;
+    const entry = connections.at(-1);
+    const actualCheckIn = stay => entry?.city_ready_date && stay.check_in_date < entry.city_ready_date && stay.check_out_date >= entry.city_ready_date ? entry.city_ready_date : stay.check_in_date;
+    day.start_stay = stays.find(stay => stay.check_in_date < day.date && actualCheckIn(stay) <= day.date && actualCheckOut(stay) >= day.date) || null;
+    day.end_stay = stays.find(stay => actualCheckIn(stay) <= day.date && actualCheckOut(stay) > day.date) || null;
+    for (const stay of stays) if (actualCheckIn(stay) === day.date) {
+      const lateArrival = actualCheckIn(stay) !== stay.check_in_date;
+      addEvent(day.date, { booking_id: stay.booking_id, booking_event: 'check_in', type: 'hotel', name: stay.name, address: stay.address, earliest_time: lateArrival ? entry.city_ready_time : stay.check_in_time });
+      if (lateArrival) assumptions.push(`「${stay.name || stay.address}」原訂 ${stay.check_in_date} 入住，抵達及入境後須延至 ${day.date} 凌晨；晚到入住需向住宿確認。`);
+    }
+    if (day.start_stay) {
+      const stay = day.start_stay;
+      const checkOut = actualCheckOut(stay) === day.date;
+      const checkoutDeadline = actualCheckOut(stay) === stay.check_out_date ? stay.check_out_time : departure?.terminal_arrival_time;
+      addEvent(day.date, { booking_id: stay.booking_id, booking_event: checkOut ? 'check_out' : 'leave_hotel', type: 'hotel', name: stay.name, address: stay.address, latest_time: checkOut ? checkoutDeadline : null });
+    }
+    if (day.end_stay) {
+      const stay = day.end_stay;
+      if (actualCheckIn(stay) !== day.date) addEvent(day.date, { booking_id: stay.booking_id, booking_event: 'return_to_hotel', type: 'hotel', name: stay.name, address: stay.address });
+    }
+  }
+  return { transport, stays, days, assumptions, buffers, allow_transit_tour: Boolean(basicData.hasTransitTour) };
+}
+
+function findTripBookingConflicts(day, rules) {
+  if (!rules || (!rules.required_events.length && !rules.blocked_intervals.length)) return [];
+  const conflicts = [];
+  const normalize = value => bookingText(value).toLowerCase().replace(/\s+/g, '');
+  const events = rules.required_events;
+  const optionalHotelEvents = events.flatMap(event => event.booking_event === 'check_in' ? [{ ...event, booking_event: 'return_to_hotel' }]
+    : event.booking_event === 'check_out' ? ['leave_hotel', 'return_to_hotel'].map(booking_event => ({ ...event, booking_event, latest_time: null })) : []);
+  const allowedEvents = [...events, ...optionalHotelEvents];
+  let previousStart = -1;
+  let previousEnd = -1;
+  for (const item of day.timeline) {
+    const start = tripTimeMinutes(item.time), end = tripTimeMinutes(item.end_time);
+    const expected = allowedEvents.find(event => event.booking_id === item.booking_id && event.booking_event === item.booking_event);
+    if (start === null && expected && !expected.time && item.time === '待確認') continue;
+    if (start === null || start === 1440) { conflicts.push(`「${item.title}」需要有效的 HH:mm 開始時間。`); continue; }
+    if (start < previousStart) conflicts.push('時間軸未按時間順序排列。');
+    previousStart = start;
+    if (end !== null && end < start) conflicts.push(`「${item.title}」的結束時間早於開始時間。`);
+    if (!expected && !['hotel', 'flight'].includes(item.type) && end === null) conflicts.push(`「${item.title}」缺少 end_time，無法確認是否會延誤交通。`);
+    if (start < previousEnd) conflicts.push(`「${item.title}」與前一項行程時間重疊。`);
+    previousEnd = Math.max(start, end ?? start);
+    const terminalItem = item.at_terminal === true && (rules.terminal_windows || []).some(window => window.booking_id === item.booking_id && start >= window.start && (end ?? start) <= window.end && (!window.station || normalize(item.location_query).includes(normalize(window.station)))) && ['meal', 'activity', 'transport'].includes(item.type);
+    if (!expected && !terminalItem && rules.blocked_intervals.some(block => start >= block.start && start < block.end || (end !== null && start < block.end && end > block.start))) {
+      conflicts.push(`「${item.title}」排在尚未抵達、交通移動、候機或離境的時段。`);
+    }
+    if (item.type === 'hotel' && !expected) conflicts.push(`「${item.title}」未對應當天使用者提供的住宿。`);
+    if (item.type === 'flight' && !expected) conflicts.push(`「${item.title}」未對應使用者提供的航班。`);
+    if (expected && item.type === 'hotel') {
+      if (rules.blocked_intervals.some(block => start >= block.start && start < block.end)) conflicts.push('住宿事件排在尚未抵達、交通移動或離境的時段。');
+      if (expected.name && !normalize(item.title).includes(normalize(expected.name))) conflicts.push(`住宿名稱必須保留「${expected.name}」。`);
+      const location = expected.address || expected.name;
+      if (location && !normalize(item.location_query).includes(normalize(location))) conflicts.push(`住宿地圖查詢必須使用「${location}」。`);
+    }
+  }
+  for (const expected of events) {
+    const matches = day.timeline.filter(item => item.booking_id === expected.booking_id && item.booking_event === expected.booking_event);
+    if (matches.length !== 1) { conflicts.push(`必須恰好安排一次 ${expected.booking_id} / ${expected.booking_event}。`); continue; }
+    const item = matches[0], minute = tripTimeMinutes(item.time);
+    if (item.type !== expected.type) conflicts.push(`${expected.booking_id} / ${expected.booking_event} 類型錯誤。`);
+    if (expected.time && item.time !== expected.time) conflicts.push(`${expected.booking_id} / ${expected.booking_event} 必須是使用者的 ${expected.time}。`);
+    if (expected.earliest_time && minute < tripTimeMinutes(expected.earliest_time)) conflicts.push(`「${expected.name}」入住早於 ${expected.earliest_time}，應先安排寄放行李或其他活動。`);
+    if (expected.latest_time && minute > tripTimeMinutes(expected.latest_time)) conflicts.push(`「${expected.name}」退房晚於 ${expected.latest_time}。`);
+    if (expected.name && !normalize(item.title).includes(normalize(expected.name))) conflicts.push(`住宿名稱必須保留「${expected.name}」。`);
+    const location = expected.address || expected.station || expected.name;
+    if (location && !normalize(item.location_query).includes(normalize(location))) conflicts.push(`${expected.booking_id} 的地圖查詢必須使用使用者提供的「${location}」。`);
+    if (expected.code && !normalize(`${item.title} ${item.transport_detail}`).includes(normalize(expected.code))) conflicts.push(`交通內容必須保留班次 ${expected.code}。`);
+    if (expected.booking_event === 'leave_hotel' || expected.booking_event === 'check_out') {
+      if (rules.blocked_intervals.some(block => minute >= block.start && minute < block.end)) conflicts.push('離開／退房住宿排在交通移動或離境的時段，應提早安排。');
+      const index = day.timeline.indexOf(item);
+      const morningDeparture = day.timeline.slice(0, index).some(other => other.type === 'hotel' && other.booking_id === expected.booking_id && other.booking_event === 'leave_hotel');
+      if (!morningDeparture && day.timeline.slice(0, index).some(other => ['spot', 'activity'].includes(other.type) && other.at_terminal !== true)) conflicts.push('當日活動應從前一晚住宿出發，不能先逛景點才離開住宿。');
+    }
+    if (expected.booking_event === 'check_in' || expected.booking_event === 'return_to_hotel') {
+      if (rules.blocked_intervals.some(block => minute >= block.start && minute < block.end)) conflicts.push('入住／返回住宿排在尚未抵達或已離境的時段。');
+    }
+  }
+  if (rules.end_stay) {
+    const lastHotel = day.timeline.findLastIndex(item => item.booking_id === rules.end_stay.booking_id && item.type === 'hotel' && ['check_in', 'return_to_hotel'].includes(item.booking_event));
+    if (lastHotel >= 0 && day.timeline.slice(lastHotel + 1).some(item => ['spot', 'activity', 'meal'].includes(item.type) && item.at_terminal !== true)) conflicts.push('結束活動與用餐後應回到當晚住宿；若入住後再出門，需補上 return_to_hotel。');
+  }
+  return [...new Set(conflicts)];
+}
+
 function tripShapeError(message) {
   return Object.assign(new Error(message), { code: 'GEMINI_TRIP_SHAPE' });
 }
@@ -2419,8 +2684,24 @@ function getTripContinuation(days, previousContext) {
   return `Ended Day ${day.day_index} in ${day.city} at ${item?.title || 'Hotel'}. Continue logically from here.`;
 }
 
-async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4 }) {
+async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null }) {
   const totalDays = dateList.length;
+  const bookingDays = new globalThis.Map((bookingContext?.days || []).map(day => [day.date, day]));
+  const bookingRules = bookingContext ? `
+    FIXED USER BOOKINGS (authoritative; never change dates, times, codes, hotel names or addresses): ${JSON.stringify({ transport: bookingContext.transport, stays: bookingContext.stays, assumptions: bookingContext.assumptions, buffers: bookingContext.buffers, allow_transit_tour: bookingContext.allow_transit_tour })}
+    Scheduling rules:
+    - All transport times are local times at their own stations. Never infer a duration from clocks in different time zones. Unknown values stay unconfirmed; do not invent a timetable, airport, terminal or hotel policy.
+    - Respect blocked_intervals: no sightseeing, city meals, hotel visit or city transfer before destination arrival/entry buffer, during travel/connection, or after final airport reporting. Airport waiting/meals are allowed only with at_terminal:true and the matching transport booking_id; location_query must be the actual terminal, never a city attraction.
+    - Required events must each appear exactly once with their exact booking_id, booking_event, type and time when specified. Unknown transport time uses "待確認" with a clear warning. Preserve original flight/train code in title or transport_detail and original station/address in location_query.
+    - Each dated stay covers nights [check_in_date, check_out_date), excluding the checkout night. Start at start_stay, end at end_stay. Keep the provided hotel name in title and full address in location_query. A hotel change requires checkout, luggage handling and realistic travel to the next booked address. Do not replace a booked hotel with a recommendation.
+    - Hotel check-in must be after earliest_time; checkout no later than latest_time. These are user values or planning defaults, not verified hotel policies. Luggage drop before check-in uses a separate transport item, not the required check_in event. If activities continue after check_in, add a final hotel item with the same booking_id and booking_event:"return_to_hotel". End activities/meals before that final hotel return.
+    - On checkout day, sightseeing before checkout is allowed only after an explicit hotel leave_hotel event, followed by a feasible route back to check_out by the deadline. Returning to the same hotel for luggage may use return_to_hotel; it does not imply another overnight stay. Early checkout the night before a midnight flight does not move the original reservation's checkout deadline to that previous morning.
+    - Include explicit airport/station <-> hotel/city transport with realistic estimated duration and luggage time, all within the available time. Group nearby places along this route, avoid backtracking and cross-city day trips that cannot return to the booked hotel. Late arrivals prioritize transfer, nearby food and rest; early departures prioritize checkout and airport/station transfer.
+    - Missing booking dates inferred in assumptions are planning assumptions and must be disclosed in trip_summary/warnings. Missing route endpoints/timetables must be marked unconfirmed. Do not claim live confirmation.
+    - Every timeline item uses HH:mm start time (except unknown fixed transport). Add end_time for each meal, spot, activity and transfer so intervals do not overlap or extend into blocked time. Flight arrivals/departures and hotel markers are point events; do not use an overnight end_time in the same date. Sort by local itinerary time.
+  ` : '';
+  const constraints = `${baseConstraints}\n${bookingRules}`;
+  const dayRules = dates => bookingContext ? `AUTHORITATIVE DAILY ROUTE / TIME RULES: ${JSON.stringify(dates.map(date => bookingDays.get(date)))}` : '';
   const guideFields = ['history_culture', 'transport_tips', 'safety_scams', 'subsidies', 'tax_refund', 'basic_phrases'];
   const itemFields = ['time', 'type', 'title', 'description', 'location_query', 'transport_detail', 'price_level', 'warnings_tips', 'menu_recommendations'];
   const guideSchema = '{"history_culture":"...","transport_tips":"...","safety_scams":"...","subsidies":"...","tax_refund":"...","basic_phrases":[{"label":"...","local":"...","roman":"..."}]}';
@@ -2453,7 +2734,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   let baseData;
   try {
     baseData = await fetchTripJson(`You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
-      ${baseConstraints}
+      ${constraints}
       Requirements: ${baseRequirements}
       "city_guides": An object with one entry for EVERY unique major city visited. Each guide must include all these fields: ${guideSchema}.
       Provide exactly 5 basic phrases per city. Keep all history, transport, safety, subsidies and tax-refund details.
@@ -2465,7 +2746,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     if (!canSplitTripOutput(error)) throw error;
     // 城市多時先產生摘要與城市清單，再逐城市取得完整指南，不刪減指南內容。
     const core = await fetchTripJson(`You are an expert AI Travel Planner. Generate the trip summary, currency and guide-city list ONLY. Respond with valid JSON only.
-      ${baseConstraints}
+      ${constraints}
       Requirements: ${baseRequirements}
       "guide_cities": An array of EVERY unique major city actually visited. Do not omit any destination.
       Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`);
@@ -2476,7 +2757,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     const cityGuides = {};
     for (const city of [...new Set(guideCities.map(value => value.trim()))]) {
       const guide = await fetchTripJson(`Generate the complete travel city guide for "${city}". Respond with one valid JSON object only.
-        ${baseConstraints}
+        ${constraints}
         Include history, transport and ticketing, safety/scams, travel subsidies, tax refunds and exactly 5 local phrases.
         Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`);
       if (!isGuide(guide)) throw tripShapeError(`「${city}」的城市指南資料不完整，請稍後重試。`);
@@ -2502,35 +2783,75 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     });
   }
 
+  const verifyBookedDays = async days => {
+    const verified = [];
+    for (const day of days) {
+      const rules = bookingDays.get(day.date);
+      const conflicts = findTripBookingConflicts(day, rules);
+      if (!conflicts.length) { verified.push(day); continue; }
+      // 只重排有衝突的單日；不直接刪除景點或篡改使用者訂單。
+      const repaired = await fetchTripJson(`Repair ONLY Day ${day.day_index} on "${day.date}" to respect the user's fixed transport and hotel bookings. Return valid JSON with ONE day under "days".
+        ${constraints}
+        ${dayRules([day.date])}
+        Conflicts to correct: ${JSON.stringify(conflicts)}
+        Current complete day: ${JSON.stringify(day)}
+        Keep weather, clothing, meals, activity details, warnings and menu recommendations. Move/reorder activities into feasible time windows; if no free time exists, explain the travel-only day instead of fabricating sightseeing.
+        All required booking events must keep exact IDs, times, hotel names and addresses. End each activity/transfer before the next event. Include end_time and keep chronological order.
+        Output: {"days":[{"day_index":${day.day_index},"date":"${day.date}","city":"...","title":"...","weather_forecast":"...","clothing_suggestion":"...","timeline":[${itemSchema}]}]}`);
+      const fixed = validateDays(repaired, [day.date], day.day_index)[0];
+      const remaining = findTripBookingConflicts(fixed, rules);
+      if (remaining.length) {
+        const eventLabels = { terminal_arrival: '到機場／車站報到', arrival: '抵達', departure: '出發', check_in: '入住', check_out: '退房', leave_hotel: '從住宿出發', return_to_hotel: '返回住宿', end_time: '結束時間' };
+        const readable = remaining.slice(0, 2).map(message => {
+          let value = message;
+          for (const event of rules.required_events) value = value.replaceAll(event.booking_id, event.name || event.code || event.station || '交通班次');
+          for (const [field, label] of Object.entries(eventLabels)) value = value.replaceAll(field, label);
+          return value;
+        });
+        throw Object.assign(new Error(`第 ${day.day_index} 天仍與已訂交通／住宿衝突：${readable.join(' ')}`), { code: 'GEMINI_TRIP_BOOKING' });
+      }
+      verified.push(fixed);
+    }
+    return verified;
+  };
+
   const generateSingleDayByItem = async (date, dayIndex, previousContext) => {
     const skeleton = await fetchTripJson(`Plan ONLY Day ${dayIndex} on "${date}". Return a valid JSON object with one day under "days".
-      ${baseConstraints}
+      ${constraints}
+      ${dayRules([date])}
       Previous Context: "${previousContext}"
       Plan the COMPLETE schedule with the original travel pace, all needed meals, transport, flights and accommodation.
       Keep weather_forecast and clothing_suggestion. For now, each timeline item needs ONLY time, type and title; details will be filled separately.
+      Also retain end_time, booking_id, booking_event and at_terminal when applicable, so the booking constraints survive item-by-item generation.
       Do not omit stops to fit the response.
       Output: {"days":[{"day_index":${dayIndex},"date":"${date}","city":"...","title":"...","weather_forecast":"...","clothing_suggestion":"...","timeline":[{"time":"10:00","type":"spot","title":"..."}]}]}`);
     const day = validateDays(skeleton, [date], dayIndex, false)[0];
     const timeline = [];
     for (const item of day.timeline) {
       const details = await fetchTripJson(`Complete ONE itinerary item for Day ${dayIndex} in "${day.city}" on "${date}". Respond with one valid JSON object only.
-        ${baseConstraints}
+        ${constraints}
+        ${dayRules([date])}
         Previous day context: "${previousContext}"
         Full schedule: ${JSON.stringify(day.timeline)}
         Target item: ${JSON.stringify(item)}
         Include complete description, Google Maps query, transport details, price level, warnings and menu recommendations.
         Required fields: ${itemSchema}. Use [] for menu_recommendations when there is no food. Keep the supplied time, type and title. Do not wrap in days or timeline.`);
       if (!isItem(details)) throw tripShapeError(`「${item.title}」的景點資料不完整，請稍後重試。`);
-      timeline.push({ ...item, ...details, time: item.time, type: item.type, title: item.title });
+      const completed = { ...details, ...item };
+      for (const field of ['end_time', 'booking_id', 'booking_event', 'at_terminal']) {
+        if (!Object.hasOwn(item, field)) delete completed[field];
+      }
+      timeline.push(completed);
     }
-    return [{ ...day, timeline }];
+    return verifyBookedDays([{ ...day, timeline }]);
   };
 
   const generateDays = async (dates, startDayIdx, previousContext) => {
     const endDayIdx = startDayIdx + dates.length - 1;
     try {
       const data = await fetchTripJson(`You are an expert AI Travel Planner. Generate a portion of a ${totalDays}-day trip.
-        ${baseConstraints}
+        ${constraints}
+        ${dayRules(dates)}
         We are CURRENTLY generating Day ${startDayIdx} to Day ${endDayIdx}.
         Specific Dates for this chunk: ${dates.join(', ')}.
         Previous Context (Where the user ended up before this chunk): "${previousContext}"
@@ -2538,8 +2859,9 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         1. ONLY output an array of day objects under "days". Include exactly ${dates.length} days, indexed ${startDayIdx} to ${endDayIdx}. Do not skip or duplicate any date.
         2. Keep all original travel details: weather_forecast, clothing_suggestion, meals, activities, flights, hotels, transport, warnings and menu recommendations.
         3. Timeline type must be transport|activity|meal|hotel|flight|spot; price_level must be Low|Mid|High. Required item fields: ${itemSchema}.
+        4. For each fixed booking event add its booking_id and booking_event. For normal stops/transfers add end_time. Follow daily route/time rules even when this chunk begins midway through a hotel stay or ends before a booked flight.
         Output: {"days":[{"day_index":${startDayIdx},"date":"${dates[0]}","city":"City Name","title":"Daily Theme","weather_forecast":"...","clothing_suggestion":"...","timeline":[${itemSchema}]}]}`);
-      return validateDays(data, dates, startDayIdx);
+      return await verifyBookedDays(validateDays(data, dates, startDayIdx));
     } catch (error) {
       if (!canSplitTripOutput(error)) throw error; // 配額、Key、網路錯誤照實回報，不連續重送。
       if (dates.length === 1) return generateSingleDayByItem(dates[0], startDayIdx, previousContext);
@@ -2558,7 +2880,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     previousContext = getTripContinuation(chunk, previousContext);
   }
   if (days.length !== totalDays) throw tripShapeError('行程天數不完整，請稍後重試。');
-  return { ...baseData, days };
+  return { ...baseData, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
 
 const App = () => {
@@ -2596,6 +2918,8 @@ const App = () => {
     hasTransitTour: false, // 預設關閉
     isMultiCityFlight: false,
     hasFlights: true, // 預設開啟航班填寫
+    flightDepartureBuffer: 180,
+    flightArrivalBuffer: 90,
     transportMode: 'public', 
     needParking: false,
     specialRequests: '', // 清空
@@ -2603,6 +2927,10 @@ const App = () => {
   });
 
   const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', []);
+  useEffect(() => {
+    setSimpleFlights(previous => Object.fromEntries(['outbound', 'transit', 'inbound'].map(role => [role, normalizeTransportInput(previous?.[role])])));
+    setMultiFlights(previous => (previous || []).map(normalizeTransportInput));
+  }, []);
   // 或者保留一個空的輸入框：
   // const [accommodations, setAccommodations] = usePersistentState('travel_accommodations', [
   //   { id: Date.now(), type: '飯店', source: '', name: '', address: '', orderId: '', booker: '', isOpen: true }
@@ -2627,7 +2955,7 @@ const App = () => {
   const [showCopyMenu, setShowCopyMenu] = useState(false);
   const inputTutorialPages = [
     { icon: '🌍', title: '第一步：設定目的地與日期', desc: '輸入您想去的城市（如：東京、巴黎），並點擊日曆圖示選擇出發與回程日期。' },
-    { icon: '✈️', title: '第二步：航班與交通', desc: '如果需要 AI 安排航班，請勾選「需要航班」。若您是自駕遊，請在交通偏好選擇「自駕」，我們會提供停車建議。' },
+    { icon: '✈️', title: '第二步：航班與交通', desc: '填寫已訂航班／車次的出發與抵達時間，跨日航班加填抵達日期。多段交通可指定航段用途；自駕遊可在交通偏好選擇「自駕」並開啟停車建議。' },
     { icon: '💰', title: '第三步：預算與偏好', desc: '設定餐廳價位、旅遊步調與特殊需求，AI 會依照您的偏好安排景點、美食與交通。' },
     { icon: '✨', title: '第四步：一鍵生成', desc: '填妥後點擊下方按鈕，AI 將在幾秒內為您生成包含景點、美食、交通與預算的完整行程！' }
   ];
@@ -2798,12 +3126,12 @@ const App = () => {
     setSimpleFlights(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
   };
 
-  const addMultiFlight = () => setMultiFlights(prev => [...prev.map(f => ({ ...f, isOpen: false })), { id: Date.now(), type: '航段', date: '', time: '', code: '', airport: '', isOpen: true }]);
+  const addMultiFlight = () => setMultiFlights(prev => [...prev.map(f => ({ ...f, isOpen: false })), normalizeTransportInput({ id: Date.now(), type: '航段', isOpen: true })]);
   const updateMultiFlight = (id, field, value) => setMultiFlights(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
   const toggleMultiFlight = (id) => setMultiFlights(prev => prev.map(f => f.id === id ? { ...f, isOpen: !f.isOpen } : { ...f, isOpen: false }));
   const removeMultiFlight = (id) => setMultiFlights(prev => prev.filter(f => f.id !== id));
   
-  const addAccommodation = () => setAccommodations(prev => [...prev.map(a => ({ ...a, isOpen: false })), { id: Date.now(), type: '飯店', source: '', name: '', address: '', orderId: '', booker: '', isOpen: true }]);
+  const addAccommodation = () => setAccommodations(prev => [...prev.map(a => ({ ...a, isOpen: false })), { id: Date.now(), type: '飯店', source: '', name: '', address: '', checkInDate: '', checkOutDate: '', checkInTime: '', checkOutTime: '', orderId: '', booker: '', isOpen: true }]);
   const updateAccommodation = (id, field, value) => setAccommodations(prev => prev.map(a => a.id === id ? { ...a, [field]: value } : a));
   const toggleAccommodation = (id) => setAccommodations(prev => prev.map(a => a.id === id ? { ...a, isOpen: !a.isOpen } : { ...a, isOpen: false }));
   const removeAccommodation = (id) => setAccommodations(prev => prev.filter(a => a.id !== id));
@@ -2839,6 +3167,9 @@ const App = () => {
     const planToSave = { 
       ...itineraryData, 
       basicInfo: basicData, 
+      simpleFlights,
+      multiFlights,
+      accommodations,
       expenses, 
       travelerNames,
       currencySettings,
@@ -2882,6 +3213,10 @@ const App = () => {
   const loadSavedPlan = (plan) => {
     setItineraryData(plan);
     setBasicData(plan.basicInfo || basicData);
+    const bookings = plan.booking_inputs || plan;
+    if (bookings.simpleFlights) setSimpleFlights(Object.fromEntries(['outbound', 'transit', 'inbound'].map(role => [role, normalizeTransportInput(bookings.simpleFlights[role])])));
+    if (bookings.multiFlights) setMultiFlights(bookings.multiFlights.map(normalizeTransportInput));
+    if (bookings.accommodations) setAccommodations(bookings.accommodations);
     setExpenses(plan.expenses || []);
     const count = Number(plan.basicInfo?.travelers || 2);
     // 如果存檔有名字就用存檔的，否則根據人數產生預設陣列 ['旅伴 1', '旅伴 2'...]
@@ -2945,9 +3280,9 @@ const App = () => {
         if (imported.basicData && imported.itineraryData) {
           if (confirm(`確定要載入 "${imported.basicData.destinations}" 的行程嗎？當前的輸入將被覆蓋。`)) {
             setBasicData(imported.basicData);
-            setSimpleFlights(imported.simpleFlights);
-            setMultiFlights(imported.multiFlights);
-            setAccommodations(imported.accommodations);
+            setSimpleFlights(Object.fromEntries(['outbound', 'transit', 'inbound'].map(role => [role, normalizeTransportInput(imported.simpleFlights?.[role])])));
+            setMultiFlights((imported.multiFlights || []).map(normalizeTransportInput));
+            setAccommodations(imported.accommodations || []);
             setItineraryData(imported.itineraryData);
             if (imported.travelerNames) setTravelerNames(imported.travelerNames);
             if (imported.expenses) setExpenses(imported.expenses);
@@ -3041,20 +3376,18 @@ const App = () => {
     try {
         if (basicData.dates) {
             const parts = basicData.dates.split(' to ');
-            const start = new Date(parts[0]);
-            const end = new Date(parts[1] || parts[0]); // 若沒有 to，代表只有一天
-            let current = new Date(start);
-            while (current <= end) {
-                const y = current.getFullYear();
-                const m = String(current.getMonth() + 1).padStart(2, '0');
-                const d = String(current.getDate()).padStart(2, '0');
-                dateList.push(`${y}-${m}-${d}`);
-                current.setDate(current.getDate() + 1);
-                if (dateList.length > 30) break; // 防呆機制：最高支援 30 天
+            const start = parts[0];
+            const end = parts[1] || start;
+            if (!isTripDate(start) || !isTripDate(end) || end < start) throw new Error('旅遊日期格式或順序不正確，請重新選擇日期。');
+            for (let current = start; current <= end; current = shiftTripDate(current, 1)) {
+                dateList.push(current);
+                if (dateList.length > 30) throw new Error('目前支援最多 30 天，請調整旅遊日期範圍。');
             }
         }
     } catch(e) {
-        console.warn("Date parsing error", e);
+        setErrorMsg(e.message);
+        setStep('input');
+        return;
     }
     
     // 防呆：若未選日期預設給 3 天
@@ -3066,16 +3399,14 @@ const App = () => {
     const batchSize = 4; // 正常每批 4 天，輸出超長時自動拆成 2 天、1 天或逐景點。
 
     // --- 2. 準備使用者約束條件 ---
-    let flightsString = "No flights involved.";
-    if (basicData.hasFlights) {
-      if (basicData.isMultiCityFlight) {
-        flightsString = multiFlights.map(f => `${f.type} | 日期:${f.date} | 時間:${f.time} | 航班:${f.code} | 機場:${f.airport}`).join('\n');
-      } else {
-        flightsString = `去程 | 日期:${simpleFlights.outbound.date} | 時間:${simpleFlights.outbound.time} | 航班:${simpleFlights.outbound.code} | 機場:${simpleFlights.outbound.airport}\n中轉 | 日期:${simpleFlights.transit.date ? simpleFlights.transit.date : '無'} | 時間:${simpleFlights.transit.time} | 航班:${simpleFlights.transit.code} | 機場:${simpleFlights.transit.airport}\n回程 | 日期:${simpleFlights.inbound.date} | 時間:${simpleFlights.inbound.time} | 航班:${simpleFlights.inbound.code} | 機場:${simpleFlights.inbound.airport}`;
-      }
+    let bookingContext;
+    try {
+      bookingContext = buildTripBookingContext({ basicData, simpleFlights, multiFlights, accommodations, dateList });
+    } catch (error) {
+      setErrorMsg(error.message);
+      setStep('input');
+      return;
     }
-
-    const accommodationString = accommodations.map(a => `住處:${a.name}(${a.type}) 地址:${a.address}`).join('\n');
 
     const selectedPrices = [];
     if (basicData.priceRanges?.high) selectedPrices.push("高 (1000 TWD+)");
@@ -3114,9 +3445,11 @@ const App = () => {
       - Total Trip Length: ${totalDays} days (${basicData.dates})
       - Travel Style & Pacing: ${basicData.type}. CRITICAL: ${styleInstruction}
       - Travelers: ${basicData.travelers}
-      - Flights: ${flightsString}
+      - Booked Flights / Trains: ${JSON.stringify(bookingContext.transport)}
+      - Transit Sightseeing: ${basicData.hasTransitTour ? 'Only when connection time, luggage, entry and return-to-terminal buffers allow it.' : 'No city sightseeing during connections; stay inside the airport/station.'}
       - Transport Mode: ${transportConstraint}
-      - Accommodation: ${accommodationString}
+      - Parking: ${parkingConstraint || 'No extra parking requirement.'}
+      - Booked Accommodation: ${JSON.stringify(bookingContext.stays)}
       - Special Requests: ${basicData.specialRequests || "None"}
       - Restaurant Budget: ${priceConstraint}
       - Output Language: Traditional Chinese (Taiwan)
@@ -3124,9 +3457,9 @@ const App = () => {
 
     try {
       const tripData = await generateTripData({
-        apiKey, modelFamily, baseConstraints, dateList, batchSize,
+        apiKey, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
       });
-      const finalItinerary = { ...tripData, created: Date.now() };
+      const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations }, created: Date.now() };
 
       // 根據 AI 回傳的幣別設定符號
       if (finalItinerary.currency_code) {
@@ -3148,6 +3481,7 @@ const App = () => {
       }
 
       setItineraryData(finalItinerary);
+      setActiveTab(0);
       setExpenses([]);
       setStep('result');
 
@@ -3564,6 +3898,7 @@ const App = () => {
                  <div>
                    <span className="font-bold">精準規劃小撇步：</span>
                    請務必填寫詳細的 <span className="font-bold text-amber-900 dark:text-amber-100">出發與抵達時間</span>。如果僅填寫班次/車次，AI 可能會抓不到最新的時刻表而導致行程安排錯誤。
+                   <span className="block mt-1">日期與時間請填各地當地時間；跨日或時差航班請加填抵達日期。原機場／車站欄位：去程填抵達地，回程填出發地；多段交通請補上兩端地點。</span>
                  </div>
               </div>
             )}
@@ -3612,6 +3947,17 @@ const App = () => {
                         <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">機場/車站代碼</label>
                         <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase text-center dark:text-[#ebd5c1]" />
                     </div>
+                    <div className="col-span-1 md:col-span-12 grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">抵達日期（未填預設同日）
+                        <input type="date" aria-label={`${row.label}抵達日期`} value={simpleFlights[row.key].arrivalDate || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      </label>
+                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">出發機場／車站（選填）
+                        <input aria-label={`${row.label}出發地點`} placeholder="例如 TPE 桃園機場" value={simpleFlights[row.key].departureStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      </label>
+                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">抵達機場／車站（選填）
+                        <input aria-label={`${row.label}抵達地點`} placeholder="例如 NRT 成田機場" value={simpleFlights[row.key].arrivalStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      </label>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3642,6 +3988,11 @@ const App = () => {
                               <option value="train">火車</option>
                             </select>
                         </div>
+                        <label className="col-span-2 md:col-span-1 text-xs text-slate-500 dark:text-[#a08d85]">航段用途
+                          <select aria-label="航段用途" value={flight.role || 'auto'} onChange={e => updateMultiFlight(flight.id, 'role', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-white dark:bg-[#2c1f1b] dark:text-[#ebd5c1]">
+                            <option value="auto">依順序判斷</option><option value="outbound">去程抵達</option><option value="transit">中轉銜接</option><option value="transfer">旅途中移動</option><option value="inbound">回程離境</option>
+                          </select>
+                        </label>
                         <div className="col-span-2 md:col-span-1">
                             <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">日期</label>
                             <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
@@ -3662,6 +4013,15 @@ const App = () => {
                             <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">地點代碼</label>
                             <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </div>
+                        <label className="col-span-2 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">抵達日期（未填預設同日）
+                          <input type="date" aria-label="航段抵達日期" value={flight.arrivalDate || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
+                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">出發機場／車站
+                          <input aria-label="航段出發地點" placeholder="出發地" value={flight.departureStation || ''} onChange={e => updateMultiFlight(flight.id, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
+                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">抵達機場／車站
+                          <input aria-label="航段抵達地點" placeholder="抵達地" value={flight.arrivalStation || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
                       </div>
                     )}
                   </div>
@@ -3669,6 +4029,16 @@ const App = () => {
                 <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-xl text-slate-500 dark:text-[#a08d85] hover:border-blue-400 dark:hover:border-sky-500 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
               </div>
             ))}
+
+            {basicData.hasFlights && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl bg-slate-50 dark:bg-[#2c1f1b] p-4">
+              <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">飛機起飛前到機場預留（分鐘）
+                <input type="number" min="0" max="720" name="flightDepartureBuffer" value={basicData.flightDepartureBuffer ?? 180} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg dark:bg-[#33241f]" />
+              </label>
+              <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">飛機抵達後入境／領行李預留（分鐘）
+                <input type="number" min="0" max="720" name="flightArrivalBuffer" value={basicData.flightArrivalBuffer ?? 90} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg dark:bg-[#33241f]" />
+              </label>
+              <p className="md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">以上是可調整的規劃預留值；往返機場交通另計。火車預設提前 30 分鐘到站、下車後預留 15 分鐘。</p>
+            </div>}
 
             <div className="flex items-center gap-3 pt-2 bg-blue-50/50 dark:bg-[#2c1f1b]/50 p-4 rounded-xl border border-blue-100 dark:border-[#5d4037]">
                 <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
@@ -3681,6 +4051,7 @@ const App = () => {
           {/* 住宿資訊區塊 */}
           <section className="space-y-4">
             <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2"><span className="bg-orange-100 dark:bg-orange-900/50 p-2 rounded-lg text-orange-600 dark:text-orange-300"><Hotel className="w-5 h-5" /></span>住宿資訊</h3>
+            <p className="text-xs md:text-sm text-slate-500 dark:text-[#a08d85]">多間住宿請填每間入住與退房日期，行程會依每晚住處安排動線。單間未填日期時會暫用抵達至回程期間。入住／退房時間未填時暫用 15:00／11:00，請依訂單調整。</p>
             <div className="space-y-3">
               {accommodations.map((acc) => (
                 <div key={acc.id} className="bg-white dark:bg-[#33241f] border border-slate-200 dark:border-[#4a3b32] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
@@ -3693,6 +4064,18 @@ const App = () => {
                         <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="類型" />
                         <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="名稱" />
                         <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm md:col-span-2 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="完整地址" />
+                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">入住日期
+                          <input type="date" aria-label="住宿入住日期" value={acc.checkInDate || ''} onChange={e => updateAccommodation(acc.id, 'checkInDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
+                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">退房日期
+                          <input type="date" aria-label="住宿退房日期" value={acc.checkOutDate || ''} onChange={e => updateAccommodation(acc.id, 'checkOutDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
+                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">最早入住時間（預設 15:00）
+                          <input type="time" aria-label="住宿最早入住時間" value={acc.checkInTime || ''} onChange={e => updateAccommodation(acc.id, 'checkInTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
+                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">最晚退房時間（預設 11:00）
+                          <input type="time" aria-label="住宿最晚退房時間" value={acc.checkOutTime || ''} onChange={e => updateAccommodation(acc.id, 'checkOutTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        </label>
                      </div>
                   )}
                 </div>
@@ -3790,6 +4173,10 @@ const App = () => {
                 </div>
                 {/* text-slate-600 -> dark:text-[#d6c0b3] */}
                 <p className="text-slate-600 dark:text-[#d6c0b3] max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
+                {itineraryData.booking_context?.assumptions?.length > 0 && <details className="mt-3 text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3">
+                  <summary className="cursor-pointer font-bold">規劃時採用的假設（{itineraryData.booking_context.assumptions.length}）</summary>
+                  <ul className="list-disc pl-5 mt-2 space-y-1">{itineraryData.booking_context.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>
+                </details>}
             </div>
             
             <div className="flex flex-wrap gap-3 w-full md:w-auto justify-end print:hidden">
