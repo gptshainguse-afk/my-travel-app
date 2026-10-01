@@ -30,6 +30,9 @@ const GEMINI_MODEL_CONFIG = {
 const GEMINI_MODEL_CACHE_MS = 60 * 60 * 1000;
 const GEMINI_TRIP_OUTPUT_TOKENS = 32768;
 const GEMINI_OUTPUT_RECOVERY_CEILING = 65536;
+const GEMINI_MAX_TRANSIENT_RETRIES = 3;
+const GEMINI_MAX_RETRY_WAIT_MS = 60000;
+const GEMINI_BUSY_COOLDOWN_MS = 60000;
 const geminiModelCache = new globalThis.Map();
 const geminiModelListeners = new Set();
 const normalizeGeminiKey = (apiKey) => String(apiKey || '').trim();
@@ -40,7 +43,9 @@ function getGeminiCache(apiKey) {
   if (!geminiModelCache.has(key)) {
     geminiModelCache.set(key, {
       models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
-      unavailable: new Set(), lastUsed: {},
+      unavailable: new Set(), busyUntil: new globalThis.Map(), lastUsed: {},
+      policy: { mode: 'paid', allowBusyFallback: false }, queue: Promise.resolve(),
+      requestStates: new globalThis.Map(),
     });
   }
   return geminiModelCache.get(key);
@@ -48,6 +53,101 @@ function getGeminiCache(apiKey) {
 
 function notifyGeminiModels(key) {
   geminiModelListeners.forEach(listener => listener(key));
+}
+
+function setGeminiRequestPolicy(apiKey, mode, allowBusyFallback = true) {
+  const key = normalizeGeminiKey(apiKey);
+  if (!key) return;
+  const cache = getGeminiCache(key);
+  const policy = { mode: mode === 'paid' ? 'paid' : 'free', allowBusyFallback: Boolean(allowBusyFallback) };
+  if (cache.policy.mode === policy.mode && cache.policy.allowBusyFallback === policy.allowBusyFallback) return;
+  cache.policy = policy;
+  notifyGeminiModels(key);
+}
+
+function setGeminiRequestState(key, requestId, message) {
+  const states = getGeminiCache(key).requestStates;
+  if (message) states.set(requestId, { message });
+  else states.delete(requestId);
+  notifyGeminiModels(key);
+}
+
+function parseGeminiRetryDelay(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'object') {
+    const milliseconds = Number(value.seconds || 0) * 1000 + Number(value.nanos || 0) / 1e6;
+    return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : null;
+  }
+  const duration = String(value).trim();
+  if (/^\d+(?:\.\d+)?s?$/.test(duration)) return Number(duration.replace(/s$/, '')) * 1000;
+  const date = Date.parse(duration);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function getGeminiRetryInfo(error) {
+  const details = Array.isArray(error.details) ? error.details : [];
+  const violations = details.flatMap(detail => Array.isArray(detail.violations) ? detail.violations : []);
+  const quotaText = [error.message, error.apiStatus, ...violations.map(violation =>
+    `${violation.quotaMetric || ''} ${violation.quotaId || ''} ${violation.description || ''}`)].join(' ');
+  const zeroQuota = violations.some(violation => violation.quotaValue != null && Number(violation.quotaValue) === 0)
+    || /(?:limit|quota(?: value)?)\s*[:=]\s*0\b/i.test(quotaText);
+  const dailyQuota = /per[_ -]?day|daily|quota_exceeded|每日|每天/i.test(quotaText);
+  const delays = [error.retryAfterMs, ...details.filter(detail => /(?:^|\.)RetryInfo$/.test(detail['@type'] || ''))
+    .map(detail => parseGeminiRetryDelay(detail.retryDelay))].filter(delay => Number.isFinite(delay) && delay >= 0);
+  const serverDelayMs = delays.length ? Math.max(...delays) : null;
+  if (error.status === 429) {
+    if (zeroQuota) return { retryable: false, kind: 'no-quota', serverDelayMs };
+    if (dailyQuota) return { retryable: false, kind: 'daily-quota', serverDelayMs };
+    const shortWindow = serverDelayMs !== null || /per[_ -]?minute|per[_ -]?second|rate.?limit|too_many_requests|\b[RT]PM\b/i.test(quotaText);
+    return { retryable: shortWindow, kind: 'rate-limit', serverDelayMs };
+  }
+  return { retryable: [408, 500, 502, 503, 504].includes(error.status), kind: 'busy', serverDelayMs };
+}
+
+function explainGeminiError(error) {
+  const info = getGeminiRetryInfo(error);
+  let message;
+  let code = error.code;
+  if ([500, 502, 503].includes(error.status)) {
+    message = 'Gemini 服務目前忙碌，有限次重試後仍無法完成。請稍後再試，原本填寫的資料已保留。';
+    code = 'GEMINI_SERVICE_BUSY';
+  } else if ([408, 504].includes(error.status)) {
+    message = 'Gemini 服務回應逾時，有限次重試後仍無法完成。請稍後再試。';
+  } else if (error.status === 429) {
+    code = 'GEMINI_QUOTA_LIMIT';
+    message = info.kind === 'no-quota'
+      ? '這把 API Key 對此模型沒有可用配額（額度為 0）。請到 Google AI Studio 檢查模型與專案配額；重試不會增加額度。'
+      : info.kind === 'daily-quota'
+        ? 'Gemini 每日配額已用完。請等待 Google 專案配額重置，或到 Google AI Studio 查看配額與計費設定。'
+        : `Gemini 的請求或 Token 配額已達限制。${info.serverDelayMs > 0 ? `請至少等待 ${Math.ceil(info.serverDelayMs / 1000)} 秒後再試，` : '請稍後再試，'}並到 Google AI Studio 查看實際配額。`;
+  } else if (error.status === 401) {
+    message = 'Gemini API Key 無效或已過期，請重新確認 API Key。';
+  } else if (error.status === 403) {
+    message = '這把 API Key 沒有使用此資源的權限，請檢查 Google 專案與 API Key 權限。';
+  } else if (error.status === 402) {
+    message = 'Gemini API 計費餘額不足，請到 Google AI Studio 檢查計費設定。';
+  }
+  return message ? Object.assign(new Error(message, { cause: error }), error, { message, code }) : error;
+}
+
+async function fetchGeminiWithRetry(apiKey, model, body, requestId) {
+  for (let retry = 0; retry <= GEMINI_MAX_TRANSIENT_RETRIES; retry++) {
+    try {
+      return await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, apiKey,
+        { method: 'POST', body: JSON.stringify(body) }, 180000);
+    } catch (error) {
+      const info = getGeminiRetryInfo(error);
+      if (!info.retryable || retry === GEMINI_MAX_TRANSIENT_RETRIES) throw error;
+      const delayMs = Math.max(info.serverDelayMs || 0, 1000 * (2 ** retry) + Math.floor(Math.random() * 500));
+      // 過長的等待交由使用者稍後重試，不提早重送，也不無限佔住生成流程。
+      if (delayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+      const label = model.label || formatGeminiModel(model.id);
+      setGeminiRequestState(apiKey, requestId,
+        `${label} ${error.status === 429 ? '已達短時間配額' : '暫時忙碌'}，${Math.ceil(delayMs / 1000)} 秒後自動重試（${retry + 1}/${GEMINI_MAX_TRANSIENT_RETRIES}）。`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      setGeminiRequestState(apiKey, requestId, `正在重試 ${label}，請稍候…`);
+    }
+  }
 }
 
 function formatGeminiModel(id, displayName) {
@@ -102,15 +202,22 @@ async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
       headers: { 'Content-Type': 'application/json', ...options.headers, 'x-goog-api-key': normalizeGeminiKey(apiKey) },
       signal: controller.signal,
     });
+    const retryAfterMs = parseGeminiRetryDelay(response.headers?.get?.('Retry-After'));
     let data;
     try {
       data = await response.json();
     } catch {
-      throw Object.assign(new Error(`Gemini 回傳無法解析的資料（HTTP ${response.status}）`), { status: response.status });
+      throw Object.assign(new Error(`Gemini 回傳無法解析的資料（HTTP ${response.status}）`), { status: response.status, retryAfterMs });
+    }
+    if (!data || typeof data !== 'object') {
+      throw Object.assign(new Error(`Gemini 回傳的資料格式不正確（HTTP ${response.status}）`), { status: response.status, retryAfterMs });
     }
     if (!response.ok || data.error) {
-      const status = data.error?.code || response.status;
-      throw Object.assign(new Error(data.error?.message || `Gemini 請求失敗（HTTP ${status}）`), { status });
+      const apiCode = Number(data.error?.code);
+      const status = apiCode >= 400 && apiCode <= 599 ? apiCode : response.status;
+      throw Object.assign(new Error(data.error?.message || `Gemini 請求失敗（HTTP ${status}）`), {
+        status, apiStatus: data.error?.status || data.error?.code, details: data.error?.details, retryAfterMs,
+      });
     }
     return data;
   } catch (error) {
@@ -162,18 +269,27 @@ async function loadGeminiModels(apiKey, force = false) {
   return cache.pending;
 }
 
-function getGeminiCandidates(apiKey, type) {
-  const family = normalizeGeminiType(type);
+function getGeminiCandidates(apiKey, type, policy = getGeminiCache(apiKey).policy) {
+  const family = policy.mode === 'free' && type === 'pro' ? 'flash' : normalizeGeminiType(type);
   const cache = getGeminiCache(apiKey);
   const families = family === 'lite' ? ['lite', 'flash'] : [family];
   const candidates = families.flatMap(candidateType => {
     const listed = cache.models.filter(model => model.type === candidateType);
     // 先使用清單中的具體版本，首頁名稱與實際請求相同；清單失敗時使用官方 latest alias。
-    const concrete = listed.filter(model => model.stage !== 'alias');
+    const concrete = listed.filter(model => model.stage !== 'alias').sort((a, b) =>
+      policy.mode === 'free' && a.stage !== b.stage ? (a.stage === 'stable' ? -1 : 1) : compareGeminiModels(a, b));
     const aliases = listed.filter(model => model.stage === 'alias');
     return [...concrete, ...aliases, { id: GEMINI_MODEL_CONFIG[candidateType].alias, type: candidateType }];
   });
-  return [...new globalThis.Map(candidates.map(model => [model.id, model])).values()].filter(model => !cache.unavailable.has(model.id));
+  const usable = [...new globalThis.Map(candidates.map(model => [model.id, model])).values()].filter(model =>
+    !cache.unavailable.has(model.id) && !(cache.busyUntil.get(model.id) > Date.now()));
+  return usable.filter(model => {
+    if (model.version?.length && model.stage !== 'alias') return true;
+    const hasBusyVersion = cache.models.some(version => version.type === model.type && version.stage !== 'alias'
+      && cache.busyUntil.get(version.id) > Date.now());
+    // 所有已知具體版本都在冷卻時，不用 latest 別名繞過剛才的忙碌等待。
+    return !hasBusyVersion || usable.some(version => version.type === model.type && version.version?.length && version.stage !== 'alias');
+  });
 }
 
 function getGeminiText(data) {
@@ -190,20 +306,45 @@ function getGeminiText(data) {
 
 async function requestGemini(apiKey, type, payload) {
   const key = normalizeGeminiKey(apiKey);
-  const family = normalizeGeminiType(type);
   if (!key) throw new Error('請先輸入 Gemini API Key。');
+  const cache = getGeminiCache(key);
+  const policy = { ...cache.policy };
+  const run = () => performGeminiRequest(key, type, payload, policy);
+  // 免費模式的所有功能共用同一條佇列，避免菜單、天氣與行程同時送出請求。
+  if (policy.mode !== 'free') return run();
+  const result = cache.queue.then(run, run);
+  cache.queue = result.then(() => {}, () => {});
+  return result;
+}
+
+async function performGeminiRequest(key, type, payload, policy) {
+  const family = policy.mode === 'free' && type === 'pro' ? 'flash' : normalizeGeminiType(type);
+  const requestId = Symbol('gemini-request');
+  try {
+    return await performGeminiModelRequest(key, family, payload, policy, requestId);
+  } catch (error) {
+    throw explainGeminiError(error);
+  } finally {
+    setGeminiRequestState(key, requestId, null);
+  }
+}
+
+async function performGeminiModelRequest(key, family, payload, policy, requestId) {
   const cache = getGeminiCache(key);
   try {
     await loadGeminiModels(key);
   } catch (error) {
-    if ([400, 401, 403].includes(error.status)) throw error;
+    if ([400, 401, 402, 403].includes(error.status)) throw error;
     // 清單暫時無法讀取時，仍可嘗試快取中的模型或官方 alias。
   }
   const attempted = new Set();
   let refreshed = false;
   let lastError;
+  let busyFallbacks = 0;
+  let backupModel = null;
   for (let attempt = 0; attempt < 4; attempt++) {
-    const model = getGeminiCandidates(key, family).find(candidate => !attempted.has(candidate.id));
+    const model = backupModel || getGeminiCandidates(key, family, policy).find(candidate => !attempted.has(candidate.id));
+    backupModel = null;
     if (!model) break;
     attempted.add(model.id);
     try {
@@ -214,8 +355,7 @@ async function requestGemini(apiKey, type, payload) {
       let data;
       for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
         const body = generationConfig ? { ...payload, generationConfig } : payload;
-        data = await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, key,
-          { method: 'POST', body: JSON.stringify(body) }, 180000);
+        data = await fetchGeminiWithRetry(key, model, body, requestId);
         try {
           getGeminiText(data); // 只接受完整回應，避免把半截 JSON 當成行程。
           break;
@@ -230,10 +370,25 @@ async function requestGemini(apiKey, type, payload) {
         }
       }
       cache.lastUsed[family] = { id: data.modelVersion || model.id, label: formatGeminiModel(data.modelVersion || model.id), requested: model.id };
+      cache.busyUntil.delete(model.id);
       notifyGeminiModels(key);
       return data;
     } catch (error) {
       lastError = error;
+      if (error.status === 503) {
+        const serverDelayMs = getGeminiRetryInfo(error).serverDelayMs || 0;
+        cache.busyUntil.set(model.id, Date.now() + Math.max(GEMINI_BUSY_COOLDOWN_MS, serverDelayMs));
+        // 持續忙碌時只允許一次同系列具體版本備援；不把 alias 當成不同模型重試。
+        const alternatives = getGeminiCandidates(key, family, policy).filter(candidate =>
+          candidate.version?.length && candidate.stage !== 'alias' && !attempted.has(candidate.id)
+          && candidate.type === model.type);
+        backupModel = alternatives.find(candidate => candidate.stage === 'stable') || alternatives[0];
+        if (!policy.allowBusyFallback || busyFallbacks >= 1 || !backupModel
+            || serverDelayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+        busyFallbacks++;
+        setGeminiRequestState(key, requestId, `${model.label || formatGeminiModel(model.id)} 持續忙碌，改用 ${backupModel.label || formatGeminiModel(backupModel.id)} 完成同一筆需求…`);
+        continue;
+      }
       const unavailable = error.status === 404 || (error.status === 400 && /model.*(?:not found|not supported|does not support)|not supported for generateContent/i.test(error.message));
       // 不因 Key 錯誤、配額不足、格式錯誤、網路錯誤而換模型重送。
       if (!unavailable) throw error;
@@ -241,12 +396,15 @@ async function requestGemini(apiKey, type, payload) {
       if (!refreshed) {
         refreshed = true;
         try { await loadGeminiModels(key, true); } catch (refreshError) {
-          if ([400, 401, 403].includes(refreshError.status)) throw refreshError;
+          if ([400, 401, 402, 403].includes(refreshError.status)) throw refreshError;
         }
         attempted.forEach(id => cache.unavailable.add(id));
       }
       notifyGeminiModels(key);
     }
+  }
+  if (!lastError && [...cache.busyUntil.values()].some(until => until > Date.now())) {
+    throw Object.assign(new Error('Gemini 模型仍在忙碌，請稍後重試。'), { status: 503 });
   }
   throw lastError || new Error(`目前找不到可用的 ${GEMINI_MODEL_CONFIG[family].label} 模型，請更新模型清單後再試。`);
 }
@@ -256,19 +414,25 @@ function getGeminiSnapshot(apiKey) {
   const cache = key ? geminiModelCache.get(key) : null;
   const labels = {};
   for (const type of Object.keys(GEMINI_MODEL_CONFIG)) {
-    const recommended = cache?.models.find(model => model.type === type && model.stage !== 'alias' && !cache.unavailable.has(model.id));
+    const candidates = cache ? getGeminiCandidates(key, type, type === 'pro' ? { ...cache.policy, mode: 'paid' } : cache.policy) : [];
+    const recommended = candidates.find(model => model.type === type && model.stage !== 'alias');
     labels[type] = recommended?.label || GEMINI_MODEL_CONFIG[type].label;
   }
   return {
     key, labels, lastUsed: { ...cache?.lastUsed }, updatedAt: cache?.updatedAt || 0,
+    requestState: cache ? Array.from(cache.requestStates.values()).at(-1) || null : null,
     status: !key ? 'idle' : cache?.pending ? 'loading' : cache?.error ? 'error' : cache?.updatedAt ? 'ready' : 'loading',
     error: cache?.error?.message || '',
   };
 }
 
-function useGeminiModels(apiKey) {
+function useGeminiModels(apiKey, usageMode, allowBusyFallback) {
   const key = normalizeGeminiKey(apiKey);
   const [snapshot, setSnapshot] = useState(() => getGeminiSnapshot(key));
+  useEffect(() => {
+    setGeminiRequestPolicy(key, usageMode, allowBusyFallback);
+    setSnapshot(getGeminiSnapshot(key));
+  }, [key, usageMode, allowBusyFallback]);
   useEffect(() => {
     let active = true;
     const update = (changedKey) => {
@@ -2889,7 +3053,10 @@ const App = () => {
   const [itineraryData, setItineraryData] = usePersistentState('current_itinerary_data', null);
   const [step, setStep] = useState(() => itineraryData ? 'result' : 'input');
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
-  const geminiModels = useGeminiModels(apiKey);
+  const [apiUsageMode, setApiUsageMode] = usePersistentState('gemini_api_usage_mode', 'free');
+  const [allowBusyFallback, setAllowBusyFallback] = usePersistentState('gemini_busy_fallback', true);
+  const effectiveModelType = apiUsageMode === 'paid' ? modelType : 'flash';
+  const geminiModels = useGeminiModels(apiKey, apiUsageMode, allowBusyFallback);
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
   const textareaRef = useRef(null);
@@ -3436,7 +3603,7 @@ const App = () => {
         styleInstruction = "BALANCED PACE. 3-4 items per day.";
     }
 
-    const modelFamily = modelType === 'pro' ? 'pro' : 'flash';
+    const modelFamily = effectiveModelType === 'pro' ? 'pro' : 'flash';
     console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型類型: ${modelFamily})`);
 
     const baseConstraints = `
@@ -3662,6 +3829,20 @@ const App = () => {
                />
             </div>
             
+            <fieldset className="mt-4 space-y-2">
+              <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[{ value: 'free', title: '免費 API 配額', detail: 'Flash 正式版優先；各功能依序送出請求。' },
+                  { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
+                  <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
+                    <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
+                    <span><span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{mode.title}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{mode.detail}</span></span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-[#a08d85]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 Google 專案決定。</p>
+            </fieldset>
+
             {/* 模型選擇區塊 */}
             <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
               <div className="flex items-center justify-between gap-2 mb-2">
@@ -3682,19 +3863,20 @@ const App = () => {
               </p>
               <div className="flex flex-col md:flex-row gap-3">
                 {/* 自動更新 Pro */}
-                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'pro' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
+                <label className={`flex-1 relative border rounded-lg p-3 transition-all ${apiUsageMode !== 'paid' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${effectiveModelType === 'pro' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
                       type="radio" 
                       name="modelType" 
                       value="pro" 
-                      checked={modelType === 'pro'} 
+                      checked={effectiveModelType === 'pro'}
+                      disabled={apiUsageMode !== 'paid'}
                       onChange={() => setModelType('pro')}
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
                       <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{geminiModels.labels.pro}</span>
-                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">自動選擇最新 Pro，適合深度與複雜規劃。</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{apiUsageMode === 'paid' ? '自動選擇最新 Pro，適合深度與複雜規劃。' : '本 App 在免費模式使用 Flash；切換 API 模式可選 Pro。'}</span>
                       <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">配額依您的 API 方案
                       </span>
                       {geminiModels.lastUsed.pro && <span className="block text-[10px] text-slate-500 dark:text-[#a08d85] mt-1">上次使用：{geminiModels.lastUsed.pro.label}</span>}
@@ -3703,19 +3885,19 @@ const App = () => {
                 </label>
     
                 {/* 自動更新 Flash */}
-                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${modelType === 'flash' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
+                <label className={`flex-1 relative cursor-pointer border rounded-lg p-3 transition-all ${effectiveModelType === 'flash' ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037] hover:bg-slate-50 dark:hover:bg-[#33241f]'}`}>
                   <div className="flex items-start gap-3">
                     <input 
                       type="radio" 
                       name="modelType" 
                       value="flash" 
-                      checked={modelType === 'flash'} 
+                      checked={effectiveModelType === 'flash'}
                       onChange={() => setModelType('flash')}
                       className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]"
                     />
                     <div>
                       <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{geminiModels.labels.flash}</span>
-                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">自動選擇最新 Flash，適合快速規劃。</span>
+                      <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{apiUsageMode === 'paid' ? '自動選擇最新 Flash，適合快速規劃。' : '優先選擇可用 Flash 正式版，保留完整規劃功能。'}</span>
                       <span className="block text-[10px] text-amber-600 dark:text-amber-400 mt-0.5 font-mono">配額依您的 API 方案
                       </span>
                       {geminiModels.lastUsed.flash && <span className="block text-[10px] text-slate-500 dark:text-[#a08d85] mt-1">上次使用：{geminiModels.lastUsed.flash.label}</span>}
@@ -3723,6 +3905,11 @@ const App = () => {
                   </div>
                 </label>
               </div>
+              <label className="flex items-start gap-2 mt-3 text-xs text-slate-600 dark:text-[#d6c0b3] cursor-pointer">
+                <input type="checkbox" name="allowBusyFallback" checked={Boolean(allowBusyFallback)} onChange={e => setAllowBusyFallback(e.target.checked)} className="mt-0.5" />
+                <span>持續忙碌時自動使用同系列備援模型（最多切換一次）。模型停用時仍會尋找可用版本。</span>
+              </label>
+              <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">暫時忙碌會自動等待後重試，每個模型最多重試 3 次。每日配額用完或額度為 0 時會直接提示。</p>
             </div>
           </div>
           
@@ -4369,6 +4556,13 @@ const App = () => {
           </>
         )}
         {step === 'saved_list' && renderSavedList()}
+
+        {geminiModels.requestState && (
+          <div role="status" aria-live="polite" className="fixed bottom-4 left-4 right-4 mx-auto max-w-xl z-[1100] flex items-start gap-2 rounded-xl border border-blue-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b] p-4 shadow-lg text-sm text-blue-700 dark:text-sky-300">
+            <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
+            <span>{geminiModels.requestState.message}</span>
+          </div>
+        )}
 
         {/* Modal 區塊 */}
         <MenuHelperModal 
