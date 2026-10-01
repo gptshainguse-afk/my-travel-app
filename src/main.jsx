@@ -194,14 +194,13 @@ function compareGeminiModels(a, b) {
 }
 
 function compareFreeGeminiModels(a, b) {
-  // 免費模式：正式版優先，再選仍在官方清單中的最低世代；同世代保留最新修訂。
+  // 免費配額與模型能力分開處理：正式版優先，再選較新的可用版本。
   if (a.stage !== b.stage) return a.stage === 'stable' ? -1 : 1;
-  for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
-    const difference = (a.version[i] || 0) - (b.version[i] || 0);
-    if (difference) return difference;
-  }
   return compareGeminiModels(a, b);
 }
+
+const getGeminiRequestFamily = (type, policy) => policy.mode === 'free' && type !== 'lite'
+  ? 'flash' : normalizeGeminiType(type);
 
 function isGeminiModelWithoutQuota(error, model) {
   if (error.status !== 429 || getGeminiRetryInfo(error).kind !== 'no-quota') return false;
@@ -298,7 +297,7 @@ async function loadGeminiModels(apiKey, force = false) {
 }
 
 function getGeminiCandidates(apiKey, type, policy = getGeminiCache(apiKey).policy) {
-  const family = policy.mode === 'free' ? 'lite' : normalizeGeminiType(type);
+  const family = getGeminiRequestFamily(type, policy);
   const cache = getGeminiCache(apiKey);
   const families = family === 'lite' ? ['lite', 'flash'] : [family];
   const candidates = families.flatMap(candidateType => {
@@ -350,7 +349,7 @@ async function requestGemini(apiKey, type, payload) {
 }
 
 async function performGeminiRequest(key, type, payload, policy) {
-  const family = policy.mode === 'free' ? 'lite' : normalizeGeminiType(type);
+  const family = getGeminiRequestFamily(type, policy);
   const requestId = Symbol('gemini-request');
   try {
     return await performGeminiModelRequest(key, family, payload, policy, requestId);
@@ -458,7 +457,7 @@ function getGeminiSnapshot(apiKey) {
   }
   return {
     key, labels, lastUsed: { ...cache?.lastUsed }, updatedAt: cache?.updatedAt || 0,
-    freeModel: cache ? getGeminiCandidates(key, 'lite', { ...cache.policy, mode: 'free' })[0] || null : null,
+    freeModel: cache ? getGeminiCandidates(key, 'flash', { ...cache.policy, mode: 'free' })[0] || null : null,
     requestState: cache ? Array.from(cache.requestStates.values()).at(-1) || null : null,
     status: !key ? 'idle' : cache?.pending ? 'loading' : cache?.error ? 'error' : cache?.updatedAt ? 'ready' : 'loading',
     error: cache?.error?.message || '',
@@ -2933,10 +2932,111 @@ function getTripPromptBookings(context, dates) {
   };
 }
 
+const TRIP_SCHEDULE_FIELDS = ['time', 'end_time', 'type', 'title', 'location_query', 'transport_detail', 'booking_id', 'booking_event', 'at_terminal'];
+const TRIP_DETAIL_FIELDS = ['description', 'location_query', 'transport_detail', 'price_level', 'warnings_tips', 'menu_recommendations'];
+const tripObjectSchema = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
+const tripStringSchema = () => ({ type: 'string' });
+const TRIP_MENU_SCHEMA = { type: 'array', items: tripObjectSchema({ local: tripStringSchema(), cn: tripStringSchema(), price: tripStringSchema() }) };
+const TRIP_DETAILS_SCHEMA = {
+  description: tripStringSchema(), location_query: tripStringSchema(), transport_detail: tripStringSchema(),
+  price_level: { type: 'string', enum: ['Low', 'Mid', 'High'] }, warnings_tips: tripStringSchema(), menu_recommendations: TRIP_MENU_SCHEMA,
+};
+
+function getTripScheduleSchema(dates) {
+  const item = tripObjectSchema({
+    time: tripStringSchema(), end_time: tripStringSchema(),
+    type: { type: 'string', enum: ['transport', 'activity', 'meal', 'hotel', 'flight', 'spot'] },
+    title: tripStringSchema(), location_query: tripStringSchema(), transport_detail: tripStringSchema(),
+    booking_id: tripStringSchema(), booking_event: tripStringSchema(), at_terminal: { type: 'boolean' },
+  }, ['time', 'type', 'title', 'location_query', 'transport_detail']);
+  const day = tripObjectSchema({
+    day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
+    timeline: { type: 'array', items: item },
+  });
+  return tripObjectSchema({ days: { type: 'array', items: day, minItems: dates.length, maxItems: dates.length } });
+}
+
+function getTripScheduleProjection(day) {
+  return { day_index: day.day_index, date: day.date, city: day.city, title: day.title,
+    timeline: day.timeline.map(item => Object.fromEntries(TRIP_SCHEDULE_FIELDS
+      .filter(field => Object.hasOwn(item, field)).map(field => [field, item[field]]))),
+  };
+}
+
+function protectTripBookingDay(day, rules) {
+  if (!rules) return day;
+  const allowed = [...rules.required_events, ...rules.required_events.flatMap(event =>
+    event.booking_event === 'check_in' ? [{ ...event, booking_event: 'return_to_hotel' }]
+      : event.booking_event === 'check_out' ? ['leave_hotel', 'return_to_hotel'].map(booking_event => ({ ...event, booking_event })) : [])];
+  const contains = (text, value) => !value || bookingText(text).toLowerCase().replace(/\s+/g, '').includes(bookingText(value).toLowerCase().replace(/\s+/g, ''));
+  const protect = (item, event) => {
+    const next = { ...item, type: event.type, booking_id: event.booking_id, booking_event: event.booking_event };
+    if (event.time) next.time = event.time;
+    else if (event.type !== 'hotel' && !event.time) next.time = '待確認';
+    if (event.name && !contains(next.title, event.name)) next.title = `${event.name}｜${next.title || event.booking_event}`;
+    if (event.code && !contains(`${next.title} ${next.transport_detail}`, event.code)) next.title = `${event.code}｜${next.title || event.booking_event}`;
+    const location = event.address || event.station || event.name;
+    if (location) next.location_query = location;
+    return next;
+  };
+  const timeline = day.timeline.map(item => {
+    const event = allowed.find(event => event.booking_id === item.booking_id && event.booking_event === item.booking_event);
+    return event ? protect(item, event) : { ...item };
+  });
+  // 只有訂單已提供的交通點能由程式補回；住宿動線與移動時間仍須規劃及驗證。
+  for (const event of rules.required_events.filter(event => event.type !== 'hotel')) {
+    if (timeline.some(item => item.booking_id === event.booking_id && item.booking_event === event.booking_event)) continue;
+    const label = { arrival: '抵達', departure: '出發', terminal_arrival: '到機場／車站報到' }[event.booking_event] || event.booking_event;
+    const item = protect({ time: event.time || '待確認', type: event.type, title: `${event.code || '已訂交通'} ${label}`,
+      description: '依使用者提供的交通訂單保留此事件。', location_query: event.station || '交通地點待確認',
+      transport_detail: event.code || '', price_level: 'Mid', warnings_tips: event.time ? '請依實際訂單確認班次與報到要求。' : '交通時間未提供，請確認訂單後更新。', menu_recommendations: [],
+    }, event);
+    const minute = tripTimeMinutes(item.time);
+    const position = minute === null ? -1 : timeline.findIndex(other => {
+      const start = tripTimeMinutes(other.time);
+      return start !== null && start > minute;
+    });
+    if (position < 0) timeline.push(item); else timeline.splice(position, 0, item);
+  }
+  return { ...day, timeline };
+}
+
+function mergeTripItemDetails(item, details) {
+  const completed = { ...item };
+  for (const field of TRIP_DETAIL_FIELDS) if (Object.hasOwn(details, field)) completed[field] = details[field];
+  // 補文案不得更改已驗證的時間、訂單、目的地或交通路線。
+  for (const field of TRIP_SCHEDULE_FIELDS) {
+    if (['location_query', 'transport_detail'].includes(field) && !bookingText(item[field])) continue;
+    if (Object.hasOwn(item, field)) completed[field] = item[field];
+    else if (!['location_query', 'transport_detail'].includes(field)) delete completed[field];
+  }
+  return completed;
+}
+
+const TRIP_CHECKPOINT_KEY = 'gemini_trip_generation_checkpoint';
+const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily }) =>
+  JSON.stringify({ revision: 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
+function readTripCheckpoint(signature) {
+  try {
+    const saved = JSON.parse(globalThis.localStorage?.getItem(TRIP_CHECKPOINT_KEY) || 'null');
+    return saved?.signature === signature && Date.now() - saved.updatedAt < 24 * 60 * 60 * 1000 ? saved : null;
+  } catch { return null; }
+}
+function writeTripCheckpoint(checkpoint) {
+  try { globalThis.localStorage?.setItem(TRIP_CHECKPOINT_KEY, JSON.stringify({ ...checkpoint, updatedAt: Date.now() })); } catch { /* 儲存空間不足時，仍可完成當次生成。 */ }
+}
+function clearTripCheckpoint() {
+  try { globalThis.localStorage?.removeItem(TRIP_CHECKPOINT_KEY); } catch { /* 不影響已完成的行程。 */ }
+}
+
 async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null }) {
   const totalDays = dateList.length;
   const effectiveBatchSize = Math.max(1, Math.floor(batchSize));
+  const planningFamily = modelFamily === 'lite' ? 'flash' : modelFamily;
+  const checkpointSignature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily: planningFamily });
+  const checkpoint = readTripCheckpoint(checkpointSignature) || { signature: checkpointSignature, scheduleDays: [], completedDays: [] };
   const bookingDays = new globalThis.Map((bookingContext?.days || []).map(day => [day.date, day]));
+  const scheduleFirst = bookingContext?.days.some(day => day.required_events.length || day.blocked_intervals.length);
   const constraints = `${baseConstraints}\n${getTripBookingSummary(bookingContext)}`;
   const summaryConstraints = `${constraints}\n${bookingContext?.assumptions?.length
     ? `PLANNING ASSUMPTIONS: ${JSON.stringify(bookingContext.assumptions)}. Disclose these in trip_summary; do not claim live confirmation.` : ''}`;
@@ -2957,15 +3057,22 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const hasFields = (value, fields) => isRecord(value) && fields.every(field => Object.hasOwn(value, field));
   const isGuide = value => hasFields(value, guideFields) && Array.isArray(value.basic_phrases);
-  const isItem = value => hasFields(value, itemFields) && Array.isArray(value.menu_recommendations);
+  const isItem = value => hasFields(value, itemFields) && itemFields.filter(field => field !== 'menu_recommendations').every(field => typeof value[field] === 'string')
+    && ['transport', 'activity', 'meal', 'hotel', 'flight', 'spot'].includes(value.type)
+    && ['Low', 'Mid', 'High'].includes(value.price_level) && Array.isArray(value.menu_recommendations)
+    && value.menu_recommendations.every(menu => isRecord(menu) && ['local', 'cn', 'price'].every(field => typeof menu[field] === 'string'));
 
-  const fetchTripJson = async prompt => {
-    const response = await requestGemini(apiKey, modelFamily, {
+  const fetchTripJson = async (prompt, schema = null) => {
+    const response = await requestGemini(apiKey, planningFamily, {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: GEMINI_TRIP_OUTPUT_TOKENS },
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: schema ? 8192 : GEMINI_TRIP_OUTPUT_TOKENS,
+        ...(schema ? { responseJsonSchema: schema } : {}),
+      },
     });
     try {
-      return JSON.parse(cleanJsonResult(getGeminiText(response)));
+      const parsed = JSON.parse(cleanJsonResult(getGeminiText(response)));
+      if (!isRecord(parsed)) throw new Error('Expected a JSON object.');
+      return parsed;
     } catch (error) {
       if (error.code === 'GEMINI_OUTPUT_TRUNCATED') throw error;
       throw Object.assign(new Error('AI 行程資料格式不完整。'), { code: 'GEMINI_TRIP_JSON' });
@@ -2979,40 +3086,44 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     "currency_code": String (e.g. "JPY").
   `;
   const validBase = data => hasFields(data, ['trip_summary', 'currency_rate', 'currency_rate_val', 'currency_code']);
-  let baseData;
-  try {
-    baseData = await fetchTripJson(`You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
-      ${summaryConstraints}
-      Requirements: ${baseRequirements}
-      "city_guides": An object with one entry for EVERY unique major city visited. Each guide must include all these fields: ${guideSchema}.
-      Provide exactly 5 basic phrases per city. Keep all history, transport, safety, subsidies and tax-refund details.
-      Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","city_guides":{"CityA":${guideSchema}}}`);
-    if (!validBase(baseData) || !isRecord(baseData.city_guides) || !Object.keys(baseData.city_guides).length || !Object.values(baseData.city_guides).every(isGuide)) {
-      throw tripShapeError('城市指南資料不完整。');
+  let baseData = checkpoint.baseData;
+  if (!validBase(baseData) || !isRecord(baseData?.city_guides) || !Object.keys(baseData.city_guides).length || !Object.values(baseData.city_guides).every(isGuide)) {
+    try {
+      baseData = await fetchTripJson(`You are an expert AI Travel Planner. Generate the base trip info. Respond with valid JSON only.
+        ${summaryConstraints}
+        Requirements: ${baseRequirements}
+        "city_guides": An object with one entry for EVERY unique major city visited. Each guide must include all these fields: ${guideSchema}.
+        Provide exactly 5 basic phrases per city. Keep all history, transport, safety, subsidies and tax-refund details.
+        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","city_guides":{"CityA":${guideSchema}}}`);
+      if (!validBase(baseData) || !isRecord(baseData.city_guides) || !Object.keys(baseData.city_guides).length || !Object.values(baseData.city_guides).every(isGuide)) {
+        throw tripShapeError('城市指南資料不完整。');
+      }
+    } catch (error) {
+      if (!canSplitTripOutput(error)) throw error;
+      // 城市多時先產生摘要與城市清單，再逐城市取得完整指南，不刪減指南內容。
+      const core = await fetchTripJson(`You are an expert AI Travel Planner. Generate the trip summary, currency and guide-city list ONLY. Respond with valid JSON only.
+        ${summaryConstraints}
+        Requirements: ${baseRequirements}
+        "guide_cities": An array of EVERY unique major city actually visited. Do not omit any destination.
+        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`);
+      if (!validBase(core) || !Array.isArray(core.guide_cities) || !core.guide_cities.length || !core.guide_cities.every(city => typeof city === 'string' && city.trim())) {
+        throw tripShapeError('AI 未提供完整的旅遊城市清單，請稍後重試。');
+      }
+      const { guide_cities: guideCities, ...summary } = core;
+      const cityGuides = {};
+      for (const city of [...new Set(guideCities.map(value => value.trim()))]) {
+        const guide = await fetchTripJson(`Generate the complete travel city guide for "${city}". Respond with one valid JSON object only.
+          ${constraints}
+          Include history, transport and ticketing, safety/scams, travel subsidies, tax refunds and exactly 5 local phrases.
+          Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`);
+        if (!isGuide(guide)) throw tripShapeError(`「${city}」的城市指南資料不完整，請稍後重試。`);
+        cityGuides[city] = guide;
+      }
+      baseData = { ...summary, city_guides: cityGuides };
     }
-  } catch (error) {
-    if (!canSplitTripOutput(error)) throw error;
-    // 城市多時先產生摘要與城市清單，再逐城市取得完整指南，不刪減指南內容。
-    const core = await fetchTripJson(`You are an expert AI Travel Planner. Generate the trip summary, currency and guide-city list ONLY. Respond with valid JSON only.
-      ${summaryConstraints}
-      Requirements: ${baseRequirements}
-      "guide_cities": An array of EVERY unique major city actually visited. Do not omit any destination.
-      Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`);
-    if (!validBase(core) || !Array.isArray(core.guide_cities) || !core.guide_cities.length || !core.guide_cities.every(city => typeof city === 'string' && city.trim())) {
-      throw tripShapeError('AI 未提供完整的旅遊城市清單，請稍後重試。');
-    }
-    const { guide_cities: guideCities, ...summary } = core;
-    const cityGuides = {};
-    for (const city of [...new Set(guideCities.map(value => value.trim()))]) {
-      const guide = await fetchTripJson(`Generate the complete travel city guide for "${city}". Respond with one valid JSON object only.
-        ${constraints}
-        Include history, transport and ticketing, safety/scams, travel subsidies, tax refunds and exactly 5 local phrases.
-        Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`);
-      if (!isGuide(guide)) throw tripShapeError(`「${city}」的城市指南資料不完整，請稍後重試。`);
-      cityGuides[city] = guide;
-    }
-    baseData = { ...summary, city_guides: cityGuides };
   }
+  checkpoint.baseData = baseData;
+  writeTripCheckpoint(checkpoint);
 
   function validateDays(data, dates, startDayIdx, fullItems = true) {
     if (!Array.isArray(data?.days) || data.days.length !== dates.length) throw tripShapeError('AI 回傳的行程天數不完整。');
@@ -3021,46 +3132,139 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     return dates.map((date, offset) => {
       const index = startDayIdx + offset;
       const day = byIndex.get(index);
-      if (!hasFields(day, ['day_index', 'date', 'city', 'title', 'weather_forecast', 'clothing_suggestion', 'timeline']) || !Array.isArray(day.timeline)) {
+      const dayFields = ['day_index', 'date', 'city', 'title', 'timeline', ...(fullItems ? ['weather_forecast', 'clothing_suggestion'] : [])];
+      if (!hasFields(day, dayFields) || !Array.isArray(day.timeline)
+        || !['city', 'title', ...(fullItems ? ['weather_forecast', 'clothing_suggestion'] : [])].every(field => typeof day[field] === 'string')) {
         throw tripShapeError(`第 ${index} 天的行程資料不完整。`);
       }
       if (/^\d{4}-\d{2}-\d{2}$/.test(date) && day.date !== date) throw tripShapeError(`第 ${index} 天的日期不正確。`);
-      const validItem = fullItems ? isItem : item => hasFields(item, ['time', 'type', 'title']);
+      const validItem = fullItems ? isItem : item => hasFields(item, ['time', 'type', 'title'])
+        && ['time', 'type', 'title'].every(field => typeof item[field] === 'string');
       if (!day.timeline.every(validItem)) throw tripShapeError(`第 ${index} 天的景點資料不完整。`);
       return { ...day, day_index: index, date };
     });
   }
 
+  const bookingError = (day, rules, conflicts) => {
+    const eventLabels = { terminal_arrival: '到機場／車站報到', arrival: '抵達', departure: '出發', check_in: '入住', check_out: '退房', leave_hotel: '從住宿出發', return_to_hotel: '返回住宿', end_time: '結束時間' };
+    const readable = conflicts.slice(0, 2).map(message => {
+      let value = message;
+      for (const event of rules.required_events) value = value.replaceAll(event.booking_id, event.name || event.code || event.station || '交通班次');
+      for (const [field, label] of Object.entries(eventLabels)) value = value.replaceAll(field, label);
+      return value;
+    });
+    return Object.assign(new Error(`第 ${day.day_index} 天仍與已訂交通／住宿衝突：${readable.join(' ')}`), { code: 'GEMINI_TRIP_BOOKING' });
+  };
+
   const verifyBookedDays = async days => {
     const verified = [];
-    for (const day of days) {
-      const rules = bookingDays.get(day.date);
-      const conflicts = findTripBookingConflicts(day, rules);
-      if (!conflicts.length) { verified.push(day); continue; }
-      // 只重排有衝突的單日；不直接刪除景點或篡改使用者訂單。
-      const repaired = await fetchTripJson(`Repair ONLY Day ${day.day_index} on "${day.date}" to respect the user's fixed transport and hotel bookings. Return valid JSON with ONE day under "days".
-        ${constraints}
-        ${dayRules([day.date])}
-        Conflicts to correct: ${JSON.stringify(conflicts)}
-        Current complete day: ${JSON.stringify(day)}
-        Keep weather, clothing, meals, activity details, warnings and menu recommendations. Move/reorder activities into feasible time windows; if no free time exists, explain the travel-only day instead of fabricating sightseeing.
-        All required booking events must keep exact IDs, times, hotel names and addresses. End each activity/transfer before the next event. Include end_time and keep chronological order.
-        Output: {"days":[{"day_index":${day.day_index},"date":"${day.date}","city":"...","title":"...","weather_forecast":"...","clothing_suggestion":"...","timeline":[${itemSchema}]}]}`);
-      const fixed = validateDays(repaired, [day.date], day.day_index)[0];
-      const remaining = findTripBookingConflicts(fixed, rules);
-      if (remaining.length) {
-        const eventLabels = { terminal_arrival: '到機場／車站報到', arrival: '抵達', departure: '出發', check_in: '入住', check_out: '退房', leave_hotel: '從住宿出發', return_to_hotel: '返回住宿', end_time: '結束時間' };
-        const readable = remaining.slice(0, 2).map(message => {
-          let value = message;
-          for (const event of rules.required_events) value = value.replaceAll(event.booking_id, event.name || event.code || event.station || '交通班次');
-          for (const [field, label] of Object.entries(eventLabels)) value = value.replaceAll(field, label);
-          return value;
-        });
-        throw Object.assign(new Error(`第 ${day.day_index} 天仍與已訂交通／住宿衝突：${readable.join(' ')}`), { code: 'GEMINI_TRIP_BOOKING' });
+    for (const original of days) {
+      const rules = bookingDays.get(original.date);
+      let day = protectTripBookingDay(original, rules);
+      let conflicts = findTripBookingConflicts(day, rules);
+      for (let attempt = 0; conflicts.length && attempt < 2; attempt++) {
+        try {
+          // 修復只處理時間表，避免同時輸出菜單與長篇景點介紹而再次漏欄位。
+          const repaired = await fetchTripJson(`Repair ONLY Day ${day.day_index} on "${day.date}" to respect the user's fixed transport and hotel bookings.
+            ${constraints}
+            ${dayRules([day.date])}
+            Conflicts to correct: ${JSON.stringify(conflicts)}
+            Current schedule: ${JSON.stringify(getTripScheduleProjection(day))}
+            Return the COMPLETE single-day schedule under "days". Each stop needs time, type, title, location_query and transport_detail.
+            Add end_time for all meals, activities and transfers. Preserve exact booking_id and booking_event.
+            Include the journey back to the booked hotel and return_to_hotel after any post-check-in outings, with enough travel time.
+            Move/reorder stops into feasible windows and keep needed meals/transfers. Do not change reservations or invent traffic, timetable or hotel-policy confirmations.
+            Output schedule ONLY; descriptions, menus, weather and clothing will be filled separately. Do not leave unfinished JSON.
+            ${attempt ? 'The previous repair was invalid. Correct every listed conflict before responding.' : ''}`, getTripScheduleSchema([day.date]));
+          day = protectTripBookingDay(validateDays(repaired, [day.date], day.day_index, false)[0], rules);
+          conflicts = findTripBookingConflicts(day, rules);
+        } catch (error) {
+          if (!canSplitTripOutput(error) || attempt === 1) throw error;
+        }
       }
-      verified.push(fixed);
+      if (conflicts.length) throw bookingError(day, rules, conflicts);
+      verified.push(day);
     }
     return verified;
+  };
+
+  const completeTripDay = async (skeleton, previousContext, forceItems = false) => {
+    let day = { ...skeleton, timeline: skeleton.timeline.map(item => ({ ...item })) };
+    const weatherReady = () => typeof day.weather_forecast === 'string' && typeof day.clothing_suggestion === 'string';
+    const missingIndices = () => day.timeline.flatMap((item, index) => isItem(item) ? [] : [index]);
+    if (!missingIndices().length && weatherReady()) return day;
+    // 通常一次補齊當天文字；只在格式錯誤／截斷時，把尚未完成的項目逐一補齊。
+    if (!forceItems) {
+      const indices = missingIndices();
+      try {
+        const details = await fetchTripJson(`Complete details ONLY for Day ${day.day_index} in "${day.city}" on "${day.date}".
+          ${constraints}
+          ${dayRules([day.date])}
+          LOCKED SCHEDULE: ${JSON.stringify(getTripScheduleProjection(day))}
+          Previous context: "${previousContext}"
+          Required item indices: ${JSON.stringify(indices)} (zero-based).
+          Keep the schedule fixed. Return weather_forecast, clothing_suggestion and "items" with exactly one detail object per requested item_index.
+          Each item needs description, location_query, transport_detail, price_level, warnings_tips and menu_recommendations with local/cn/price.
+          Preserve all original features, including menu recommendations, driving/parking or public-transport advice when requested. Use [] for non-food items.
+          Do not change times, titles, stops, booking references or locations. Distinguish travel/weather estimates from live confirmation.`,
+        tripObjectSchema({ weather_forecast: tripStringSchema(), clothing_suggestion: tripStringSchema(),
+          items: { type: 'array', minItems: indices.length, maxItems: indices.length,
+            items: tripObjectSchema({ item_index: { type: 'integer' }, ...TRIP_DETAILS_SCHEMA }) },
+        }));
+        if (typeof details.weather_forecast === 'string') day.weather_forecast = details.weather_forecast;
+        if (typeof details.clothing_suggestion === 'string') day.clothing_suggestion = details.clothing_suggestion;
+        if (!Array.isArray(details.items)) throw tripShapeError('當天的景點補充資料不完整。');
+        const counts = new globalThis.Map();
+        for (const detailsItem of details.items) if (Number.isInteger(detailsItem?.item_index)) counts.set(detailsItem.item_index, (counts.get(detailsItem.item_index) || 0) + 1);
+        for (const detailsItem of details.items) {
+          const index = detailsItem?.item_index;
+          if (!indices.includes(index) || counts.get(index) !== 1) continue;
+          const completed = mergeTripItemDetails(day.timeline[index], detailsItem);
+          if (isItem(completed)) day.timeline[index] = completed;
+        }
+      } catch (error) {
+        if (!canSplitTripOutput(error)) throw error;
+      }
+    }
+    for (const index of missingIndices()) {
+      const item = day.timeline[index];
+      let completed;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const details = await fetchTripJson(`Complete ONE itinerary item for Day ${day.day_index} in "${day.city}" on "${day.date}". Respond with one valid JSON object only.
+            ${constraints}
+            ${dayRules([day.date])}
+            Previous day context: "${previousContext}"
+            Full schedule: ${JSON.stringify(getTripScheduleProjection(day).timeline)}
+            Target item: ${JSON.stringify(item)}
+            Include complete description, Google Maps query, transport details, price level, warnings and menu recommendations.
+            Required fields: ${itemSchema}. Use [] for menu_recommendations when there is no food.
+            Keep the supplied schedule and original bookings. Do not wrap in days or timeline.`,
+          tripObjectSchema({ time: tripStringSchema(), type: tripStringSchema(), title: tripStringSchema(), ...TRIP_DETAILS_SCHEMA }));
+          completed = mergeTripItemDetails(item, details);
+          if (!isItem(completed)) throw tripShapeError(`「${item.title}」的景點資料不完整。`);
+          break;
+        } catch (error) {
+          if (!canSplitTripOutput(error) || attempt === 1) throw error;
+        }
+      }
+      day.timeline[index] = completed;
+    }
+    if (!weatherReady()) {
+      const weather = await fetchTripJson(`Complete weather_forecast and clothing_suggestion ONLY for "${day.city}" on "${day.date}".
+        ${constraints}
+        ${dayRules([day.date])}
+        Describe seasonal expectations as estimates when a live forecast is unavailable. Respond with valid JSON.`,
+      tripObjectSchema({ weather_forecast: tripStringSchema(), clothing_suggestion: tripStringSchema() }));
+      if (typeof weather.weather_forecast !== 'string' || typeof weather.clothing_suggestion !== 'string') throw tripShapeError(`第 ${day.day_index} 天的天氣與穿著資料不完整。`);
+      day = { ...day, weather_forecast: weather.weather_forecast, clothing_suggestion: weather.clothing_suggestion };
+    }
+    const rules = bookingDays.get(day.date);
+    day = protectTripBookingDay(day, rules);
+    validateDays({ days: [day] }, [day.date], day.day_index);
+    const conflicts = findTripBookingConflicts(day, rules);
+    if (conflicts.length) throw bookingError(day, rules, conflicts);
+    return day;
   };
 
   const generateSingleDayByItem = async (date, dayIndex, previousContext) => {
@@ -3069,34 +3273,33 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
       ${dayRules([date])}
       Previous Context: "${previousContext}"
       Plan the COMPLETE schedule with the original travel pace, all needed meals, transport, flights and accommodation.
-      Keep weather_forecast and clothing_suggestion. For now, each timeline item needs ONLY time, type and title; details will be filled separately.
-      Also retain end_time, booking_id, booking_event and at_terminal when applicable, so the booking constraints survive item-by-item generation.
-      Do not omit stops to fit the response.
-      Output: {"days":[{"day_index":${dayIndex},"date":"${date}","city":"...","title":"...","weather_forecast":"...","clothing_suggestion":"...","timeline":[{"time":"10:00","type":"spot","title":"..."}]}]}`);
-    const day = validateDays(skeleton, [date], dayIndex, false)[0];
-    const timeline = [];
-    for (const item of day.timeline) {
-      const details = await fetchTripJson(`Complete ONE itinerary item for Day ${dayIndex} in "${day.city}" on "${date}". Respond with one valid JSON object only.
-        ${constraints}
-        ${dayRules([date])}
-        Previous day context: "${previousContext}"
-        Full schedule: ${JSON.stringify(day.timeline)}
-        Target item: ${JSON.stringify(item)}
-        Include complete description, Google Maps query, transport details, price level, warnings and menu recommendations.
-        Required fields: ${itemSchema}. Use [] for menu_recommendations when there is no food. Keep the supplied time, type and title. Do not wrap in days or timeline.`);
-      if (!isItem(details)) throw tripShapeError(`「${item.title}」的景點資料不完整，請稍後重試。`);
-      const completed = { ...details, ...item };
-      for (const field of ['end_time', 'booking_id', 'booking_event', 'at_terminal']) {
-        if (!Object.hasOwn(item, field)) delete completed[field];
-      }
-      timeline.push(completed);
-    }
-    return verifyBookedDays([{ ...day, timeline }]);
+      Each item needs time, type, title, location_query and transport_detail; details will be filled separately.
+      Also retain end_time, booking_id, booking_event and at_terminal when applicable.
+      Include travel back to the booked hotel after the final outing. Do not omit stops to fit the response.
+      Output schedule ONLY, with day_index, date, city, title and timeline.`, getTripScheduleSchema([date]));
+    const day = (await verifyBookedDays(validateDays(skeleton, [date], dayIndex, false)))[0];
+    return scheduleFirst ? [day] : [await completeTripDay(day, previousContext, true)];
   };
 
   const generateDays = async (dates, startDayIdx, previousContext) => {
     const endDayIdx = startDayIdx + dates.length - 1;
     try {
+      if (scheduleFirst) {
+        const skeleton = await fetchTripJson(`You are an expert AI Travel Planner. Plan a schedule skeleton ONLY for a portion of a ${totalDays}-day trip.
+          ${constraints}
+          ${dayRules(dates)}
+          We are CURRENTLY generating Day ${startDayIdx} to Day ${endDayIdx}.
+          Specific Dates for this chunk: ${dates.join(', ')}.
+          Previous Context: "${previousContext}"
+          Output exactly ${dates.length} days under "days", indexed ${startDayIdx} to ${endDayIdx}.
+          Include ALL needed spots, meals, transfers and booked events at the original travel pace. Group nearby places into a feasible route.
+          Each stop needs time, type, title, precise location_query and a brief transport_detail. Add end_time for stops and transfers.
+          Add exact booking_id and booking_event to reservation markers, and at_terminal for terminal activities.
+          On a hotel day, include the route back and return_to_hotel after the final outing. Keep sufficient travel time.
+          An entirely blocked travel day may have an empty timeline when no local event is due; explain it in the day title.
+          Do not add descriptions, menus, weather or clothing yet; those will be completed after the schedule passes validation.`, getTripScheduleSchema(dates));
+        return await verifyBookedDays(validateDays(skeleton, dates, startDayIdx, false));
+      }
       const data = await fetchTripJson(`You are an expert AI Travel Planner. Generate a portion of a ${totalDays}-day trip.
         ${constraints}
         ${dayRules(dates)}
@@ -3120,14 +3323,52 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     }
   };
 
-  const days = [];
+  const restoreDays = (values, fullItems) => {
+    const restored = new globalThis.Map();
+    for (const value of Array.isArray(values) ? values : []) {
+      const index = dateList.indexOf(value?.date);
+      if (index < 0 || value.day_index !== index + 1) continue;
+      try {
+        const day = protectTripBookingDay(validateDays({ days: [value] }, [value.date], index + 1, fullItems)[0], bookingDays.get(value.date));
+        if (!findTripBookingConflicts(day, bookingDays.get(value.date)).length) restored.set(value.date, day);
+      } catch { /* 未驗證成功的日期重新生成。 */ }
+    }
+    return restored;
+  };
+  const savedSchedules = restoreDays(checkpoint.scheduleDays, false);
+  const savedCompleted = restoreDays(checkpoint.completedDays, true);
+  const scheduleDays = [];
   let previousContext = 'Trip is just starting. Start from the arrival flight or airport if applicable.';
-  for (let offset = 0; offset < totalDays; offset += effectiveBatchSize) {
-    const chunk = await generateDays(dateList.slice(offset, offset + effectiveBatchSize), offset + 1, previousContext);
-    days.push(...chunk);
+  for (let offset = 0; offset < totalDays;) {
+    const saved = savedCompleted.get(dateList[offset]) || savedSchedules.get(dateList[offset]);
+    if (saved) {
+      scheduleDays.push(saved);
+      previousContext = getTripContinuation([saved], previousContext);
+      offset++;
+      continue;
+    }
+    let end = Math.min(offset + effectiveBatchSize, totalDays);
+    for (let i = offset + 1; i < end; i++) if (savedCompleted.has(dateList[i]) || savedSchedules.has(dateList[i])) { end = i; break; }
+    const chunk = await generateDays(dateList.slice(offset, end), offset + 1, previousContext);
+    scheduleDays.push(...chunk);
+    chunk.forEach(day => savedSchedules.set(day.date, day));
+    checkpoint.scheduleDays = Array.from(savedSchedules.values());
+    writeTripCheckpoint(checkpoint);
     previousContext = getTripContinuation(chunk, previousContext);
+    offset = end;
+  }
+  const days = [];
+  previousContext = 'Trip is just starting.';
+  for (const schedule of scheduleDays) {
+    const day = savedCompleted.get(schedule.date) || await completeTripDay(schedule, previousContext);
+    days.push(day);
+    savedCompleted.set(day.date, day);
+    checkpoint.completedDays = Array.from(savedCompleted.values());
+    writeTripCheckpoint(checkpoint);
+    previousContext = getTripContinuation([day], previousContext);
   }
   if (days.length !== totalDays) throw tripShapeError('行程天數不完整，請稍後重試。');
+  clearTripCheckpoint();
   return { ...baseData, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
 
@@ -3139,7 +3380,7 @@ const App = () => {
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
   const [apiUsageMode, setApiUsageMode] = usePersistentState('gemini_api_usage_mode', 'free');
   const [allowBusyFallback, setAllowBusyFallback] = usePersistentState('gemini_busy_fallback', true);
-  const effectiveModelType = apiUsageMode === 'paid' ? (modelType === 'pro' ? 'pro' : 'flash') : 'lite';
+  const effectiveModelType = apiUsageMode === 'paid' ? (modelType === 'pro' ? 'pro' : 'flash') : 'flash';
   const geminiModels = useGeminiModels(apiKey, apiUsageMode, allowBusyFallback);
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
@@ -3389,6 +3630,7 @@ const App = () => {
 
   const resetForm = () => {
     if (confirm('確定要清空所有輸入欄位嗎？')) {
+      clearTripCheckpoint();
       localStorage.removeItem('travel_basic_data');
       localStorage.removeItem('travel_simple_flights');
       localStorage.removeItem('travel_multi_flights');
@@ -3736,7 +3978,11 @@ const App = () => {
 
     } catch (error) {
       console.error(error);
-      setErrorMsg("行程生成失敗：" + error.message);
+      const progress = readTripCheckpoint(getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily }));
+      const schedules = Array.isArray(progress?.scheduleDays) ? progress.scheduleDays.length : 0;
+      const completed = Array.isArray(progress?.completedDays) ? progress.completedDays.length : 0;
+      setErrorMsg("行程生成失敗：" + error.message + (schedules || completed
+        ? ` 已保留 ${schedules} 天時間表與 ${completed} 天完整行程；資料不變時，再按規劃即可繼續。` : ''));
       setStep('input');
     }
   };
@@ -3915,7 +4161,7 @@ const App = () => {
             <fieldset className="mt-4 space-y-2">
               <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[{ value: 'free', title: '免費 API 配額', detail: '優先使用最低可用版本的 Flash-Lite；各功能依序送出請求。' },
+                {[{ value: 'free', title: '免費 API 配額', detail: '行程以可用的正式版 Flash 規劃；輕量輔助功能使用 Lite，依序送出請求。' },
                   { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
                   <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
                     <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
@@ -3926,7 +4172,7 @@ const App = () => {
               <p className="text-xs text-slate-500 dark:text-[#a08d85]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 Google 專案決定。</p>
             </fieldset>
 
-            {/* 免費模式自動挑選輕量版本；已開通計費者保留 Pro / Flash 選擇。 */}
+            {/* 免費規劃使用 Flash；已開通計費者保留 Pro / Flash 選擇。 */}
             <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] flex items-center gap-1">
@@ -3945,9 +4191,9 @@ const App = () => {
                 {geminiModels.status === 'error' && `模型清單更新失敗：${geminiModels.error} 可按「更新模型」重試。`}
               </p>
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
-                <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || formatGeminiModel(geminiModels.freeModel?.id || GEMINI_MODEL_CONFIG.lite.alias)}</span>
-                <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">自動優先選擇最低可用正式版本的 Flash-Lite；沒有可用的 Lite 時才使用 Flash。保留完整行程與圖片辨識功能。</p>
-                {geminiModels.lastUsed.lite && <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">上次實際使用：{geminiModels.lastUsed.lite.label}</p>}
+                <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
+                <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">Flash 負責行程與訂單衝突修復；Lite 負責輕量輔助功能。優先正式版本，實際能否使用依專案配額決定。已完成的生成進度會保留，失敗後可再按規劃繼續。</p>
+                {geminiModels.lastUsed.flash && <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">上次實際使用：{geminiModels.lastUsed.flash.label}</p>}
               </div>}
               <div className="flex flex-col md:flex-row gap-3">
                 {[{ type: 'pro', detail: '自動選擇最新 Pro，適合深度與複雜規劃。' },
