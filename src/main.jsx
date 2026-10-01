@@ -458,6 +458,335 @@ function useGeminiModels(apiKey, usageMode, allowBusyFallback) {
 }
 
 
+// --- Groq 與供應商轉接：沿用完整行程資料格式與訂單檢查 ---
+const GROQ_API_BASE = 'https://api.groq.com/openai/v1';
+const GROQ_MODEL_CONFIG = {
+  'openai/gpt-oss-120b': { label: 'GPT OSS 120B', outputLimit: 65536, vision: false },
+  'openai/gpt-oss-20b': { label: 'GPT OSS 20B', outputLimit: 65536, vision: false },
+  'qwen/qwen3.8-27b': { label: 'Qwen 3.8 27B（圖片／文字，預覽版）', outputLimit: 16384, vision: true },
+};
+const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-120b';
+const GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
+const GROQ_FREE_TOKEN_BUDGET = 8000;
+const groqModelCache = new globalThis.Map();
+const groqModelListeners = new Set();
+
+function normalizeAIClient(client) {
+  if (typeof client === 'string') return { provider: 'gemini', key: normalizeGeminiKey(client) };
+  return {
+    provider: client?.provider === 'groq' ? 'groq' : 'gemini',
+    key: normalizeGeminiKey(client?.key),
+    model: client?.model || GROQ_DEFAULT_MODEL,
+    usageMode: client?.usageMode === 'paid' ? 'paid' : 'free',
+  };
+}
+
+const hasAIKey = client => Boolean(normalizeAIClient(client).key);
+
+function requestAI(client, type, payload) {
+  const config = normalizeAIClient(client);
+  return config.provider === 'groq' ? requestGroq(config, payload) : requestGemini(config.key, type, payload);
+}
+
+function getGroqCache(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  if (!groqModelCache.has(key)) groqModelCache.set(key, {
+    models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
+    queue: Promise.resolve(), requestStates: new globalThis.Map(), lastUsed: null,
+    tokenLimits: new globalThis.Map(),
+  });
+  return groqModelCache.get(key);
+}
+
+function notifyGroqModels(key) {
+  groqModelListeners.forEach(listener => listener(key));
+}
+
+function setGroqRequestState(key, requestId, message) {
+  const states = getGroqCache(key).requestStates;
+  if (message) states.set(requestId, { message });
+  else states.delete(requestId);
+  notifyGroqModels(key);
+}
+
+function parseGroqDuration(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (/^(?:\d+(?:\.\d+)?[hms])+$/.test(text)) {
+    return [...text.matchAll(/(\d+(?:\.\d+)?)([hms])/g)].reduce((sum, match) =>
+      sum + Number(match[1]) * ({ h: 3600000, m: 60000, s: 1000 }[match[2]]), 0);
+  }
+  return parseGeminiRetryDelay(value);
+}
+
+function getGroqRetryInfo(error) {
+  const text = `${error.code || ''} ${error.message || ''}`;
+  const daily = /\b(?:RPD|TPD)\b|requests per day|tokens per day|daily|insufficient_quota/i.test(text);
+  const tooLarge = /request too large|reduce (?:your )?(?:message|input)|maximum context length|context_length_exceeded/i.test(text);
+  const messageDelay = parseGroqDuration(text.match(/try again in ([\d.hms]+)/i)?.[1]);
+  const delays = [error.retryAfterMs, error.status === 429 ? error.resetTokensMs : null, messageDelay]
+    .filter(delay => Number.isFinite(delay) && delay >= 0);
+  return {
+    daily, tooLarge, serverDelayMs: delays.length ? Math.max(...delays) : null,
+    retryable: [408, 500, 502, 503, 504].includes(error.status)
+      || (error.status === 429 && !daily && !tooLarge && delays.length > 0),
+  };
+}
+
+function explainGroqError(error) {
+  let message;
+  let code = error.code;
+  if (error.status === 429) {
+    const info = getGroqRetryInfo(error);
+    code = info.tooLarge ? 'GROQ_INPUT_TOO_LARGE' : 'GROQ_QUOTA_LIMIT';
+    message = info.tooLarge ? '此筆需求超過 Groq 單次 Token 配額，縮小生成批次後仍無法完成。請到 Groq Console 查看此模型的實際限制。'
+      : info.daily ? 'Groq 每日配額已用完，請等待額度重置，或到 Groq Console 查看方案與配額。'
+        : `Groq 短時間配額已達上限。${info.serverDelayMs > 0 ? `請至少等待 ${Math.ceil(info.serverDelayMs / 1000)} 秒後再試。` : '請稍後再試，並到 Groq Console 查看配額。'}`;
+  } else if ([500, 502, 503].includes(error.status)) {
+    code = 'GROQ_SERVICE_BUSY';
+    message = 'Groq 服務暫時忙碌，有限次重試後仍無法完成。請稍後再試，已填資料會保留。';
+  } else if ([408, 504].includes(error.status)) message = 'Groq 回應逾時，請稍後再試。';
+  else if (error.status === 401) message = 'Groq API Key 無效或已過期，請到 Groq Console 重新確認。';
+  else if (error.status === 403) message = '這把 Groq API Key 沒有使用此模型的權限，請檢查帳戶與模型資格。';
+  else if (error.status === 402) message = 'Groq API 計費額度不足，請檢查 Groq 帳戶的計費設定。';
+  else if (error.status === 404) message = '選擇的 Groq 模型已無法使用，請更新模型清單並重新選擇。';
+  else if (error.status === 400) message = `Groq 無法接受此筆需求：${error.message}`;
+  return message ? Object.assign(new Error(message, { cause: error }), error, { message, code }) : error;
+}
+
+async function fetchGroqJson(path, apiKey, options = {}, model = '') {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.method === 'POST' ? 180000 : 20000);
+  try {
+    const response = await fetch(`${GROQ_API_BASE}/${path}`, {
+      ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${normalizeGeminiKey(apiKey)}` },
+      signal: controller.signal,
+    });
+    const tokenLimit = Number(response.headers?.get?.('x-ratelimit-limit-tokens'));
+    if (model && tokenLimit > 0) getGroqCache(apiKey).tokenLimits.set(model, tokenLimit);
+    let data;
+    try { data = await response.json(); } catch {
+      if (response.ok) throw new Error('Groq 回傳的資料不是有效的 JSON。');
+      data = {};
+    }
+    if (!response.ok || data.error) {
+      const error = Object.assign(new Error(data.error?.message || `Groq HTTP ${response.status}`), {
+        status: response.status, code: data.error?.code || data.error?.type,
+        retryAfterMs: parseGeminiRetryDelay(response.headers?.get?.('retry-after')),
+        resetTokensMs: parseGroqDuration(response.headers?.get?.('x-ratelimit-reset-tokens')),
+      });
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw Object.assign(new Error('Groq 回應逾時。'), { status: 408 });
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
+async function loadGroqModels(apiKey, force = false) {
+  const key = normalizeGeminiKey(apiKey);
+  if (!key) return [];
+  const cache = getGroqCache(key);
+  if (cache.pending) return cache.pending;
+  if (!force && cache.updatedAt && Date.now() - cache.updatedAt < GEMINI_MODEL_CACHE_MS && !cache.error) return cache.models;
+  if (!force && cache.error && cache.retryAfter > Date.now()) throw cache.error;
+  cache.pending = (async () => {
+    try {
+      const data = await fetchGroqJson('models', key);
+      if (!Array.isArray(data.data)) throw new Error('Groq 模型清單格式不完整。');
+      // 只列出已確認支援行程 JSON 的一般模型，排除語音、guard 與 enterprise 專用模型。
+      cache.models = data.data.filter(model => model.active !== false && Object.hasOwn(GROQ_MODEL_CONFIG, model.id))
+        .map(model => ({ ...model, ...GROQ_MODEL_CONFIG[model.id] }));
+      cache.updatedAt = Date.now();
+      cache.error = null;
+      cache.retryAfter = 0;
+      return cache.models;
+    } catch (error) {
+      cache.error = explainGroqError(error);
+      cache.retryAfter = Date.now() + 60000;
+      throw cache.error;
+    } finally { cache.pending = null; notifyGroqModels(key); }
+  })();
+  notifyGroqModels(key);
+  return cache.pending;
+}
+
+function getGroqSnapshot(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  const cache = key ? groqModelCache.get(key) : null;
+  return {
+    key, models: cache?.models || [], updatedAt: cache?.updatedAt || 0, lastUsed: cache?.lastUsed || null,
+    requestState: cache ? Array.from(cache.requestStates.values()).at(-1) || null : null,
+    status: !key ? 'idle' : cache?.pending ? 'loading' : cache?.error ? 'error' : cache?.updatedAt ? 'ready' : 'loading',
+    error: cache?.error?.message || '',
+  };
+}
+
+function useGroqModels(apiKey) {
+  const key = normalizeGeminiKey(apiKey);
+  const [snapshot, setSnapshot] = useState(() => getGroqSnapshot(key));
+  useEffect(() => {
+    let active = true;
+    const update = changedKey => { if (active && changedKey === key) setSnapshot(getGroqSnapshot(key)); };
+    groqModelListeners.add(update);
+    update(key);
+    const load = () => { if (key) loadGroqModels(key).catch(() => {}); };
+    const timer = setTimeout(load, 700);
+    const interval = setInterval(load, GEMINI_MODEL_CACHE_MS);
+    const onFocus = () => { if (!document.hidden) load(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      active = false; clearTimeout(timer); clearInterval(interval);
+      window.removeEventListener('focus', onFocus); groqModelListeners.delete(update);
+    };
+  }, [key]);
+  return { ...(snapshot.key === key ? snapshot : getGroqSnapshot(key)),
+    refresh: () => { if (key) loadGroqModels(key, true).catch(() => {}); } };
+}
+
+function groqMessages(payload) {
+  const messages = [];
+  const instruction = payload.systemInstruction?.parts?.map(part => part.text || '').join('\n');
+  if (instruction) messages.push({ role: 'system', content: instruction });
+  for (const content of payload.contents || []) {
+    const parts = (content.parts || []).map(part => {
+      if (typeof part.text === 'string') return { type: 'text', text: part.text };
+      if (part.inlineData?.data && /^image\/(?:jpeg|png|webp)$/.test(part.inlineData.mimeType)) {
+        return { type: 'image_url', image_url: { url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` } };
+      }
+      throw new Error('Groq 無法處理此附件格式，請使用 JPEG、PNG 或 WebP 圖片。');
+    });
+    messages.push({ role: content.role === 'model' ? 'assistant' : 'user',
+      content: parts.every(part => part.type === 'text') ? parts.map(part => part.text).join('\n') : parts });
+  }
+  if (!messages.length) throw new Error('沒有可供 AI 處理的內容。');
+  if (payload.generationConfig?.responseMimeType === 'application/json') {
+    messages.unshift({ role: 'system', content: 'Respond with one complete JSON object only. Preserve every requested field and all fixed user bookings. Do not include Markdown or reasoning.' });
+  }
+  return messages;
+}
+
+function estimateGroqInput(messages) {
+  // 估算只用來保守分配免費配額；實際值以 API 配額標頭／錯誤為準。
+  let tokens = 64;
+  for (const message of messages) {
+    for (const part of typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content) {
+      if (part.type === 'image_url') tokens += 2048;
+      else {
+        const text = part.text || '';
+        const asciiLength = (text.match(/[\x00-\x7f]/g) || []).length;
+        tokens += Math.ceil(asciiLength / 3) + (Array.from(text).length - asciiLength) * 2;
+      }
+    }
+    tokens += 12;
+  }
+  return tokens;
+}
+
+async function fetchGroqWithRetry(key, model, body, requestId) {
+  for (let retry = 0; retry <= GEMINI_MAX_TRANSIENT_RETRIES; retry++) {
+    try {
+      return await fetchGroqJson('chat/completions', key, { method: 'POST', body: JSON.stringify(body) }, model.id);
+    } catch (error) {
+      const info = getGroqRetryInfo(error);
+      if (!info.retryable || retry === GEMINI_MAX_TRANSIENT_RETRIES) throw error;
+      const delayMs = Math.max(info.serverDelayMs || 0, 1000 * 2 ** retry + Math.floor(Math.random() * 500));
+      if (delayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+      setGroqRequestState(key, requestId, `Groq ${error.status === 429 ? '已達短時間配額' : '暫時忙碌'}，${Math.ceil(delayMs / 1000)} 秒後重試（${retry + 1}/${GEMINI_MAX_TRANSIENT_RETRIES}）。`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      setGroqRequestState(key, requestId, `正在重試 ${model.label}…`);
+    }
+  }
+}
+
+function convertGroqResponse(data) {
+  const choice = data.choices?.[0];
+  if (!choice) throw new Error('Groq 未傳回完整的回覆。');
+  if (choice.finish_reason !== 'stop' && choice.finish_reason !== 'length') {
+    throw new Error(`Groq 回覆未完成（${choice.finish_reason || '未知原因'}），請稍後再試。`);
+  }
+  if (choice.message?.refusal) throw new Error('Groq 無法處理這筆需求，請調整內容後再試。');
+  return { modelVersion: data.model, candidates: [{
+    finishReason: choice.finish_reason === 'length' ? 'MAX_TOKENS' : 'STOP',
+    content: { parts: [{ text: choice.message?.content }] },
+  }] };
+}
+
+async function performGroqRequest(client, payload) {
+  const { key, usageMode } = client;
+  const cache = getGroqCache(key);
+  const requestId = Symbol('groq-request');
+  try {
+    try { await loadGroqModels(key); } catch (error) {
+      if ([400, 401, 402, 403].includes(error.status)) throw error;
+    }
+    const messages = groqMessages(payload);
+    const images = messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+      .filter(part => part.type === 'image_url');
+    if (images.length > 3) throw new Error('Groq 每次最多辨識 3 張圖片，請分批分析。');
+    const modelId = images.length ? GROQ_VISION_MODEL : client.model;
+    if (!Object.hasOwn(GROQ_MODEL_CONFIG, modelId)) throw new Error('請選擇可用的 Groq 文字模型。');
+    if (cache.updatedAt && !cache.error && !cache.models.some(model => model.id === modelId)) {
+      throw new Error(images.length ? '這把 Groq Key 目前沒有可用的圖片模型，請更新模型清單或選擇 Gemini 進行菜單辨識。' : '選擇的 Groq 模型目前無法使用，請更新模型清單並重新選擇。');
+    }
+    const model = { id: modelId, ...GROQ_MODEL_CONFIG[modelId] };
+    const requestedLimit = payload.generationConfig?.maxOutputTokens || 2048;
+    const accountBudget = cache.tokenLimits.get(modelId) || (usageMode === 'free' ? GROQ_FREE_TOKEN_BUDGET : Infinity);
+    const availableOutput = accountBudget - estimateGroqInput(messages) - 256;
+    const ceiling = Math.min(model.outputLimit, availableOutput, usageMode === 'free' ? 4096 : GEMINI_OUTPUT_RECOVERY_CEILING);
+    if (ceiling < 256) throw Object.assign(new Error('此筆需求超過目前 Groq 的單次 Token 預算，已填資料會保留。請查看 Groq 帳戶配額，或選擇 Gemini。'), { code: 'GROQ_INPUT_TOO_LARGE' });
+    const body = {
+      model: modelId, messages, stream: false,
+      max_completion_tokens: Math.min(requestedLimit, usageMode === 'free' ? 2048 : ceiling, ceiling),
+      reasoning_effort: modelId.startsWith('qwen/') ? 'none' : 'low',
+      ...(payload.generationConfig?.responseMimeType === 'application/json' ? { response_format: { type: 'json_object' } } : {}),
+    };
+    if (payload.generationConfig?.temperature != null) body.temperature = payload.generationConfig.temperature;
+    if (payload.generationConfig?.topP != null) body.top_p = payload.generationConfig.topP;
+    for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
+      const data = convertGroqResponse(await fetchGroqWithRetry(key, model, body, requestId));
+      try { getGeminiText(data); } catch (error) {
+        if (error.code === 'GEMINI_OUTPUT_TRUNCATED' && lengthAttempt === 0 && body.max_completion_tokens < ceiling) {
+          body.max_completion_tokens = Math.min(body.max_completion_tokens * 2, ceiling);
+          setGroqRequestState(key, requestId, 'Groq 回覆尚未完整，正在調整輸出額度；必要時會拆小行程批次。');
+          continue;
+        }
+        throw error;
+      }
+      cache.lastUsed = { id: data.modelVersion || modelId, label: GROQ_MODEL_CONFIG[data.modelVersion]?.label || model.label };
+      notifyGroqModels(key);
+      return data;
+    }
+  } catch (error) { throw explainGroqError(error); }
+  finally { setGroqRequestState(key, requestId, null); }
+}
+
+function requestGroq(client, payload) {
+  const config = normalizeAIClient(client);
+  if (!config.key) return Promise.reject(new Error('請先輸入 Groq API Key。'));
+  const cache = getGroqCache(config.key);
+  // 每把 Groq Key 共用佇列，所有功能都遵守短時間配額與有限次重試。
+  const run = () => performGroqRequest(config, payload);
+  const result = cache.queue.then(run, run);
+  cache.queue = result.then(() => {}, () => {});
+  return result;
+}
+
+function mergeMenuData(results) {
+  const categories = [];
+  for (const result of results) {
+    if (!Array.isArray(result?.categories)) throw new Error('菜單辨識資料格式不完整，請重新分析。');
+    for (const category of result.categories) {
+      if (typeof category.name !== 'string' || !Array.isArray(category.items)) throw new Error('菜單分類資料格式不完整。');
+      const existing = categories.find(item => item.name === category.name);
+      if (existing) existing.items.push(...category.items);
+      else categories.push({ ...category, items: [...category.items] });
+    }
+  }
+  return { categories };
+}
+
 // --- 自定義 Hook: 自動處理 localStorage 儲存與讀取 ---
 
 const deepMerge = (target, source) => {
@@ -1452,7 +1781,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
       return;
     }
-    if (!apiKey) return alert("需要 API Key 才能使用此功能");
+    if (!hasAIKey(apiKey)) return alert("需要 API Key 才能使用此功能");
     
     setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
     const modelFamily = 'lite';
@@ -1476,7 +1805,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
+      const data = await requestAI(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
       
       const resultText = getGeminiText(data);
       if (!resultText) throw new Error("AI 無回應");
@@ -1495,7 +1824,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
   const handleRegenerateDeepDive = async () => {
     const { timelineIndex, title } = activeDeepDive;
-    if (!apiKey) return alert("需要 API Key");
+    if (!hasAIKey(apiKey)) return alert("需要 API Key");
     
     setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null });
     const modelFamily = 'lite';
@@ -1519,7 +1848,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
+      const data = await requestAI(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
       
       const resultText = getGeminiText(data);
       if (!resultText) throw new Error("AI 無回應");
@@ -2239,7 +2568,7 @@ async function regenerateSingleItem(newTitle, cityName, apiKey) {
   `;
 
   try {
-    const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
+    const data = await requestAI(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
 
     const resultText = getGeminiText(data);
     if (!resultText) {
@@ -2296,7 +2625,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
   const handleAnalyzeMenu = async () => {
     if (selectedImages.length === 0) return alert("請先選擇菜單照片");
-    if (!apiKey) return alert("請輸入 API Key");
+    if (!hasAIKey(apiKey)) return alert("請輸入 API Key");
 
     setIsAnalyzingMenu(true);
     try {
@@ -2336,15 +2665,17 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
           }
         `;
         
-        const data = await requestGemini(apiKey, modelFamily, {
-                contents: [{
-                    parts: [{ text: prompt }, ...imageParts]
-                }]
-            });
-  
-        const resultText = getGeminiText(data);
-        const cleanedText = cleanJsonResult(resultText); 
-        setMenuData(JSON.parse(cleanedText));
+        const client = normalizeAIClient(apiKey);
+        const imagesPerBatch = client.provider === 'groq' ? (client.usageMode === 'free' ? 1 : 3) : imageParts.length;
+        const results = [];
+        for (let offset = 0; offset < imageParts.length; offset += imagesPerBatch) {
+          const data = await requestAI(apiKey, modelFamily, {
+            contents: [{ parts: [{ text: prompt }, ...imageParts.slice(offset, offset + imagesPerBatch)] }],
+            generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192 },
+          });
+          results.push(JSON.parse(cleanJsonResult(getGeminiText(data))));
+        }
+        setMenuData(mergeMenuData(results));
 
     } catch (error) {
         console.error(error);
@@ -2356,7 +2687,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
   const handleRecommend = async () => {
     if (!menuData) return;
-    if (!apiKey) return alert("請輸入 API Key");
+    if (!hasAIKey(apiKey)) return alert("請輸入 API Key");
 
     setIsRecommending(true);
     try {
@@ -2369,7 +2700,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
            請適當分段，讓閱讀更舒適。
         `;
 
-         const data = await requestGemini(apiKey, 'lite', { contents: [{ parts: [{ text: prompt }] }] });
+         const data = await requestAI(apiKey, 'lite', { contents: [{ parts: [{ text: prompt }] }] });
           setRecommendation(getGeminiText(data));
 
     } catch (error) {
@@ -2554,7 +2885,7 @@ async function regenerateDayWeather(city, date, apiKey) {
   `;
 
   try {
-    const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
+    const data = await requestAI(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
 
     const resultText = getGeminiText(data);
     const cleanedText = cleanJsonResult(resultText); 
@@ -2838,7 +3169,7 @@ function tripShapeError(message) {
 }
 
 function canSplitTripOutput(error) {
-  return ['GEMINI_OUTPUT_TRUNCATED', 'GEMINI_TRIP_JSON', 'GEMINI_TRIP_SHAPE'].includes(error.code);
+  return ['GEMINI_OUTPUT_TRUNCATED', 'GEMINI_TRIP_JSON', 'GEMINI_TRIP_SHAPE', 'GROQ_INPUT_TOO_LARGE'].includes(error.code);
 }
 
 function getTripContinuation(days, previousContext) {
@@ -2850,6 +3181,8 @@ function getTripContinuation(days, previousContext) {
 
 async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null }) {
   const totalDays = dateList.length;
+  const client = normalizeAIClient(apiKey);
+  const effectiveBatchSize = client.provider === 'groq' && client.usageMode === 'free' ? Math.min(batchSize, 2) : batchSize;
   const bookingDays = new globalThis.Map((bookingContext?.days || []).map(day => [day.date, day]));
   const bookingRules = bookingContext ? `
     FIXED USER BOOKINGS (authoritative; never change dates, times, codes, hotel names or addresses): ${JSON.stringify({ transport: bookingContext.transport, stays: bookingContext.stays, assumptions: bookingContext.assumptions, buffers: bookingContext.buffers, allow_transit_tour: bookingContext.allow_transit_tour })}
@@ -2876,7 +3209,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   const isItem = value => hasFields(value, itemFields) && Array.isArray(value.menu_recommendations);
 
   const fetchTripJson = async prompt => {
-    const response = await requestGemini(apiKey, modelFamily, {
+    const response = await requestAI(apiKey, modelFamily, {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { responseMimeType: 'application/json', maxOutputTokens: GEMINI_TRIP_OUTPUT_TOKENS },
     });
@@ -3038,8 +3371,8 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
 
   const days = [];
   let previousContext = 'Trip is just starting. Start from the arrival flight or airport if applicable.';
-  for (let offset = 0; offset < totalDays; offset += batchSize) {
-    const chunk = await generateDays(dateList.slice(offset, offset + batchSize), offset + 1, previousContext);
+  for (let offset = 0; offset < totalDays; offset += effectiveBatchSize) {
+    const chunk = await generateDays(dateList.slice(offset, offset + effectiveBatchSize), offset + 1, previousContext);
     days.push(...chunk);
     previousContext = getTripContinuation(chunk, previousContext);
   }
@@ -3052,11 +3385,23 @@ const App = () => {
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
   const [itineraryData, setItineraryData] = usePersistentState('current_itinerary_data', null);
   const [step, setStep] = useState(() => itineraryData ? 'result' : 'input');
-  const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
+  const [selectedAIProvider, setSelectedAIProvider] = usePersistentState('travel_ai_provider', 'gemini');
+  const aiProvider = selectedAIProvider === 'groq' ? 'groq' : 'gemini';
+  const [geminiApiKey, setGeminiApiKey] = usePersistentState('gemini_api_key', '');
+  const [groqApiKey, setGroqApiKey] = usePersistentState('groq_api_key', '');
+  const [groqModel, setGroqModel] = usePersistentState('groq_model_id', GROQ_DEFAULT_MODEL);
+  const [groqUsageMode, setGroqUsageMode] = usePersistentState('groq_api_usage_mode', 'free');
   const [apiUsageMode, setApiUsageMode] = usePersistentState('gemini_api_usage_mode', 'free');
   const [allowBusyFallback, setAllowBusyFallback] = usePersistentState('gemini_busy_fallback', true);
+  const apiKey = aiProvider === 'groq' ? groqApiKey : geminiApiKey;
+  const setApiKey = aiProvider === 'groq' ? setGroqApiKey : setGeminiApiKey;
+  const providerLabel = aiProvider === 'groq' ? 'Groq' : 'Gemini';
+  const selectedUsageMode = aiProvider === 'groq' ? groqUsageMode : apiUsageMode;
   const effectiveModelType = apiUsageMode === 'paid' ? modelType : 'flash';
-  const geminiModels = useGeminiModels(apiKey, apiUsageMode, allowBusyFallback);
+  const aiClient = useMemo(() => ({ provider: aiProvider, key: apiKey, model: groqModel, usageMode: selectedUsageMode }), [aiProvider, apiKey, groqModel, selectedUsageMode]);
+  const geminiModels = useGeminiModels(aiProvider === 'gemini' ? geminiApiKey : '', apiUsageMode, allowBusyFallback);
+  const groqModels = useGroqModels(aiProvider === 'groq' ? groqApiKey : '');
+  const aiModels = aiProvider === 'groq' ? groqModels : geminiModels;
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
   const [showResultTutorial, setShowResultTutorial] = useState(true);
   const textareaRef = useRef(null);
@@ -3116,6 +3461,7 @@ const App = () => {
   const [isTravelerModalOpen, setIsTravelerModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
+  const [generationError, setGenerationError] = useState(null);
   const [savedPlans, setSavedPlans] = useState([]);
   const [isExporting, setIsExporting] = useState(false); 
   const [copySuccess, setCopySuccess] = useState(false);
@@ -3155,11 +3501,11 @@ const App = () => {
 
   // ✅ 2. 新增：處理天氣刷新按鈕
   const handleWeatherRefresh = async (dayIndex, city, date) => {
-    if (!apiKey) return alert("需要 API Key");
+    if (!hasAIKey(apiKey)) return alert("需要 API Key");
     
     // 這裡我們不使用全域 loading，而是讓 DayTimeline 自己處理 loading 狀態
     // 所以這裡回傳 promise 讓組件去 await
-    return regenerateDayWeather(city, date, apiKey).then(result => {
+    return regenerateDayWeather(city, date, aiClient).then(result => {
         updateDayInfo(dayIndex, {
             weather_forecast: result.weather_forecast,
             clothing_suggestion: result.clothing_suggestion
@@ -3202,12 +3548,12 @@ const App = () => {
   const handleAIAddComplete = async () => {
     const { dayIndex, insertIndex, time, title, city } = addModalData;
     if (!title.trim() || !time) return alert("請輸入時間與目的地");
-    if (!apiKey) return alert("需要 API Key");
+    if (!hasAIKey(apiKey)) return alert("需要 API Key");
 
     setIsProcessingEdit(true); // 共用 loading 狀態
     try {
       // 複用原本的單點生成 API
-      const aiResult = await regenerateSingleItem(title, city, apiKey);
+      const aiResult = await regenerateSingleItem(title, city, aiClient);
       
       const newItem = {
         time,
@@ -3372,9 +3718,24 @@ const App = () => {
   };
 
   const clearApiKey = () => {
-    geminiModelCache.delete(normalizeGeminiKey(apiKey));
+    (aiProvider === 'groq' ? groqModelCache : geminiModelCache).delete(normalizeGeminiKey(apiKey));
     setApiKey('');
-    localStorage.removeItem('gemini_api_key');
+    localStorage.removeItem(aiProvider === 'groq' ? 'groq_api_key' : 'gemini_api_key');
+  };
+
+  const changeAIProvider = provider => {
+    setSelectedAIProvider(provider);
+    setErrorMsg('');
+    setGenerationError(null);
+    setShowApiKeyTutorial(false);
+  };
+
+  const switchToGroq = () => {
+    changeAIProvider('groq');
+    window.requestAnimationFrame(() => {
+      document.getElementById('ai-settings')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      document.getElementById('ai-api-key')?.focus({ preventScroll: true });
+    });
   };
 
   const loadSavedPlan = (plan) => {
@@ -3531,12 +3892,13 @@ const App = () => {
   };
 
   const generateItinerary = async () => {
-    if (!apiKey) {
-      alert("請輸入您的 Gemini API Key");
+    if (!hasAIKey(apiKey)) {
+      alert(`請輸入您的 ${providerLabel} API Key`);
       return;
     }
     setStep('loading');
     setErrorMsg('');
+    setGenerationError(null);
 
     // --- 1. 計算總天數與拆分日期陣列 ---
     let dateList = [];
@@ -3604,7 +3966,7 @@ const App = () => {
     }
 
     const modelFamily = effectiveModelType === 'pro' ? 'pro' : 'flash';
-    console.log(`開始分段生成行程 (總天數: ${totalDays}, 模型類型: ${modelFamily})`);
+    console.log(`開始分段生成行程 (總天數: ${totalDays}, AI: ${providerLabel}, 模型類型: ${aiProvider === 'groq' ? groqModel : modelFamily})`);
 
     const baseConstraints = `
       User Constraints:
@@ -3624,7 +3986,7 @@ const App = () => {
 
     try {
       const tripData = await generateTripData({
-        apiKey, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
+        apiKey: aiClient, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
       });
       const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations }, created: Date.now() };
 
@@ -3655,6 +4017,7 @@ const App = () => {
     } catch (error) {
       console.error(error);
       setErrorMsg("行程生成失敗：" + error.message);
+      setGenerationError({ provider: aiClient.provider, code: error.code });
       setStep('input');
     }
   };
@@ -3718,11 +4081,11 @@ const App = () => {
   const handleAIEditComplete = async () => {
     const { dayIndex, itemIndex, newTitle, currentTitle, city } = editModalData;
     if (!newTitle.trim()) return alert("請輸入新的地點名稱");
-    if (!apiKey) return alert("需要 API Key 才能使用 AI 功能");
+    if (!hasAIKey(apiKey)) return alert("需要 API Key 才能使用 AI 功能");
 
     setIsProcessingEdit(true);
     try {
-      const aiResult = await regenerateSingleItem(newTitle, city, apiKey);
+      const aiResult = await regenerateSingleItem(newTitle, city, aiClient);
       
       const newItinerary = { ...itineraryData };
       const oldItemData = newItinerary.days[dayIndex].timeline[itemIndex];
@@ -3803,16 +4166,29 @@ const App = () => {
 
         <div className="space-y-6">
           {/* API Key 區塊 */}
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-[#2a1e1a] dark:to-[#33241f] p-5 md:p-6 rounded-2xl border border-blue-100 dark:border-[#5d4037] shadow-inner transition-colors duration-300">
+          <div id="ai-settings" className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-[#2a1e1a] dark:to-[#33241f] p-5 md:p-6 rounded-2xl border border-blue-100 dark:border-[#5d4037] shadow-inner transition-colors duration-300">
+            <fieldset className="mb-4">
+              <legend className="text-sm font-bold text-blue-800 dark:text-sky-200 mb-2">選擇 AI 供應商</legend>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[{ value: 'gemini', title: 'Google Gemini', detail: '使用 Google AI Studio 的 API Key。' },
+                  { value: 'groq', title: 'Groq', detail: 'Gemini 持續過載時，可改用 Groq 的 API Key。' }].map(provider => (
+                  <label key={provider.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${aiProvider === provider.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
+                    <input type="radio" name="aiProvider" value={provider.value} checked={aiProvider === provider.value} onChange={() => changeAIProvider(provider.value)} className="mt-1" />
+                    <span><span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{provider.title}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{provider.detail}</span></span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">兩家的 Key 分別儲存。切換後會保留航班、住宿與需求；按下生成時，資料會送往您選擇的供應商。</p>
+            </fieldset>
             <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-bold text-blue-800 dark:text-sky-200 flex items-center gap-2">
-                <Key className="w-4 h-4" /> Gemini API Key (必填)
-                <button 
+              <label htmlFor="ai-api-key" className="block text-sm font-bold text-blue-800 dark:text-sky-200 flex items-center gap-2 flex-wrap">
+                <Key className="w-4 h-4" /> {providerLabel} API Key (必填)
+                {aiProvider === 'gemini' ? <button type="button"
                   onClick={() => setShowApiKeyTutorial(true)}
                   className="text-xs bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-200 px-2 py-0.5 rounded-full hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors flex items-center gap-1 font-normal cursor-pointer"
                 >
                   <Info className="w-3 h-3" /> 如何獲取?
-                </button>
+                </button> : <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 dark:text-sky-300 underline flex items-center gap-1 font-normal"><ExternalLink className="w-3 h-3" /> 取得 Groq API Key</a>}
               </label>
               <div className="flex gap-2">
                 <button onClick={resetForm} className="text-xs text-slate-500 dark:text-[#a08d85] hover:text-slate-700 dark:hover:text-[#ebd5c1] underline transition-colors">重置所有欄位</button>
@@ -3821,10 +4197,11 @@ const App = () => {
             </div>
             <div className="relative">
                <input 
+                 id="ai-api-key"
                  type="password" 
                  value={apiKey} 
                  onChange={(e) => setApiKey(e.target.value)} 
-                 placeholder="貼上您的 API Key (將自動儲存在本機)" 
+                 placeholder={`貼上您的 ${providerLabel} API Key (將自動儲存在本機)`}
                  className="w-full pl-4 pr-4 py-3 bg-white dark:bg-[#2c1f1b] border border-blue-200 dark:border-[#5d4037] rounded-xl focus:ring-4 focus:ring-blue-100 dark:focus:ring-[#5d4037]/50 focus:border-blue-500 dark:focus:border-sky-400 outline-none transition-all shadow-sm text-sm md:text-base dark:text-[#ebd5c1]" 
                />
             </div>
@@ -3832,19 +4209,19 @@ const App = () => {
             <fieldset className="mt-4 space-y-2">
               <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[{ value: 'free', title: '免費 API 配額', detail: 'Flash 正式版優先；各功能依序送出請求。' },
-                  { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
-                  <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
-                    <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
+                {[{ value: 'free', title: '免費 API 配額', detail: aiProvider === 'groq' ? '分小批生成完整行程；各功能依序送出請求。' : 'Flash 正式版優先；各功能依序送出請求。' },
+                  { value: 'paid', title: '已開通 API 計費', detail: aiProvider === 'groq' ? '允許較大的生成批次；費用依 Groq 帳戶計費。' : '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
+                  <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${selectedUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
+                    <input type="radio" name="apiUsageMode" value={mode.value} checked={selectedUsageMode === mode.value} onChange={() => (aiProvider === 'groq' ? setGroqUsageMode : setApiUsageMode)(mode.value)} className="mt-1" />
                     <span><span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{mode.title}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{mode.detail}</span></span>
                   </label>
                 ))}
               </div>
-              <p className="text-xs text-slate-500 dark:text-[#a08d85]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 Google 專案決定。</p>
+              <p className="text-xs text-slate-500 dark:text-[#a08d85]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 {aiProvider === 'groq' ? 'Groq 帳戶' : 'Google 專案'}決定。</p>
             </fieldset>
 
             {/* 模型選擇區塊 */}
-            <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
+            {aiProvider === 'gemini' && <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] flex items-center gap-1">
                   <Bot className="w-3 h-3" /> 選擇 AI 模型引擎 · 自動更新
@@ -3910,7 +4287,26 @@ const App = () => {
                 <span>持續忙碌時自動使用同系列備援模型（最多切換一次）。模型停用時仍會尋找可用版本。</span>
               </label>
               <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">暫時忙碌會自動等待後重試，每個模型最多重試 3 次。每日配額用完或額度為 0 時會直接提示。</p>
-            </div>
+            </div>}
+            {aiProvider === 'groq' && <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="groq-model" className="text-xs font-bold text-slate-500 dark:text-[#a08d85] flex items-center gap-1"><Bot className="w-3 h-3" /> Groq 文字模型</label>
+                {hasAIKey(apiKey) && <button type="button" onClick={groqModels.refresh} disabled={groqModels.status === 'loading'} aria-label="更新 Groq 模型清單" className="flex items-center gap-1 text-xs text-blue-600 dark:text-sky-300 disabled:opacity-50"><RefreshCw className={`w-3 h-3 ${groqModels.status === 'loading' ? 'animate-spin' : ''}`} /> 更新模型</button>}
+              </div>
+              <select id="groq-model" value={groqModel} onChange={e => setGroqModel(e.target.value)} className="w-full p-3 rounded-lg border border-blue-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b] text-sm text-slate-800 dark:text-[#ebd5c1]">
+                {groqModels.status === 'ready' && !groqModels.models.some(model => model.id === groqModel) && <option value={groqModel} disabled>目前選擇的模型已無法使用，請重新選擇</option>}
+                {Object.entries(GROQ_MODEL_CONFIG).filter(([id]) => groqModels.status !== 'ready' || groqModels.models.some(model => model.id === id)).map(([id, model]) => <option key={id} value={id}>{model.label}</option>)}
+              </select>
+              <p role="status" aria-live="polite" className="text-xs text-slate-500 dark:text-[#a08d85]">
+                {groqModels.status === 'idle' && '輸入 Groq Key 後會自動取得此帳戶可用的模型。'}
+                {groqModels.status === 'loading' && '正在取得 Groq 可用模型…'}
+                {groqModels.status === 'ready' && `已同步 ${groqModels.models.length} 個支援行程的模型。`}
+                {groqModels.status === 'error' && `模型清單更新失敗：${groqModels.error} 可按「更新模型」重試。`}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-[#a08d85]">菜單照片會使用 Groq 的 {GROQ_MODEL_CONFIG[GROQ_VISION_MODEL].label}，多張照片會分批辨識後合併。免費模式保留所有行程欄位；短時間限額會依伺服器提示等待後重試，每日額度用完會直接提示。</p>
+              {groqModels.lastUsed && <p className="text-xs text-slate-500 dark:text-[#a08d85]">上次使用：{groqModels.lastUsed.label}（{groqModels.lastUsed.id}）</p>}
+              <a href="https://console.groq.com/settings/limits" target="_blank" rel="noopener noreferrer" className="inline-flex text-xs text-blue-600 dark:text-sky-300 underline items-center gap-1"><ExternalLink className="w-3 h-3" /> 查看 Groq 實際配額</a>
+            </div>}
           </div>
           
           <section className="space-y-4">
@@ -4286,7 +4682,13 @@ const App = () => {
             <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
           </label>
         </div>
-        {errorMsg && <div className="p-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 rounded-xl flex items-center gap-2 border border-red-100 dark:border-red-800 animate-shake"><AlertTriangle className="w-5 h-5" />{errorMsg}</div>}
+        {errorMsg && <div role="alert" className="p-4 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-300 rounded-xl space-y-3 border border-red-100 dark:border-red-800 animate-shake">
+          <div className="flex items-start gap-2"><AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" /><span>{errorMsg}</span></div>
+          {aiProvider === 'gemini' && apiUsageMode === 'free' && generationError?.provider === 'gemini' && generationError.code === 'GEMINI_SERVICE_BUSY' && <div className="space-y-2">
+            <p className="text-sm">Gemini 重試後仍忙碌，可選擇 Groq 繼續規劃。切換後請確認 Groq Key，再按「開始生成」。</p>
+            <button type="button" onClick={switchToGroq} className="rounded-lg bg-blue-600 hover:bg-blue-700 px-4 py-2 text-white text-sm font-bold">切換至 Groq（保留行程資料）</button>
+          </div>}
+        </div>}
       </div>
     );
   };
@@ -4471,7 +4873,7 @@ const App = () => {
              travelers={travelerNames}
              currencySettings={currencySettings}
              isPrintMode={false} 
-             apiKey={apiKey}
+             apiKey={aiClient}
              updateItineraryItem={updateItineraryItem}
              onSavePlan={saveCurrentPlan}
              onDeleteClick={handleDeleteItem} 
@@ -4496,7 +4898,7 @@ const App = () => {
                  travelers={travelerNames}
                  currencySettings={currencySettings}
                  isPrintMode={true} 
-                 apiKey={apiKey}
+                 apiKey={aiClient}
                  updateItineraryItem={updateItineraryItem}
                  onSavePlan={saveCurrentPlan}
                  onDeleteClick={handleDeleteItem} // 傳入刪除函數
@@ -4557,10 +4959,10 @@ const App = () => {
         )}
         {step === 'saved_list' && renderSavedList()}
 
-        {geminiModels.requestState && (
+        {aiModels.requestState && (
           <div role="status" aria-live="polite" className="fixed bottom-4 left-4 right-4 mx-auto max-w-xl z-[1100] flex items-start gap-2 rounded-xl border border-blue-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b] p-4 shadow-lg text-sm text-blue-700 dark:text-sky-300">
             <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
-            <span>{geminiModels.requestState.message}</span>
+            <span>{aiModels.requestState.message}</span>
           </div>
         )}
 
@@ -4568,7 +4970,7 @@ const App = () => {
         <MenuHelperModal 
           isOpen={isMenuModalOpen}
           onClose={() => setIsMenuModalOpen(false)}
-          apiKey={apiKey}
+          apiKey={aiClient}
           currencySymbol={currencySettings.symbol}
         />
         
