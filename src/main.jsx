@@ -468,6 +468,8 @@ const GROQ_MODEL_CONFIG = {
 const GROQ_DEFAULT_MODEL = 'openai/gpt-oss-120b';
 const GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
 const GROQ_FREE_TOKEN_BUDGET = 8000;
+const GROQ_TOKEN_WINDOW_MS = 60000;
+const GROQ_QUOTA_GRACE_MS = 300;
 const groqModelCache = new globalThis.Map();
 const groqModelListeners = new Set();
 
@@ -493,7 +495,7 @@ function getGroqCache(apiKey) {
   if (!groqModelCache.has(key)) groqModelCache.set(key, {
     models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
     queue: Promise.resolve(), requestStates: new globalThis.Map(), lastUsed: null,
-    tokenLimits: new globalThis.Map(),
+    tokenLimits: new globalThis.Map(), tokenBuckets: new globalThis.Map(),
   });
   return groqModelCache.get(key);
 }
@@ -510,11 +512,11 @@ function setGroqRequestState(key, requestId, message) {
 }
 
 function parseGroqDuration(value) {
-  if (!value) return null;
-  const text = String(value).trim();
-  if (/^(?:\d+(?:\.\d+)?[hms])+$/.test(text)) {
-    return [...text.matchAll(/(\d+(?:\.\d+)?)([hms])/g)].reduce((sum, match) =>
-      sum + Number(match[1]) * ({ h: 3600000, m: 60000, s: 1000 }[match[2]]), 0);
+  if (value == null || value === '') return null;
+  const text = String(value).trim().toLowerCase();
+  if (/^(?:\d+(?:\.\d+)?(?:ms|[hms]))+$/.test(text)) {
+    return [...text.matchAll(/(\d+(?:\.\d+)?)(ms|[hms])/g)].reduce((sum, match) =>
+      sum + Number(match[1]) * ({ h: 3600000, m: 60000, s: 1000, ms: 1 }[match[2]]), 0);
   }
   return parseGeminiRetryDelay(value);
 }
@@ -522,15 +524,80 @@ function parseGroqDuration(value) {
 function getGroqRetryInfo(error) {
   const text = `${error.code || ''} ${error.message || ''}`;
   const daily = /\b(?:RPD|TPD)\b|requests per day|tokens per day|daily|insufficient_quota/i.test(text);
-  const tooLarge = /request too large|reduce (?:your )?(?:message|input)|maximum context length|context_length_exceeded/i.test(text);
-  const messageDelay = parseGroqDuration(text.match(/try again in ([\d.hms]+)/i)?.[1]);
+  const sizeError = /request too large|reduce (?:your )?(?:message|input)|maximum context length|context_length_exceeded/i.test(text);
+  // 只擷取完整的數字＋時間單位；句尾的句點不能成為 duration 的一部分。
+  const messageDelay = parseGroqDuration(text.match(/try again in\s+((?:\d+(?:\.\d+)?(?:ms|[hms]))+)/i)?.[1]);
   const delays = [error.retryAfterMs, error.status === 429 ? error.resetTokensMs : null, messageDelay]
     .filter(delay => Number.isFinite(delay) && delay >= 0);
+  const tokenWindow = /tokens per minute|\bTPM\b/i.test(text);
+  const readNumber = name => {
+    const match = tokenWindow ? text.match(new RegExp(`\\b${name}\\s*[:=]?\\s*([\\d,]+)`, 'i')) : null;
+    return match ? Number(match[1].replaceAll(',', '')) : null;
+  };
+  const tokenLimit = readNumber('Limit');
+  const usedTokens = readNumber('Used');
+  const requestedTokens = readNumber('Requested');
+  const tooLarge = sizeError || (error.status === 429 && !daily && tokenLimit > 0 && requestedTokens > tokenLimit);
+  const refillDelay = tokenLimit > 0 && usedTokens !== null && requestedTokens > 0 && requestedTokens <= tokenLimit
+    ? Math.ceil(Math.max(0, usedTokens + requestedTokens - tokenLimit) * GROQ_TOKEN_WINDOW_MS / tokenLimit) : null;
+  if (error.status === 429 && !daily && !tooLarge && refillDelay > 0) delays.push(refillDelay);
   return {
-    daily, tooLarge, serverDelayMs: delays.length ? Math.max(...delays) : null,
+    daily, tooLarge, tokenLimit, usedTokens, requestedTokens,
+    serverDelayMs: delays.length ? Math.max(...delays) : null,
     retryable: [408, 500, 502, 503, 504].includes(error.status)
       || (error.status === 429 && !daily && !tooLarge && delays.length > 0),
   };
+}
+
+function getGroqTokenBucket(key, modelId, fallbackLimit = Infinity) {
+  const cache = getGroqCache(key);
+  const limit = cache.tokenLimits.get(modelId) || fallbackLimit;
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  let bucket = cache.tokenBuckets.get(modelId);
+  if (!bucket) {
+    bucket = { limit, available: limit, measuredAt: Date.now() };
+    cache.tokenBuckets.set(modelId, bucket);
+  }
+  const elapsed = Math.max(0, Date.now() - bucket.measuredAt);
+  bucket.available = Math.min(limit, Math.max(0, bucket.available + elapsed * bucket.limit / GROQ_TOKEN_WINDOW_MS));
+  bucket.limit = limit;
+  bucket.measuredAt = Date.now();
+  return bucket;
+}
+
+function recordGroqQuota(key, modelId, response, data, requestTokens, fallbackLimit) {
+  if (!modelId) return;
+  const cache = getGroqCache(key);
+  const headerLimit = Number(response.headers?.get?.('x-ratelimit-limit-tokens'));
+  if (headerLimit > 0) cache.tokenLimits.set(modelId, headerLimit);
+  const info = getGroqRetryInfo({ status: response.status, code: data.error?.code, message: data.error?.message });
+  if (response.status === 429 && !info.daily && info.tokenLimit > 0) cache.tokenLimits.set(modelId, info.tokenLimit);
+  const bucket = getGroqTokenBucket(key, modelId, fallbackLimit);
+  if (!bucket) return;
+  const remainingHeader = response.headers?.get?.('x-ratelimit-remaining-tokens');
+  const remaining = remainingHeader != null && String(remainingHeader).trim() !== '' ? Number(remainingHeader) : NaN;
+  if (Number.isFinite(remaining) && remaining >= 0) bucket.available = Math.min(bucket.limit, remaining);
+  else if (response.status === 429 && !info.daily && info.usedTokens !== null) {
+    bucket.available = Math.max(0, bucket.limit - info.usedTokens);
+  } else if (response.ok && !data.error) {
+    const usage = Number(data.usage?.total_tokens);
+    const cachedValue = Number(data.usage?.prompt_tokens_details?.cached_tokens || 0);
+    const cached = Number.isFinite(cachedValue) && cachedValue >= 0 ? cachedValue : 0;
+    const charged = Number.isFinite(usage) && usage >= 0 ? Math.max(0, usage - cached) : requestTokens;
+    bucket.available = Math.max(0, bucket.available - charged);
+  }
+  bucket.measuredAt = Date.now();
+}
+
+async function waitGroqQuota(key, model, requestTokens, requestId, fallbackLimit) {
+  const bucket = getGroqTokenBucket(key, model.id, fallbackLimit);
+  if (!bucket || requestTokens > bucket.limit) return;
+  const missing = Math.max(0, requestTokens - bucket.available);
+  if (!missing) return;
+  const delayMs = Math.ceil(missing * GROQ_TOKEN_WINDOW_MS / bucket.limit) + GROQ_QUOTA_GRACE_MS;
+  setGroqRequestState(key, requestId, `Groq 每分鐘配額恢復中，約 ${Math.ceil(delayMs / 1000)} 秒後繼續此段；已完成的行程會保留。`);
+  await new Promise(resolve => setTimeout(resolve, delayMs));
+  setGroqRequestState(key, requestId, `配額等待完成，正在使用 ${model.label} 繼續生成…`);
 }
 
 function explainGroqError(error) {
@@ -554,7 +621,7 @@ function explainGroqError(error) {
   return message ? Object.assign(new Error(message, { cause: error }), error, { message, code }) : error;
 }
 
-async function fetchGroqJson(path, apiKey, options = {}, model = '') {
+async function fetchGroqJson(path, apiKey, options = {}, model = '', requestTokens = 0, fallbackLimit = Infinity) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.method === 'POST' ? 180000 : 20000);
   try {
@@ -562,13 +629,12 @@ async function fetchGroqJson(path, apiKey, options = {}, model = '') {
       ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${normalizeGeminiKey(apiKey)}` },
       signal: controller.signal,
     });
-    const tokenLimit = Number(response.headers?.get?.('x-ratelimit-limit-tokens'));
-    if (model && tokenLimit > 0) getGroqCache(apiKey).tokenLimits.set(model, tokenLimit);
     let data;
     try { data = await response.json(); } catch {
       if (response.ok) throw new Error('Groq 回傳的資料不是有效的 JSON。');
       data = {};
     }
+    recordGroqQuota(apiKey, model, response, data, requestTokens, fallbackLimit);
     if (!response.ok || data.error) {
       const error = Object.assign(new Error(data.error?.message || `Groq HTTP ${response.status}`), {
         status: response.status, code: data.error?.code || data.error?.type,
@@ -684,15 +750,19 @@ function estimateGroqInput(messages) {
   return tokens;
 }
 
-async function fetchGroqWithRetry(key, model, body, requestId) {
+async function fetchGroqWithRetry(key, model, body, requestId, tokenBudget) {
+  let requestTokens = estimateGroqInput(body.messages) + body.max_completion_tokens;
   for (let retry = 0; retry <= GEMINI_MAX_TRANSIENT_RETRIES; retry++) {
     try {
-      return await fetchGroqJson('chat/completions', key, { method: 'POST', body: JSON.stringify(body) }, model.id);
+      await waitGroqQuota(key, model, requestTokens, requestId, tokenBudget);
+      return await fetchGroqJson('chat/completions', key, { method: 'POST', body: JSON.stringify(body) }, model.id, requestTokens, tokenBudget);
     } catch (error) {
       const info = getGroqRetryInfo(error);
       if (!info.retryable || retry === GEMINI_MAX_TRANSIENT_RETRIES) throw error;
-      const delayMs = Math.max(info.serverDelayMs || 0, 1000 * 2 ** retry + Math.floor(Math.random() * 500));
-      if (delayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+      if (error.status === 429 && info.requestedTokens > 0 && info.requestedTokens <= (info.tokenLimit || tokenBudget)) requestTokens = info.requestedTokens;
+      const serverWait = info.serverDelayMs || 0;
+      if (serverWait > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+      const delayMs = Math.max(serverWait ? serverWait + GROQ_QUOTA_GRACE_MS : 0, 1000 * 2 ** retry + Math.floor(Math.random() * 500));
       setGroqRequestState(key, requestId, `Groq ${error.status === 429 ? '已達短時間配額' : '暫時忙碌'}，${Math.ceil(delayMs / 1000)} 秒後重試（${retry + 1}/${GEMINI_MAX_TRANSIENT_RETRIES}）。`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       setGroqRequestState(key, requestId, `正在重試 ${model.label}…`);
@@ -745,7 +815,7 @@ async function performGroqRequest(client, payload) {
     if (payload.generationConfig?.temperature != null) body.temperature = payload.generationConfig.temperature;
     if (payload.generationConfig?.topP != null) body.top_p = payload.generationConfig.topP;
     for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
-      const data = convertGroqResponse(await fetchGroqWithRetry(key, model, body, requestId));
+      const data = convertGroqResponse(await fetchGroqWithRetry(key, model, body, requestId, accountBudget));
       try { getGeminiText(data); } catch (error) {
         if (error.code === 'GEMINI_OUTPUT_TRUNCATED' && lengthAttempt === 0 && body.max_completion_tokens < ceiling) {
           body.max_completion_tokens = Math.min(body.max_completion_tokens * 2, ceiling);
