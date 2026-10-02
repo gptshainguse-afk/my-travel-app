@@ -34,6 +34,8 @@ const GEMINI_MAX_TRANSIENT_RETRIES = 3;
 const GEMINI_FREE_MAX_TRANSIENT_RETRIES = 1;
 const GEMINI_FREE_RETRY_DELAY_MS = 30000;
 const GEMINI_FREE_DISCOVERY_WAIT_MS = 15000;
+const GEMINI_FREE_MAX_HTTP_ATTEMPTS = 4;
+const GEMINI_MODEL_PROFILE_MS = 24 * 60 * 60 * 1000;
 const GEMINI_MAX_RETRY_WAIT_MS = 60000;
 const GEMINI_BUSY_COOLDOWN_MS = 60000;
 const GEMINI_FREE_PACING_KEY = 'gemini_free_request_pacing';
@@ -50,11 +52,105 @@ function getGeminiCache(apiKey) {
     geminiModelCache.set(key, {
       models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
       unavailable: new Set(), busyUntil: new globalThis.Map(), lastUsed: {},
+      modelProfiles: new globalThis.Map(), profilePromise: null, profileStorageKey: '',
       policy: { mode: 'paid', allowBusyFallback: false }, queue: Promise.resolve(),
       requestStates: new globalThis.Map(),
     });
   }
   return geminiModelCache.get(key);
+}
+
+async function hydrateGeminiModelProfiles(key) {
+  const cache = getGeminiCache(key);
+  if (cache.profilePromise) return cache.profilePromise;
+  cache.profilePromise = (async () => {
+    // 只保存模型狀態；儲存索引用 SHA-256，不把 API Key 再寫進診斷資料。
+    if (!globalThis.crypto?.subtle || typeof TextEncoder !== 'function') return;
+    try {
+      const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+      cache.profileStorageKey = `gemini_model_profiles_${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+      const saved = JSON.parse(globalThis.localStorage?.getItem(cache.profileStorageKey) || 'null');
+      if (saved?.revision !== 1 || !Array.isArray(saved.models)) return;
+      const now = Date.now();
+      for (const [id, profile] of saved.models.slice(0, 100)) {
+        if (!/^gemini-[a-z0-9.-]+$/.test(id) || !profile || typeof profile !== 'object') continue;
+        const future = value => Number.isFinite(value) && value > now && value <= now + GEMINI_MODEL_PROFILE_MS ? value : 0;
+        const succeeded = Number.isFinite(profile.succeededAt) && profile.succeededAt <= now && now - profile.succeededAt < GEMINI_MODEL_PROFILE_MS ? profile.succeededAt : 0;
+        cache.modelProfiles.set(id, { unavailableUntil: future(profile.unavailableUntil),
+          schemaStyle: profile.schemaStyle === 'plain' && future(profile.schemaUntil) ? 'plain' : 'legacy',
+          schemaUntil: future(profile.schemaUntil), succeededAt: succeeded });
+      }
+    } catch { /* 非安全來源或儲存不可用時，仍保留當頁的模型狀態。 */ }
+  })();
+  return cache.profilePromise;
+}
+
+function saveGeminiModelProfiles(cache) {
+  if (!cache.profileStorageKey) return;
+  try { globalThis.localStorage?.setItem(cache.profileStorageKey, JSON.stringify({ revision: 1, models: [...cache.modelProfiles].slice(-100) })); }
+  catch { /* 儲存空間不足時不影響已取得的結果。 */ }
+}
+
+function setGeminiModelProfile(cache, id, updates) {
+  cache.modelProfiles.set(id, { ...cache.modelProfiles.get(id), ...updates });
+  saveGeminiModelProfiles(cache);
+}
+
+function toGeminiResponseSchema(schema) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) throw new Error('JSON 回覆結構必須是物件。');
+  const converted = {};
+  const types = { object: 'OBJECT', array: 'ARRAY', string: 'STRING', integer: 'INTEGER', number: 'NUMBER', boolean: 'BOOLEAN' };
+  if (!types[schema.type]) throw new Error(`JSON 回覆結構不支援類型 ${schema.type || '未指定'}。`);
+  converted.type = types[schema.type];
+  for (const name of ['description', 'format', 'minimum', 'maximum', 'nullable']) if (Object.hasOwn(schema, name)) converted[name] = schema[name];
+  if (schema.enum) converted.enum = [...schema.enum];
+  for (const name of ['minItems', 'maxItems', 'minLength', 'maxLength']) if (Object.hasOwn(schema, name)) converted[name] = String(schema[name]);
+  if (schema.properties) {
+    converted.properties = Object.fromEntries(Object.entries(schema.properties).map(([name, child]) => [name, toGeminiResponseSchema(child)]));
+    converted.propertyOrdering = Object.keys(schema.properties);
+  }
+  if (schema.required) converted.required = [...schema.required];
+  if (schema.items) converted.items = toGeminiResponseSchema(schema.items);
+  // responseSchema 接受 OpenAPI 子集，不能直接放 JSON Schema 的 additionalProperties。
+  return converted;
+}
+
+function getGeminiSchemaPayload(payload, style) {
+  const original = payload.generationConfig;
+  if (!original?.responseJsonSchema && !original?.responseSchema && original?.responseMimeType !== 'application/json') return payload;
+  const schema = original.responseJsonSchema || original.responseSchema;
+  if (style !== 'plain' && !schema) return payload;
+  const generationConfig = { ...original };
+  delete generationConfig.responseJsonSchema;
+  delete generationConfig.responseSchema;
+  if (style !== 'plain') {
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseSchema = original.responseJsonSchema ? toGeminiResponseSchema(schema) : schema;
+    return { ...payload, generationConfig };
+  }
+  delete generationConfig.responseMimeType;
+  const instruction = `Return ONLY valid JSON, without Markdown. ${schema
+    ? `Preserve every required field in this output structure: ${JSON.stringify(schema)}`
+    : 'Preserve all fields and output structures requested above.'}`;
+  const contents = (payload.contents || []).map((content, index, all) => index === all.length - 1
+    ? { ...content, parts: [...(content.parts || []), { text: instruction }] } : content);
+  return { ...payload, contents, generationConfig };
+}
+
+function getGeminiParameterIssues(error) {
+  return (Array.isArray(error.details) ? error.details : []).flatMap(detail =>
+    Array.isArray(detail.fieldViolations) ? detail.fieldViolations : []).map(violation =>
+      `${violation.field || '參數'}：${violation.description || '內容無效'}`).slice(0, 4);
+}
+
+function isGeminiSchemaCompatibilityError(error, body) {
+  if (error.status !== 400 || !(body.generationConfig?.responseSchema || body.generationConfig?.responseMimeType === 'application/json')) return false;
+  const issues = getGeminiParameterIssues(error);
+  const schemaField = /response_?schema|response_?json_?schema|response_?mime_?type|additionalProperties|propertyOrdering/i;
+  if (issues.length) return issues.every(issue => schemaField.test(issue));
+  if (schemaField.test(error.message || '')) return true;
+  // Google 有時只回 INVALID_ARGUMENT；有 schema 的請求最多改一次格式，不重送相同 body。
+  return /^Request contains an invalid argument[.!]?$|^Invalid argument[.!]?$/i.test(error.message || '');
 }
 
 function notifyGeminiModels(key) {
@@ -173,6 +269,7 @@ function getGeminiRetryInfo(error) {
 }
 
 function explainGeminiError(error) {
+  if (error.code === 'GEMINI_REQUEST_LIMIT') return error;
   const info = getGeminiRetryInfo(error);
   let message;
   let code = error.code;
@@ -194,6 +291,10 @@ function explainGeminiError(error) {
     message = '這把 API Key 沒有使用此資源的權限，請檢查 Google 專案與 API Key 權限。';
   } else if (error.status === 402) {
     message = 'Gemini API 計費餘額不足，請到 Google AI Studio 檢查計費設定。';
+  } else if ([400, 404].includes(error.status)) {
+    const issues = getGeminiParameterIssues(error);
+    message = `${error.modelId ? `${formatGeminiModel(error.modelId)} ` : 'Gemini '}請求失敗（HTTP ${error.status}）：${error.message}${issues.length ? ` 參數原因：${issues.join('；')}` : ''} 已保留填寫資料。`;
+    code = error.status === 400 ? 'GEMINI_INVALID_REQUEST' : 'GEMINI_MODEL_UNAVAILABLE';
   }
   return message ? Object.assign(new Error(message, { cause: error }), error, { message, code }) : error;
 }
@@ -201,11 +302,19 @@ function explainGeminiError(error) {
 async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retryBudget) {
   const maxRetries = policy.mode === 'free' ? GEMINI_FREE_MAX_TRANSIENT_RETRIES : GEMINI_MAX_TRANSIENT_RETRIES;
   for (let retry = 0; retry <= maxRetries; retry++) {
+    if (policy.mode === 'free' && retryBudget.attempts >= GEMINI_FREE_MAX_HTTP_ATTEMPTS) {
+      throw Object.assign(new Error(`這次需求已嘗試 ${GEMINI_FREE_MAX_HTTP_ATTEMPTS} 次，先停止送出以避免快速消耗 RPM。${retryBudget.lastError?.message || '請稍後重試。'} 已保留填寫資料。`), {
+        status: retryBudget.lastError?.status || 503, code: 'GEMINI_REQUEST_LIMIT', modelId: model.id,
+      });
+    }
     await paceGeminiAttempt(apiKey, model, policy, requestId);
     try {
+      retryBudget.attempts++;
       return await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, apiKey,
         { method: 'POST', body: JSON.stringify(body) }, 180000);
     } catch (error) {
+      error.modelId = model.id;
+      retryBudget.lastError = error;
       const info = getGeminiRetryInfo(error);
       if (policy.mode === 'free' && info.serverDelayMs > 0) {
         const pacing = getGeminiFreePacing(model.type);
@@ -280,7 +389,7 @@ function compareGeminiModels(a, b) {
 function compareFreeGeminiModels(a, b) {
   const rank = { stable: 0, preview: 1, alias: 2 };
   if (a.stage !== b.stage) return rank[a.stage] - rank[b.stage];
-  // 免費主規劃採清單中較早的正式 Flash，同版本仍優先最新修訂。
+  // 免費主規劃採目前可用世代中較早的正式 Flash，同版本仍優先最新修訂。
   // 版本號不代表價格、剩餘配額或即時負載；不猜已退役的模型名稱。
   if (a.type === 'flash' && b.type === 'flash') {
     for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
@@ -334,8 +443,12 @@ async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
     if (!response.ok || data.error) {
       const apiCode = Number(data.error?.code);
       const status = apiCode >= 400 && apiCode <= 599 ? apiCode : response.status;
-      throw Object.assign(new Error(data.error?.message || `Gemini 請求失敗（HTTP ${status}）`), {
-        status, apiStatus: data.error?.status || data.error?.code, details: data.error?.details, retryAfterMs,
+      const key = normalizeGeminiKey(apiKey);
+      const redact = value => typeof value === 'string' && key ? value.replaceAll(key, '[API Key]') : value;
+      const details = data.error?.details == null ? undefined
+        : JSON.parse(JSON.stringify(data.error.details, (_name, value) => redact(value)));
+      throw Object.assign(new Error(redact(data.error?.message) || `Gemini 請求失敗（HTTP ${status}）`), {
+        status, apiStatus: data.error?.status || data.error?.code, details, retryAfterMs,
       });
     }
     return data;
@@ -351,6 +464,7 @@ async function loadGeminiModels(apiKey, force = false) {
   const key = normalizeGeminiKey(apiKey);
   if (!key) throw new Error('請先輸入 Gemini API Key。');
   const cache = getGeminiCache(key);
+  await hydrateGeminiModelProfiles(key);
   if (cache.pending) return cache.pending;
   if (!force && cache.retryAfter > Date.now()) throw cache.error;
   if (!force && cache.updatedAt && Date.now() - cache.updatedAt < GEMINI_MODEL_CACHE_MS) return cache.models;
@@ -372,7 +486,7 @@ async function loadGeminiModels(apiKey, force = false) {
       } while (pageToken);
       cache.models = [...new globalThis.Map(models.map(model => [model.id, model])).values()].sort(compareGeminiModels);
       cache.updatedAt = Date.now();
-      cache.unavailable.clear();
+      cache.unavailable = new Set([...cache.unavailable].filter(id => cache.modelProfiles.get(id)?.unavailableUntil > Date.now()));
       cache.retryAfter = 0;
       return cache.models;
     } catch (error) {
@@ -396,23 +510,34 @@ function getGeminiCandidates(apiKey, type, policy = getGeminiCache(apiKey).polic
     const listed = cache.models.filter(model => model.type === candidateType);
     if (policy.mode === 'free' && cache.updatedAt && !listed.length) return [];
     // 先使用清單中的具體版本，首頁名稱與實際請求相同；清單失敗時使用官方 latest alias。
-    const concrete = listed.filter(model => model.stage !== 'alias')
-      .sort(policy.mode === 'free' ? compareFreeGeminiModels : compareGeminiModels);
+    const preferCurrent = policy.mode === 'free' && candidateType === 'flash'
+      && listed.some(model => model.stage === 'stable' && model.version?.[0] >= 3);
+    const concrete = listed.filter(model => model.stage !== 'alias').sort((a, b) => {
+      if (preferCurrent) {
+        const legacyDifference = Number(a.version[0] < 3) - Number(b.version[0] < 3);
+        if (legacyDifference) return legacyDifference;
+      }
+      return policy.mode === 'free' ? compareFreeGeminiModels(a, b) : compareGeminiModels(a, b);
+    });
     const aliases = listed.filter(model => model.stage === 'alias');
     return [...concrete, ...aliases, { id: GEMINI_MODEL_CONFIG[candidateType].alias, type: candidateType }];
   });
   const usable = [...new globalThis.Map(candidates.map(model => [model.id, model])).values()].filter(model =>
-    !cache.unavailable.has(model.id) && !(cache.busyUntil.get(model.id) > Date.now()));
-  return usable.filter(model => {
+    !cache.unavailable.has(model.id) && !(cache.modelProfiles.get(model.id)?.unavailableUntil > Date.now()) && !(cache.busyUntil.get(model.id) > Date.now()));
+  const candidatesByStatus = usable.filter(model => {
     if (model.version?.length && model.stage !== 'alias') return true;
     const knownVersions = cache.models.filter(version => version.type === model.type && version.stage !== 'alias');
     if (policy.mode === 'free' && knownVersions.length && knownVersions.every(version =>
-      cache.unavailable.has(version.id) || cache.busyUntil.get(version.id) > Date.now())) return false;
+      cache.unavailable.has(version.id) || cache.modelProfiles.get(version.id)?.unavailableUntil > Date.now() || cache.busyUntil.get(version.id) > Date.now())) return false;
     const hasBusyVersion = cache.models.some(version => version.type === model.type && version.stage !== 'alias'
       && cache.busyUntil.get(version.id) > Date.now());
     // 所有已知具體版本都在冷卻時，不用 latest 別名繞過剛才的忙碌等待。
     return !hasBusyVersion || usable.some(version => version.type === model.type && version.version?.length && version.stage !== 'alias');
   });
+  if (policy.mode !== 'free') return candidatesByStatus;
+  const verified = candidatesByStatus.filter(model => model.type === family && cache.modelProfiles.get(model.id)?.succeededAt > Date.now() - GEMINI_MODEL_PROFILE_MS)
+    .sort((a, b) => cache.modelProfiles.get(b.id).succeededAt - cache.modelProfiles.get(a.id).succeededAt)[0];
+  return verified ? [verified, ...candidatesByStatus.filter(model => model.id !== verified.id)] : candidatesByStatus;
 }
 
 function getGeminiText(data) {
@@ -471,21 +596,36 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
   let lastError;
   let busyFallbacks = 0;
   let backupModel = null;
-  const retryBudget = { used: 0 }; // 免費同一筆需求共用一次重試，備援或擴充輸出不會重設。
+  const retryBudget = { used: 0, attempts: 0, lastError: null, schemaFallbackUsed: false };
   for (let attempt = 0; attempt < (policy.mode === 'free' ? 8 : 4); attempt++) {
     const model = backupModel || getGeminiCandidates(key, family, policy).find(candidate => !attempted.has(candidate.id));
     backupModel = null;
     if (!model) break;
     attempted.add(model.id);
     try {
-      const generationConfig = payload.generationConfig ? { ...payload.generationConfig } : undefined;
+      const profile = cache.modelProfiles.get(model.id);
+      let schemaStyle = profile?.schemaStyle === 'plain' && profile.schemaUntil > Date.now() ? 'plain' : 'legacy';
+      let modelPayload = getGeminiSchemaPayload(payload, schemaStyle);
+      let generationConfig = modelPayload.generationConfig ? { ...modelPayload.generationConfig } : undefined;
       if (generationConfig?.maxOutputTokens && model.outputTokenLimit) {
         generationConfig.maxOutputTokens = Math.min(generationConfig.maxOutputTokens, model.outputTokenLimit);
       }
       let data;
       for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
-        const body = generationConfig ? { ...payload, generationConfig } : payload;
-        data = await fetchGeminiWithRetry(key, model, body, requestId, policy, retryBudget);
+        let body = generationConfig ? { ...modelPayload, generationConfig } : modelPayload;
+        try {
+          data = await fetchGeminiWithRetry(key, model, body, requestId, policy, retryBudget);
+        } catch (error) {
+          if (schemaStyle === 'plain' || retryBudget.schemaFallbackUsed || !isGeminiSchemaCompatibilityError(error, body)) throw error;
+          retryBudget.schemaFallbackUsed = true;
+          schemaStyle = 'plain';
+          setGeminiRequestState(key, requestId, `${model.label || formatGeminiModel(model.id)} 不接受 JSON 格式設定，改用一次相容請求…`);
+          modelPayload = getGeminiSchemaPayload(payload, 'plain');
+          generationConfig = { ...modelPayload.generationConfig, maxOutputTokens: generationConfig?.maxOutputTokens };
+          if (!generationConfig.maxOutputTokens) delete generationConfig.maxOutputTokens;
+          body = { ...modelPayload, generationConfig };
+          data = await fetchGeminiWithRetry(key, model, body, requestId, policy, retryBudget);
+        }
         try {
           getGeminiText(data); // 只接受完整回應，避免把半截 JSON 當成行程。
           break;
@@ -501,10 +641,13 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       }
       cache.lastUsed[family] = { id: data.modelVersion || model.id, label: formatGeminiModel(data.modelVersion || model.id), requested: model.id };
       cache.busyUntil.delete(model.id);
+      cache.unavailable.delete(model.id);
+      setGeminiModelProfile(cache, model.id, { unavailableUntil: 0, succeededAt: Date.now(), schemaStyle, schemaUntil: Date.now() + GEMINI_MODEL_PROFILE_MS });
       notifyGeminiModels(key);
       return data;
     } catch (error) {
       lastError = error;
+      if (error.code === 'GEMINI_REQUEST_LIMIT') throw error;
       if (error.status === 503) {
         if (error.code === 'GEMINI_BUSY_COOLDOWN') throw error;
         const serverDelayMs = getGeminiRetryInfo(error).serverDelayMs || 0;
@@ -536,6 +679,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       // 不重送同一個零配額模型；Key、專案、每日額度或格式錯誤仍立即回報。
       if (!unavailable && !noModelQuota) throw error;
       cache.unavailable.add(model.id);
+      if (unavailable) setGeminiModelProfile(cache, model.id, { unavailableUntil: Date.now() + GEMINI_MODEL_PROFILE_MS, succeededAt: 0 });
       if (noModelQuota) cache.models.filter(candidate => candidate.stage !== 'alias'
         && isGeminiModelWithoutQuota(error, candidate)).forEach(candidate => cache.unavailable.add(candidate.id));
       if (unavailable && !refreshed) {
@@ -4624,7 +4768,7 @@ const App = () => {
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
                 <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，保留具名景點、用餐與概略路線；依交通時間切換城市，以住宿地區安排起終點，省略長篇指南、菜單與天氣。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。AI 未完成時顯示原因並保留資料，不以制式散步範本代替。</p>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先清單中較早的正式 Flash；取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。模型版本較早不代表一定較便宜或不會過載，實際額度請在 AI Studio 確認。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
                 {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
                   <summary className="cursor-pointer">查看查詢到的文字模型（{geminiModels.listedModels.length} 個）</summary>
                   <ul className="mt-1 space-y-1">{geminiModels.listedModels.map(model => <li key={model.id}>{model.label} · {model.id}</li>)}</ul>
