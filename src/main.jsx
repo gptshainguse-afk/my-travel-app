@@ -1693,6 +1693,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         <div className="relative z-10">
            <div className="flex items-end gap-2 mb-2">{isPrintMode ? (<h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>) : (<input value={day.city} onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })} className="bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/70 drop-shadow-sm" placeholder="輸入城市名稱" />)}</div>
            <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : ''}`}><Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> {isPrintMode ? <span>{day.title}</span> : (<input value={day.title} onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })} className="bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full md:w-1/2 transition-colors placeholder-sky-100/70" placeholder="輸入行程主題" />)}</div>
+           {day.planning_notes && <p className="mt-3 text-xs text-white/90">{day.planning_notes}</p>}
            {(day.weather_forecast || day.clothing_suggestion) && (<div className={`mt-4 flex flex-wrap gap-3 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>{day.weather_forecast && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-sky-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}><CloudSun className="w-4 h-4" /><span>{day.weather_forecast}</span></div>)}{day.clothing_suggestion && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-orange-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}><Shirt className="w-4 h-4" /><span>{day.clothing_suggestion}</span></div>)}{!isPrintMode && (<button onClick={handleWeatherClick} disabled={isRefreshingWeather} className={`p-2 rounded-full bg-white/20 hover:bg-white/40 transition-all text-white ${isRefreshingWeather ? 'animate-spin' : 'hover:rotate-180'}`} title="重新預測天氣"><RefreshCw className="w-5 h-5" /></button>)}</div>)}
         </div>
       </div>
@@ -1719,7 +1720,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
 
                     <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
                       <div>
-                        {editingTimeId === timelineIndex && !isPrintMode ? (<input type="time" defaultValue={item.time} autoFocus onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }} onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }} className="bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-sm font-bold border-2 border-sky-200 outline-none mb-2 font-mono" />) : (<div onClick={() => !isPrintMode && setEditingTimeId(timelineIndex)} className={`inline-flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-xs md:text-sm font-bold mb-2 cursor-pointer hover:bg-sky-100 transition-colors ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`} title="點擊修改時間"><Clock className={`w-3.5 h-3.5 ${isPrintMode ? 'hidden' : ''}`} />{item.time}</div>)}
+                        {editingTimeId === timelineIndex && !isPrintMode ? (<input type="time" defaultValue={item.time} autoFocus onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }} onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }} className="bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-sm font-bold border-2 border-sky-200 outline-none mb-2 font-mono" />) : (<div onClick={() => !isPrintMode && setEditingTimeId(timelineIndex)} className={`inline-flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-xs md:text-sm font-bold mb-2 cursor-pointer hover:bg-sky-100 transition-colors ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`} title="點擊修改時間"><Clock className={`w-3.5 h-3.5 ${isPrintMode ? 'hidden' : ''}`} />{item.time_estimated && item.time !== '待確認' ? '約 ' : ''}{item.time}</div>)}
                         <h4 className="font-bold text-xl md:text-2xl text-slate-700 flex flex-wrap items-center gap-2">{item.title}{item.price_level && <span className={`text-[10px] md:text-xs px-2 py-1 rounded-full font-bold ${isPrintMode ? 'border-black text-black border' : item.price_level === 'High' ? 'bg-rose-100 text-rose-600' : item.price_level === 'Mid' ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}`}>{item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}</span>}</h4>
                       </div>
                       <div className={`flex items-center gap-1 ${isPrintMode ? 'hidden' : ''}`}>
@@ -1736,7 +1737,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                              </span>
                          </label>
 
-                         <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2.5 rounded-full transition-colors relative ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-300 hover:bg-violet-50 hover:text-violet-500'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>
+                         {(day.planning_mode !== 'basic' || getGeminiCache(apiKey).policy.mode === 'paid') && <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2.5 rounded-full transition-colors relative ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-300 hover:bg-violet-50 hover:text-violet-500'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>}
                       </div>
                     </div>
                     <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line pl-2 ${isPrintMode ? 'text-black pl-0' : ''}`}>{item.description}</div>
@@ -3108,8 +3109,8 @@ function mergeTripItemDetails(item, details) {
 }
 
 const TRIP_CHECKPOINT_KEY = 'gemini_trip_generation_checkpoint';
-const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily }) =>
-  JSON.stringify({ revision: 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
+const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily, planningMode = 'full' }) =>
+  JSON.stringify({ revision: planningMode === 'basic' ? 'basic-itinerary-1' : 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
 function readTripCheckpoint(signature) {
   try {
     const saved = JSON.parse(globalThis.localStorage?.getItem(TRIP_CHECKPOINT_KEY) || 'null');
@@ -3123,7 +3124,223 @@ function clearTripCheckpoint() {
   try { globalThis.localStorage?.removeItem(TRIP_CHECKPOINT_KEY); } catch { /* 不影響已完成的行程。 */ }
 }
 
-async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null }) {
+const basicTripText = (value, length = 100) => bookingText(value).slice(0, length);
+const basicStayArea = stay => basicTripText(stay?.address || stay?.name);
+
+function getBasicTripDayContext(bookingContext, date, fallbackArea = '') {
+  const rules = bookingContext?.days.find(day => day.date === date)
+    || { required_events: [], blocked_intervals: [], start_stay: null, end_stay: null };
+  const records = bookingContext?.transport || [];
+  const entry = records.filter(record => ['outbound', 'transit'].includes(record.role)).at(-1);
+  const startArea = basicStayArea(rules.start_stay) || basicStayArea(rules.end_stay) || fallbackArea;
+  const endArea = basicStayArea(rules.end_stay);
+  const transfers = [];
+  for (const event of rules.required_events.filter(event => event.booking_event === 'terminal_arrival')) {
+    const end = tripTimeMinutes(event.time);
+    if (end !== null) transfers.push({ start: Math.max(0, end - 60), end, title: '前往機場／車站', area: event.station || '', booking_id: event.booking_id });
+  }
+  for (const record of records) if ((record === entry || record.role === 'transfer') && record.city_ready_date === date) {
+    const start = tripTimeMinutes(record.city_ready_time);
+    if (start !== null && start < 1440) transfers.push({ start, end: Math.min(1440, start + 45), title: '機場／車站前往住宿或市區', area: endArea || startArea, booking_id: record.booking_id });
+  }
+  const unknownTransport = records.some(record => record.departure_date === date && !record.departure_time
+    || record.arrival_date === date && !record.arrival_time);
+  let windows = unknownTransport ? [] : [{ start: 540, end: 1200 }];
+  const blocks = [...rules.blocked_intervals, ...transfers];
+  for (const block of blocks) windows = windows.flatMap(window => {
+    if (block.end <= window.start || block.start >= window.end) return [window];
+    return [
+      ...(block.start > window.start ? [{ start: window.start, end: block.start }] : []),
+      ...(block.end < window.end ? [{ start: block.end, end: window.end }] : []),
+    ];
+  });
+  // 入住地區之間的交通只作概估，避免接駁與下一段已訂交通重疊。
+  const usableTransfers = transfers.filter(transfer => !rules.blocked_intervals.some(block =>
+    block.start < transfer.end && block.end > transfer.start));
+  return { rules, startArea, endArea, windows, transfers: usableTransfers, unknownTransport };
+}
+
+function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, source = 'ai') {
+  const context = getBasicTripDayContext(bookingContext, date, fallbackArea);
+  const { rules, windows, startArea, endArea, transfers, unknownTransport } = context;
+  const hasLeftDestination = (bookingContext?.transport || []).some(record => record.role === 'inbound' && record.departure_date && record.departure_date <= date);
+  const timeline = [];
+  const item = (time, type, title, extras = {}) => ({ time, type, title, description: '', location_query: startArea,
+    transport_detail: '', price_level: '', warnings_tips: '', menu_recommendations: [], is_basic: true, time_estimated: true, ...extras });
+  const seenEvents = new Set();
+  const transportEvents = [...rules.required_events.filter(event => event.type !== 'hotel')];
+  for (const record of bookingContext?.transport || []) for (const event of ['departure', 'arrival']) {
+    if (record[`${event}_date`] === date) transportEvents.push({ booking_id: record.booking_id, booking_event: event,
+      type: record.mode === 'flight' ? 'flight' : 'transport', time: record[`${event}_time`], code: record.code,
+      station: record[`${event}_station`] || record.station_hint });
+  }
+  for (const event of transportEvents) {
+    const identity = `${event.booking_id}:${event.booking_event}`;
+    if (seenEvents.has(identity)) continue;
+    seenEvents.add(identity);
+    const label = { arrival: '抵達', departure: '出發', terminal_arrival: '抵達機場／車站報到' }[event.booking_event] || '交通';
+    timeline.push(item(event.time || '待確認', event.type, `${event.code || '已填交通'} ${label}`, {
+      booking_id: event.booking_id, booking_event: event.booking_event, location_query: event.station || '',
+      transport_detail: event.code || '', time_estimated: event.booking_event === 'terminal_arrival' || !event.time,
+      warnings_tips: '班次與出發／抵達時間取自你的輸入，各地時間與報到要求請依訂單確認。',
+    }));
+  }
+  for (const transfer of transfers) timeline.push(item(tripTimeLabel(transfer.start), 'transport', transfer.title, {
+    end_time: tripTimeLabel(transfer.end), location_query: transfer.area,
+    transport_detail: `接駁概估 ${transfer.end - transfer.start} 分鐘，請依實際距離與交通確認。`,
+  }));
+  if (rules.start_stay && windows.length) timeline.push(item(tripTimeLabel(windows[0].start), 'hotel', `從住宿地區出發：${startArea}`, {
+    booking_id: rules.start_stay.booking_id, booking_event: 'leave_hotel',
+    warnings_tips: rules.required_events.some(event => event.booking_event === 'check_out') ? '今天需退房；退房時間與行李寄放請向住宿確認。' : '每日起點以住宿地區概估。',
+  }));
+  const periods = { morning: 540, noon: 720, afternoon: 840, evening: 1080 };
+  let cursor = windows[0]?.start || 0;
+  let lastArea = startArea;
+  let lastActivityEnd = null;
+  let omitted = 0;
+  const stops = Array.isArray(raw?.stops) ? raw.stops.slice(0, 4) : [];
+  for (const stop of stops) {
+    if (!['spot', 'meal'].includes(stop?.type) || !basicTripText(stop.title)) { omitted++; continue; }
+    const duration = stop.type === 'meal' ? 45 : 90;
+    const travel = lastActivityEnd === null ? 0 : 30;
+    const preferred = periods[stop.period] ?? cursor;
+    let slot = null;
+    for (const window of windows) {
+      const start = Math.max(window.start, cursor, preferred);
+      if (start + travel + duration <= window.end) { slot = { start, activityStart: start + travel, end: start + travel + duration }; break; }
+    }
+    if (!slot) { omitted++; continue; }
+    const area = basicTripText(stop.area) || lastArea || fallbackArea;
+    if (travel) timeline.push(item(tripTimeLabel(slot.start), 'transport', `前往 ${area}`, {
+      end_time: tripTimeLabel(slot.activityStart), location_query: area, transport_detail: '地區間移動概估 30 分鐘，實際路線請用地圖確認。',
+    }));
+    timeline.push(item(tripTimeLabel(slot.activityStart), stop.type, basicTripText(stop.title, 80), {
+      end_time: tripTimeLabel(slot.end), location_query: `${area} ${basicTripText(stop.title, 80)}`.trim(),
+      description: source === 'local' ? '這是可自行修改的區域範本，並非 AI 已確認的景點推薦。' : '免費簡易建議；時間、地區與停留長度為概估。',
+      warnings_tips: '營業、票價與交通需自行確認。',
+    }));
+    cursor = slot.end;
+    lastActivityEnd = slot.end;
+    lastArea = area;
+  }
+  if (rules.end_stay && !hasLeftDestination) {
+    const checkIn = rules.required_events.find(event => event.booking_event === 'check_in');
+    const afterTransfer = Math.max(0, ...transfers.filter(transfer => transfer.title.includes('住宿或市區')).map(transfer => transfer.end));
+    const hotelMinute = unknownTransport ? null : Math.max(afterTransfer, lastActivityEnd === null ? (rules.start_stay ? 1080 : 900) : lastActivityEnd + 45,
+      tripTimeMinutes(checkIn?.earliest_time) ?? 0);
+    const time = hotelMinute !== null && hotelMinute < 1440 ? tripTimeLabel(hotelMinute) : '待確認';
+    // 返回住宿的交通也保留，但只顯示概估，不作逐地址精準驗證。
+    if (lastActivityEnd !== null && lastActivityEnd >= afterTransfer && hotelMinute < 1440) timeline.push(item(tripTimeLabel(Math.max(lastActivityEnd, hotelMinute - 45)), 'transport', `返回住宿地區：${endArea}`, {
+      end_time: time, location_query: endArea, transport_detail: '返回住宿概估 45 分鐘，請依實際位置確認。',
+    }));
+    timeline.push(item(time, 'hotel', `入住／返回住宿地區：${endArea}`, {
+      booking_id: rules.end_stay.booking_id, booking_event: checkIn ? 'check_in' : 'return_to_hotel', location_query: endArea,
+      warnings_tips: '入住時間、晚到安排與行李寄放需向住宿確認。',
+    }));
+  }
+  timeline.sort((a, b) => (tripTimeMinutes(a.time) ?? 1500) - (tripTimeMinutes(b.time) ?? 1500));
+  const warnings = ['免費簡易模式：活動與接駁時間為概估，請確認跨區距離。'];
+  if (unknownTransport) warnings.push('當天交通時間未填完整，先保留交通與住宿，暫不安排景點。');
+  if (omitted) warnings.push('部分建議因當天交通時段或可用時間不足而未排入。');
+  const bookedArea = rules.start_stay || rules.end_stay
+    ? (endArea && endArea !== startArea ? `${startArea} → ${endArea}` : startArea) : '';
+  return { day_index: dayIndex, date, city: bookedArea || basicTripText(raw?.city) || fallbackArea || '目的地',
+    title: basicTripText(raw?.title) || '交通與住宿地區概略行程', weather_forecast: '', clothing_suggestion: '',
+    timeline, planning_mode: 'basic', generation_source: source, planning_notes: warnings.join(' ') };
+}
+
+function getBasicTripPreferences(baseConstraints, basicPreferences) {
+  const fromConstraints = label => baseConstraints.match(new RegExp(`- ${label}: ([^\\n]*)`))?.[1] || '';
+  return {
+    destinations: basicTripText(basicPreferences?.destinations || fromConstraints('Destinations'), 200),
+    style: basicTripText(basicPreferences?.style || fromConstraints('Travel Style & Pacing'), 100),
+    transport: basicTripText(basicPreferences?.transport || fromConstraints('Transport Mode'), 80),
+    requests: basicTripText(basicPreferences?.requests || fromConstraints('Special Requests'), 800),
+    budget: basicTripText(basicPreferences?.budget || fromConstraints('Restaurant Budget'), 80),
+  };
+}
+
+async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences }) {
+  const preferences = getBasicTripPreferences(baseConstraints, basicPreferences);
+  const signature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily: 'flash', planningMode: 'basic' });
+  const checkpoint = readTripCheckpoint(signature) || { signature, scheduleDays: [], completedDays: [] };
+  const saved = new globalThis.Map((checkpoint.completedDays || []).filter(day => day.planning_mode === 'basic'
+    && day.generation_source === 'ai' && day.date === dateList[day.day_index - 1] && Array.isArray(day.timeline)).map(day => [day.date, day]));
+  const days = [];
+  let fallbackMessage = '';
+  for (let offset = 0; offset < dateList.length;) {
+    if (saved.has(dateList[offset])) { days.push(saved.get(dateList[offset++])); continue; }
+    let end = Math.min(offset + 10, dateList.length);
+    for (let i = offset + 1; i < end; i++) if (saved.has(dateList[i])) { end = i; break; }
+    const dates = dateList.slice(offset, end);
+    const compactDays = dates.map(date => {
+      const context = getBasicTripDayContext(bookingContext, date, preferences.destinations);
+      const transport = (bookingContext?.transport || []).filter(record => record.departure_date === date || record.arrival_date === date)
+        .map(record => ({ code: record.code, mode: record.mode, departure_date: record.departure_date, departure: record.departure_time,
+          from: basicTripText(record.departure_station || record.station_hint), arrival_date: record.arrival_date,
+          arrival: record.arrival_time, to: basicTripText(record.arrival_station || record.station_hint) }));
+      return { date, start_area: context.startArea, overnight_area: context.endArea, transport,
+        available: context.windows.map(window => `${tripTimeLabel(window.start)}-${tripTimeLabel(window.end)}`) };
+    });
+    let rawDays;
+    if (!fallbackMessage) {
+      try {
+        const response = await requestGemini(apiKey, 'flash', {
+          contents: [{ parts: [{ text: `Plan a BASIC travel itinerary in Traditional Chinese. Output compact JSON only.
+Preferences: ${JSON.stringify(preferences)}
+Days and local-time constraints: ${JSON.stringify(compactDays)}
+Return exactly these dates, indexed ${offset + 1}-${end}. Each day: day_index, date, city, title, stops.
+At most 4 short stops per day: 1-2 nearby sights and simple meal suggestions, clustered around start/overnight areas.
+Each stop: type (spot or meal), title, area, period (morning/noon/afternoon/evening), in chronological order.
+Only suggest stops in available windows; use [] for transit-only days. Leave transport and hotel markers to the app.
+Do not output exact times, booking IDs, descriptions, menus, weather, currency, city guides or detailed addresses.
+Keep titles and areas brief. Avoid distant detours. This is approximate planning, not a precise reservation audit.` }] }],
+          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 6144,
+            responseJsonSchema: tripObjectSchema({ days: { type: 'array', minItems: dates.length, maxItems: dates.length,
+              items: tripObjectSchema({ day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
+                stops: { type: 'array', maxItems: 4, items: tripObjectSchema({ type: { type: 'string', enum: ['spot', 'meal'] },
+                  title: tripStringSchema(), area: tripStringSchema(), period: { type: 'string', enum: ['morning', 'noon', 'afternoon', 'evening'] } }) } }) } }),
+          },
+        });
+        const parsed = JSON.parse(cleanJsonResult(getGeminiText(response)));
+        if (!Array.isArray(parsed.days) || parsed.days.length !== dates.length) throw tripShapeError('簡易行程日期不完整。');
+        const byDate = new globalThis.Map(parsed.days.map(day => [day.date, day]));
+        if (byDate.size !== dates.length) throw tripShapeError('簡易行程日期重複。');
+        rawDays = dates.map((date, i) => {
+          const day = byDate.get(date);
+          if (day?.day_index !== offset + i + 1 || !Array.isArray(day.stops)) throw tripShapeError('簡易行程資料不完整。');
+          return day;
+        });
+      } catch (error) {
+        // 格式或服務忙碌時提供明確標示的本機範本，不把一次生成擴成逐日修復／補文字。
+        if ([400, 401, 402, 403, 404, 429].includes(error.status)) throw error;
+        fallbackMessage = `AI 未能完成簡易建議：${error.message} 目前先提供交通住宿範本，景點需自行選擇；稍後可回到首頁再按規劃。`;
+      }
+    }
+    const generated = dates.map((date, i) => {
+      const context = getBasicTripDayContext(bookingContext, date, preferences.destinations);
+      const local = { city: context.startArea, title: '交通住宿範本（非 AI 景點推薦）', stops: [
+        { type: 'spot', title: '住宿地區散步／自行選景點', area: context.startArea, period: 'morning' },
+        { type: 'meal', title: '附近用餐（自行挑選店家）', area: context.startArea, period: 'noon' },
+        { type: 'spot', title: '鄰近地區自由活動', area: context.startArea, period: 'afternoon' },
+      ] };
+      return buildBasicTripDay(rawDays?.[i] || local, date, offset + i + 1, bookingContext, preferences.destinations, rawDays ? 'ai' : 'local');
+    });
+    days.push(...generated);
+    for (const day of generated.filter(day => day.generation_source === 'ai')) saved.set(day.date, day);
+    checkpoint.scheduleDays = [...saved.values()]; checkpoint.completedDays = [...saved.values()];
+    writeTripCheckpoint(checkpoint);
+    offset = end;
+  }
+  if (!fallbackMessage) clearTripCheckpoint();
+  return { planning_mode: 'basic', fallback_message: fallbackMessage,
+    trip_summary: `免費簡易行程：${preferences.destinations || '旅遊目的地'}。依已填交通時間與住宿地區概估每日路線。`,
+    currency_rate: '簡易模式未查詢匯率；記帳預設台幣，可自行調整', currency_rate_val: 1, currency_code: 'TWD',
+    city_guides: {}, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
+}
+
+async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null, basicPreferences = null }) {
+  if (getGeminiCache(apiKey).policy.mode === 'free') return generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences });
   const totalDays = dateList.length;
   const effectiveBatchSize = Math.max(1, Math.floor(batchSize));
   const planningFamily = modelFamily === 'lite' ? 'flash' : modelFamily;
@@ -4026,7 +4243,7 @@ const App = () => {
     }
 
     const modelFamily = effectiveModelType;
-    console.log(`開始分段生成行程 (總天數: ${totalDays}, AI: Gemini, 模型類型: ${modelFamily})`);
+    console.log(`開始${apiUsageMode === 'free' ? '簡易' : '完整分段'}生成行程 (總天數: ${totalDays}, AI: Gemini, 模型類型: ${modelFamily})`);
 
     const baseConstraints = `
       User Constraints:
@@ -4045,6 +4262,8 @@ const App = () => {
     try {
       const tripData = await generateTripData({
         apiKey: apiKey, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
+        basicPreferences: { destinations: basicData.destinations, style: basicData.type, transport: transportConstraint,
+          requests: basicData.specialRequests, budget: priceConstraint },
       });
       const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations }, created: Date.now() };
 
@@ -4074,7 +4293,8 @@ const App = () => {
 
     } catch (error) {
       console.error(error);
-      const progress = readTripCheckpoint(getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily }));
+      const progress = readTripCheckpoint(getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily,
+        planningMode: apiUsageMode === 'free' ? 'basic' : 'full' }));
       const schedules = Array.isArray(progress?.scheduleDays) ? progress.scheduleDays.length : 0;
       const completed = Array.isArray(progress?.completedDays) ? progress.completedDays.length : 0;
       setErrorMsg("行程生成失敗：" + error.message + (schedules || completed
@@ -4257,7 +4477,7 @@ const App = () => {
             <fieldset className="mt-4 space-y-2">
               <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[{ value: 'free', title: '免費 API 配額', detail: 'Flash 規劃時間表，Lite 補介紹與菜單；每筆請求限速並保留生成進度。' },
+                {[{ value: 'free', title: '免費 API：簡易規劃', detail: '依交通時間與住宿地區概估路線，省略長篇介紹與精準修復，減少請求量。' },
                   { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
                   <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
                     <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
@@ -4288,7 +4508,16 @@ const App = () => {
               </p>
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
-                <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">Flash 負責時間表與訂單衝突修復；Lite 補城市指南、景點介紹、菜單與天氣。每次 Flash 請求至少間隔 15 秒，Lite 至少 5 秒（舊版／未知版本採較慢限速）。已完成的生成進度會保留，失敗後可再按規劃繼續。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，只提供少量景點、用餐與概略路線；以已填的交通時間及住宿地區安排起終點，不提供精準跨區路線、完整指南、菜單或天氣。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。服務忙碌時先提供清楚標示的交通住宿範本。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">建議開通 Gemini API 計費後使用完整模式，可取得較高配額與更完整的規劃。Flash 少量文字規劃可能只需幾元；實際費用依模型、Token 用量、重試與當時費率而定，付費仍可能遇到服務忙碌。</p>
+                <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
+                  <summary className="cursor-pointer">查看費用估算範例</summary>
+                  <p className="mt-1">以 2026/10/02 公告、2026/12/31 前 Gemini 3.8 Flash 標準費率估算：輸入 10,000 Token、輸出 20,000 Token（含思考）約 US$0.0825；假設 US$1＝NT$32，約 NT$2.64。這是範例而非每次費用上限；Pro 或較多輸出可能更高。</p>
+                </details>
+                <div className="flex flex-wrap gap-3 mt-2 text-xs font-bold">
+                  <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-sky-300 underline">查看 Google API 計費設定</a>
+                  <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-sky-300 underline">官方最新價格</a>
+                </div>
                 {geminiModels.lastUsed.flash && <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">上次實際使用：{geminiModels.lastUsed.flash.label}</p>}
               </div>}
               <div className="flex flex-col md:flex-row gap-3">
@@ -4429,11 +4658,13 @@ const App = () => {
                 ref={textareaRef} // 綁定 ref
                 name="specialRequests" 
                 value={basicData.specialRequests} 
+                maxLength={apiUsageMode === 'free' ? 800 : undefined}
                 onChange={handleBasicChange} 
                 rows={2} 
                 className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
                 placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
               />
+              {apiUsageMode === 'free' && <p className="text-xs text-slate-500 dark:text-[#a08d85]">免費簡易模式最多採用前 800 字特殊需求；複雜偏好建議使用完整模式。</p>}
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3] flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
@@ -4651,7 +4882,7 @@ const App = () => {
                      <div className="p-5 bg-slate-50/50 dark:bg-[#2c1f1b]/50 border-t border-slate-100 dark:border-[#4a3b32] grid grid-cols-1 md:grid-cols-2 gap-4">
                         <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="類型" />
                         <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="名稱" />
-                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm md:col-span-2 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="完整地址" />
+                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm md:col-span-2 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder={apiUsageMode === 'free' ? '住宿地區即可，例如東京上野、首爾弘大' : '完整地址'} />
                         <label className="text-xs text-slate-500 dark:text-[#a08d85]">入住日期
                           <input type="date" aria-label="住宿入住日期" value={acc.checkInDate || ''} onChange={e => updateAccommodation(acc.id, 'checkInDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
                         </label>
@@ -4845,8 +5076,14 @@ const App = () => {
           </div>
         </div>
 
+        {itineraryData.planning_mode === 'basic' && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-bold">免費簡易行程：交通時間保留，活動時間與住宿地區路線為概估。</p>
+          <p className="mt-1">不包含完整城市指南、菜單、天氣與精準路線驗證；營業、接駁與住宿政策請自行確認。想取得完整規劃，可回首頁開通 API 計費後選擇完整模式。</p>
+          {itineraryData.fallback_message && <p className="mt-2 font-medium">{itineraryData.fallback_message}</p>}
+        </div>}
+
         {/* --- 功能 3: 城市指南區域 --- */}
-        {itineraryData.city_guides && (
+        {itineraryData.city_guides && Object.keys(itineraryData.city_guides).length > 0 && (
           <CityGuide 
             guideData={itineraryData.city_guides} 
             cities={Object.keys(itineraryData.city_guides)}
