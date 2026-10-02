@@ -31,10 +31,15 @@ const GEMINI_MODEL_CACHE_MS = 60 * 60 * 1000;
 const GEMINI_TRIP_OUTPUT_TOKENS = 32768;
 const GEMINI_OUTPUT_RECOVERY_CEILING = 65536;
 const GEMINI_MAX_TRANSIENT_RETRIES = 3;
+const GEMINI_FREE_MAX_TRANSIENT_RETRIES = 1;
+const GEMINI_FREE_RETRY_DELAY_MS = 30000;
 const GEMINI_MAX_RETRY_WAIT_MS = 60000;
 const GEMINI_BUSY_COOLDOWN_MS = 60000;
+const GEMINI_FREE_PACING_KEY = 'gemini_free_request_pacing';
 const geminiModelCache = new globalThis.Map();
 const geminiModelListeners = new Set();
+const geminiFreePacing = new globalThis.Map();
+let geminiFreeQueue = Promise.resolve();
 const normalizeGeminiKey = (apiKey) => String(apiKey || '').trim();
 const normalizeGeminiType = (type) => Object.hasOwn(GEMINI_MODEL_CONFIG, type) ? type : 'flash';
 
@@ -70,6 +75,64 @@ function setGeminiRequestState(key, requestId, message) {
   if (message) states.set(requestId, { message });
   else states.delete(requestId);
   notifyGeminiModels(key);
+}
+
+function getGeminiFreePacing(family) {
+  if (!geminiFreePacing.has(family)) {
+    let saved;
+    try { saved = JSON.parse(globalThis.localStorage?.getItem(GEMINI_FREE_PACING_KEY) || '{}')?.[family]; } catch { /* 可在未開放儲存的瀏覽器中使用。 */ }
+    const now = Date.now();
+    const validTime = value => Number.isFinite(value) && value > 0 && value <= now + 24 * 60 * 60 * 1000 ? value : 0;
+    geminiFreePacing.set(family, {
+      lastStartedAt: validTime(saved?.lastStartedAt),
+      intervalMs: Number.isFinite(saved?.intervalMs) ? Math.min(Math.max(saved.intervalMs, 0), 60000) : 0,
+      notBefore: validTime(saved?.notBefore), pausedUntil: validTime(saved?.pausedUntil),
+    });
+  }
+  return geminiFreePacing.get(family);
+}
+
+function saveGeminiFreePacing() {
+  try {
+    const saved = JSON.parse(globalThis.localStorage?.getItem(GEMINI_FREE_PACING_KEY) || '{}');
+    globalThis.localStorage?.setItem(GEMINI_FREE_PACING_KEY, JSON.stringify({ ...saved, ...Object.fromEntries(geminiFreePacing) }));
+  } catch { /* 儲存失敗時，當頁仍有請求限速。此處不儲存 API Key。 */ }
+}
+
+function getGeminiFreeInterval(model) {
+  // 依目前專案截圖保守限速；清單沒有提供 RPM，未知版本／alias 採較慢策略。
+  if (model.type !== 'lite' || !model.version?.length || model.stage === 'alias') return 15000;
+  return model.version[0] === 3 ? 5000 : model.version[0] <= 2 ? 7000 : 15000;
+}
+
+async function waitForGeminiRequest(key, requestId, until, message) {
+  while (until > Date.now()) {
+    const remaining = until - Date.now();
+    setGeminiRequestState(key, requestId, `${message}，剩餘 ${Math.ceil(remaining / 1000)} 秒…`);
+    await new Promise(resolve => setTimeout(resolve, Math.min(remaining, 1000)));
+  }
+}
+
+async function paceGeminiAttempt(key, model, policy, requestId) {
+  if (policy.mode !== 'free') return;
+  const pacing = getGeminiFreePacing(model.type);
+  const now = Date.now();
+  if (pacing.pausedUntil > now) {
+    throw Object.assign(new Error('Gemini 忙碌冷卻中。'), {
+      status: 503, code: 'GEMINI_BUSY_COOLDOWN', retryAfterMs: pacing.pausedUntil - now,
+    });
+  }
+  const intervalMs = getGeminiFreeInterval(model);
+  const until = Math.max(pacing.lastStartedAt ? pacing.lastStartedAt + Math.max(pacing.intervalMs, intervalMs) : 0, pacing.notBefore);
+  if (until - now > GEMINI_MAX_RETRY_WAIT_MS) {
+    throw Object.assign(new Error('Gemini 要求更長的配額等待時間。'), { status: 429, retryAfterMs: until - now });
+  }
+  await waitForGeminiRequest(key, requestId, until, `${model.label || formatGeminiModel(model.id)} 免費請求限速`);
+  // 每次實際 HTTP 嘗試都記錄，包含重試、擴充輸出與備援，不能只限制外層功能。
+  pacing.lastStartedAt = Date.now();
+  pacing.intervalMs = intervalMs;
+  saveGeminiFreePacing();
+  setGeminiRequestState(key, requestId, `正在請求 ${model.label || formatGeminiModel(model.id)}，請稍候…`);
 }
 
 function parseGeminiRetryDelay(value) {
@@ -109,7 +172,7 @@ function explainGeminiError(error) {
   let message;
   let code = error.code;
   if ([500, 502, 503].includes(error.status)) {
-    message = 'Gemini 服務目前忙碌，有限次重試後仍無法完成。請稍後再試，原本填寫的資料已保留。';
+    message = `Gemini 服務目前忙碌，${error.code === 'GEMINI_BUSY_COOLDOWN' ? '已暫停送出請求。' : '有限次重試後仍無法完成。'}${info.serverDelayMs > 0 ? `請至少等待 ${Math.ceil(info.serverDelayMs / 1000)} 秒後再試，` : '請稍後再試，'}原本填寫的資料已保留。`;
     code = 'GEMINI_SERVICE_BUSY';
   } else if ([408, 504].includes(error.status)) {
     message = 'Gemini 服務回應逾時，有限次重試後仍無法完成。請稍後再試。';
@@ -130,21 +193,37 @@ function explainGeminiError(error) {
   return message ? Object.assign(new Error(message, { cause: error }), error, { message, code }) : error;
 }
 
-async function fetchGeminiWithRetry(apiKey, model, body, requestId) {
-  for (let retry = 0; retry <= GEMINI_MAX_TRANSIENT_RETRIES; retry++) {
+async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retryBudget) {
+  const maxRetries = policy.mode === 'free' ? GEMINI_FREE_MAX_TRANSIENT_RETRIES : GEMINI_MAX_TRANSIENT_RETRIES;
+  for (let retry = 0; retry <= maxRetries; retry++) {
+    await paceGeminiAttempt(apiKey, model, policy, requestId);
     try {
       return await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, apiKey,
         { method: 'POST', body: JSON.stringify(body) }, 180000);
     } catch (error) {
       const info = getGeminiRetryInfo(error);
-      if (!info.retryable || retry === GEMINI_MAX_TRANSIENT_RETRIES) throw error;
-      const delayMs = Math.max(info.serverDelayMs || 0, 1000 * (2 ** retry) + Math.floor(Math.random() * 500));
+      if (policy.mode === 'free' && info.serverDelayMs > 0) {
+        const pacing = getGeminiFreePacing(model.type);
+        pacing.notBefore = Math.max(pacing.notBefore, Date.now() + info.serverDelayMs);
+        saveGeminiFreePacing();
+      }
+      if (!info.retryable || retry === maxRetries || policy.mode === 'free' && retryBudget.used >= maxRetries) throw error;
+      const delayMs = Math.max(info.serverDelayMs || 0, policy.mode === 'free'
+        ? GEMINI_FREE_RETRY_DELAY_MS : 1000 * (2 ** retry) + Math.floor(Math.random() * 500));
       // 過長的等待交由使用者稍後重試，不提早重送，也不無限佔住生成流程。
       if (delayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
       const label = model.label || formatGeminiModel(model.id);
-      setGeminiRequestState(apiKey, requestId,
-        `${label} ${error.status === 429 ? '已達短時間配額' : '暫時忙碌'}，${Math.ceil(delayMs / 1000)} 秒後自動重試（${retry + 1}/${GEMINI_MAX_TRANSIENT_RETRIES}）。`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      const message = `${label} ${error.status === 429 ? '已達短時間配額' : '暫時忙碌'}`;
+      if (policy.mode === 'free') {
+        retryBudget.used++;
+        const pacing = getGeminiFreePacing(model.type);
+        pacing.notBefore = Math.max(pacing.notBefore, Date.now() + delayMs);
+        saveGeminiFreePacing();
+        await waitForGeminiRequest(apiKey, requestId, Date.now() + delayMs, `${message}，等待後自動重試（${retryBudget.used}/${maxRetries}）`);
+      } else {
+        setGeminiRequestState(apiKey, requestId, `${message}，${Math.ceil(delayMs / 1000)} 秒後自動重試（${retry + 1}/${maxRetries}）。`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
       setGeminiRequestState(apiKey, requestId, `正在重試 ${label}，請稍候…`);
     }
   }
@@ -341,10 +420,11 @@ async function requestGemini(apiKey, type, payload) {
   const cache = getGeminiCache(key);
   const policy = { ...cache.policy };
   const run = () => performGeminiRequest(key, type, payload, policy);
-  // 免費模式的所有功能共用同一條佇列，避免菜單、天氣與行程同時送出請求。
+  // 同一頁的免費功能與不同 Key 共用佇列；換 Key 不能繞過同一專案的限速。
   if (policy.mode !== 'free') return run();
-  const result = cache.queue.then(run, run);
-  cache.queue = result.then(() => {}, () => {});
+  const result = geminiFreeQueue.then(run, run);
+  geminiFreeQueue = result.then(() => {}, () => {});
+  cache.queue = geminiFreeQueue;
   return result;
 }
 
@@ -362,6 +442,10 @@ async function performGeminiRequest(key, type, payload, policy) {
 
 async function performGeminiModelRequest(key, family, payload, policy, requestId) {
   const cache = getGeminiCache(key);
+  if (policy.mode === 'free') {
+    const remaining = getGeminiFreePacing(family).pausedUntil - Date.now();
+    if (remaining > 0) throw Object.assign(new Error('Gemini 忙碌冷卻中。'), { status: 503, code: 'GEMINI_BUSY_COOLDOWN', retryAfterMs: remaining });
+  }
   try {
     await loadGeminiModels(key);
   } catch (error) {
@@ -373,6 +457,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
   let lastError;
   let busyFallbacks = 0;
   let backupModel = null;
+  const retryBudget = { used: 0 }; // 免費同一筆需求共用一次重試，備援或擴充輸出不會重設。
   for (let attempt = 0; attempt < (policy.mode === 'free' ? 8 : 4); attempt++) {
     const model = backupModel || getGeminiCandidates(key, family, policy).find(candidate => !attempted.has(candidate.id));
     backupModel = null;
@@ -386,7 +471,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       let data;
       for (let lengthAttempt = 0; lengthAttempt < 2; lengthAttempt++) {
         const body = generationConfig ? { ...payload, generationConfig } : payload;
-        data = await fetchGeminiWithRetry(key, model, body, requestId);
+        data = await fetchGeminiWithRetry(key, model, body, requestId, policy, retryBudget);
         try {
           getGeminiText(data); // 只接受完整回應，避免把半截 JSON 當成行程。
           break;
@@ -407,6 +492,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
     } catch (error) {
       lastError = error;
       if (error.status === 503) {
+        if (error.code === 'GEMINI_BUSY_COOLDOWN') throw error;
         const serverDelayMs = getGeminiRetryInfo(error).serverDelayMs || 0;
         cache.busyUntil.set(model.id, Date.now() + Math.max(GEMINI_BUSY_COOLDOWN_MS, serverDelayMs));
         // 持續忙碌時只允許一次同系列具體版本備援；不把 alias 當成不同模型重試。
@@ -415,7 +501,15 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
           && candidate.type === model.type);
         backupModel = alternatives.find(candidate => candidate.stage === 'stable') || alternatives[0];
         if (!policy.allowBusyFallback || busyFallbacks >= 1 || !backupModel
-            || serverDelayMs > GEMINI_MAX_RETRY_WAIT_MS) throw error;
+            || serverDelayMs > GEMINI_MAX_RETRY_WAIT_MS) {
+          if (policy.mode === 'free') {
+            const pacing = getGeminiFreePacing(model.type);
+            pacing.pausedUntil = Date.now() + Math.max(GEMINI_BUSY_COOLDOWN_MS, serverDelayMs);
+            saveGeminiFreePacing();
+            error.retryAfterMs = Math.max(error.retryAfterMs || 0, GEMINI_BUSY_COOLDOWN_MS, serverDelayMs);
+          }
+          throw error;
+        }
         busyFallbacks++;
         setGeminiRequestState(key, requestId, `${model.label || formatGeminiModel(model.id)} 持續忙碌，改用 ${backupModel.label || formatGeminiModel(backupModel.id)} 完成同一筆需求…`);
         continue;
@@ -3033,10 +3127,12 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   const totalDays = dateList.length;
   const effectiveBatchSize = Math.max(1, Math.floor(batchSize));
   const planningFamily = modelFamily === 'lite' ? 'flash' : modelFamily;
+  const freeMode = getGeminiCache(apiKey).policy.mode === 'free';
+  const detailFamily = freeMode ? 'lite' : planningFamily;
   const checkpointSignature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily: planningFamily });
   const checkpoint = readTripCheckpoint(checkpointSignature) || { signature: checkpointSignature, scheduleDays: [], completedDays: [] };
   const bookingDays = new globalThis.Map((bookingContext?.days || []).map(day => [day.date, day]));
-  const scheduleFirst = bookingContext?.days.some(day => day.required_events.length || day.blocked_intervals.length);
+  const scheduleFirst = freeMode || bookingContext?.days.some(day => day.required_events.length || day.blocked_intervals.length);
   const constraints = `${baseConstraints}\n${getTripBookingSummary(bookingContext)}`;
   const summaryConstraints = `${constraints}\n${bookingContext?.assumptions?.length
     ? `PLANNING ASSUMPTIONS: ${JSON.stringify(bookingContext.assumptions)}. Disclose these in trip_summary; do not claim live confirmation.` : ''}`;
@@ -3062,10 +3158,10 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
     && ['Low', 'Mid', 'High'].includes(value.price_level) && Array.isArray(value.menu_recommendations)
     && value.menu_recommendations.every(menu => isRecord(menu) && ['local', 'cn', 'price'].every(field => typeof menu[field] === 'string'));
 
-  const fetchTripJson = async (prompt, schema = null) => {
-    const response = await requestGemini(apiKey, planningFamily, {
+  const fetchTripJson = async (prompt, schema = null, taskFamily = planningFamily) => {
+    const response = await requestGemini(apiKey, taskFamily, {
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: schema ? 8192 : GEMINI_TRIP_OUTPUT_TOKENS,
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: schema || taskFamily === 'lite' ? 8192 : GEMINI_TRIP_OUTPUT_TOKENS,
         ...(schema ? { responseJsonSchema: schema } : {}),
       },
     });
@@ -3094,7 +3190,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         Requirements: ${baseRequirements}
         "city_guides": An object with one entry for EVERY unique major city visited. Each guide must include all these fields: ${guideSchema}.
         Provide exactly 5 basic phrases per city. Keep all history, transport, safety, subsidies and tax-refund details.
-        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","city_guides":{"CityA":${guideSchema}}}`);
+        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","city_guides":{"CityA":${guideSchema}}}`, null, detailFamily);
       if (!validBase(baseData) || !isRecord(baseData.city_guides) || !Object.keys(baseData.city_guides).length || !Object.values(baseData.city_guides).every(isGuide)) {
         throw tripShapeError('城市指南資料不完整。');
       }
@@ -3105,7 +3201,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         ${summaryConstraints}
         Requirements: ${baseRequirements}
         "guide_cities": An array of EVERY unique major city actually visited. Do not omit any destination.
-        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`);
+        Output: {"trip_summary":"...","currency_rate":"...","currency_rate_val":0.21,"currency_code":"JPY","guide_cities":["CityA","CityB"]}`, null, detailFamily);
       if (!validBase(core) || !Array.isArray(core.guide_cities) || !core.guide_cities.length || !core.guide_cities.every(city => typeof city === 'string' && city.trim())) {
         throw tripShapeError('AI 未提供完整的旅遊城市清單，請稍後重試。');
       }
@@ -3115,7 +3211,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         const guide = await fetchTripJson(`Generate the complete travel city guide for "${city}". Respond with one valid JSON object only.
           ${constraints}
           Include history, transport and ticketing, safety/scams, travel subsidies, tax refunds and exactly 5 local phrases.
-          Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`);
+          Required output fields: ${guideSchema}. Do not wrap it in city_guides or remove any field.`, null, detailFamily);
         if (!isGuide(guide)) throw tripShapeError(`「${city}」的城市指南資料不完整，請稍後重試。`);
         cityGuides[city] = guide;
       }
@@ -3210,7 +3306,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         tripObjectSchema({ weather_forecast: tripStringSchema(), clothing_suggestion: tripStringSchema(),
           items: { type: 'array', minItems: indices.length, maxItems: indices.length,
             items: tripObjectSchema({ item_index: { type: 'integer' }, ...TRIP_DETAILS_SCHEMA }) },
-        }));
+        }), detailFamily);
         if (typeof details.weather_forecast === 'string') day.weather_forecast = details.weather_forecast;
         if (typeof details.clothing_suggestion === 'string') day.clothing_suggestion = details.clothing_suggestion;
         if (!Array.isArray(details.items)) throw tripShapeError('當天的景點補充資料不完整。');
@@ -3240,7 +3336,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
             Include complete description, Google Maps query, transport details, price level, warnings and menu recommendations.
             Required fields: ${itemSchema}. Use [] for menu_recommendations when there is no food.
             Keep the supplied schedule and original bookings. Do not wrap in days or timeline.`,
-          tripObjectSchema({ time: tripStringSchema(), type: tripStringSchema(), title: tripStringSchema(), ...TRIP_DETAILS_SCHEMA }));
+          tripObjectSchema({ time: tripStringSchema(), type: tripStringSchema(), title: tripStringSchema(), ...TRIP_DETAILS_SCHEMA }), detailFamily);
           completed = mergeTripItemDetails(item, details);
           if (!isItem(completed)) throw tripShapeError(`「${item.title}」的景點資料不完整。`);
           break;
@@ -3255,7 +3351,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
         ${constraints}
         ${dayRules([day.date])}
         Describe seasonal expectations as estimates when a live forecast is unavailable. Respond with valid JSON.`,
-      tripObjectSchema({ weather_forecast: tripStringSchema(), clothing_suggestion: tripStringSchema() }));
+      tripObjectSchema({ weather_forecast: tripStringSchema(), clothing_suggestion: tripStringSchema() }), detailFamily);
       if (typeof weather.weather_forecast !== 'string' || typeof weather.clothing_suggestion !== 'string') throw tripShapeError(`第 ${day.day_index} 天的天氣與穿著資料不完整。`);
       day = { ...day, weather_forecast: weather.weather_forecast, clothing_suggestion: weather.clothing_suggestion };
     }
@@ -4161,7 +4257,7 @@ const App = () => {
             <fieldset className="mt-4 space-y-2">
               <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[{ value: 'free', title: '免費 API 配額', detail: '行程以可用的正式版 Flash 規劃；輕量輔助功能使用 Lite，依序送出請求。' },
+                {[{ value: 'free', title: '免費 API 配額', detail: 'Flash 規劃時間表，Lite 補介紹與菜單；每筆請求限速並保留生成進度。' },
                   { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
                   <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
                     <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
@@ -4192,7 +4288,7 @@ const App = () => {
               </p>
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
-                <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">Flash 負責行程與訂單衝突修復；Lite 負責輕量輔助功能。優先正式版本，實際能否使用依專案配額決定。已完成的生成進度會保留，失敗後可再按規劃繼續。</p>
+                <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">Flash 負責時間表與訂單衝突修復；Lite 補城市指南、景點介紹、菜單與天氣。每次 Flash 請求至少間隔 15 秒，Lite 至少 5 秒（舊版／未知版本採較慢限速）。已完成的生成進度會保留，失敗後可再按規劃繼續。</p>
                 {geminiModels.lastUsed.flash && <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">上次實際使用：{geminiModels.lastUsed.flash.label}</p>}
               </div>}
               <div className="flex flex-col md:flex-row gap-3">
@@ -4214,7 +4310,7 @@ const App = () => {
                 <input type="checkbox" name="allowBusyFallback" checked={Boolean(allowBusyFallback)} onChange={e => setAllowBusyFallback(e.target.checked)} className="mt-0.5" />
                 <span>持續忙碌時自動使用同系列備援模型（最多切換一次）。模型停用時仍會尋找可用版本。</span>
               </label>
-              <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">輕量模型仍可能限流或忙碌；短時間限制會等待後重試，每個模型最多重試 3 次。免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完會直接提示。</p>
+              <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">{apiUsageMode === 'free' ? '免費模式每筆需求最多自動重試 1 次，至少等待 30 秒；同系列備援也共用重試額度。持續 503 時暫停該系列 60 秒，等待過程會顯示倒數。' : '短時間限制會等待後重試，每個模型最多重試 3 次。'} 模型仍可能忙碌，限速無法保證消除 503。免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完會直接提示。</p>
             </div>
           </div>
           
