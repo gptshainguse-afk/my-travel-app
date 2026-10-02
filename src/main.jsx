@@ -33,6 +33,7 @@ const GEMINI_OUTPUT_RECOVERY_CEILING = 65536;
 const GEMINI_MAX_TRANSIENT_RETRIES = 3;
 const GEMINI_FREE_MAX_TRANSIENT_RETRIES = 1;
 const GEMINI_FREE_RETRY_DELAY_MS = 30000;
+const GEMINI_FREE_DISCOVERY_WAIT_MS = 15000;
 const GEMINI_MAX_RETRY_WAIT_MS = 60000;
 const GEMINI_BUSY_COOLDOWN_MS = 60000;
 const GEMINI_FREE_PACING_KEY = 'gemini_free_request_pacing';
@@ -123,11 +124,15 @@ async function paceGeminiAttempt(key, model, policy, requestId) {
     });
   }
   const intervalMs = getGeminiFreeInterval(model);
-  const until = Math.max(pacing.lastStartedAt ? pacing.lastStartedAt + Math.max(pacing.intervalMs, intervalMs) : 0, pacing.notBefore);
+  const catalogReadyAt = getGeminiCache(key).updatedAt;
+  const discoveryUntil = catalogReadyAt ? catalogReadyAt + GEMINI_FREE_DISCOVERY_WAIT_MS : 0;
+  const until = Math.max(pacing.lastStartedAt ? pacing.lastStartedAt + Math.max(pacing.intervalMs, intervalMs) : 0, pacing.notBefore, discoveryUntil);
   if (until - now > GEMINI_MAX_RETRY_WAIT_MS) {
     throw Object.assign(new Error('Gemini 要求更長的配額等待時間。'), { status: 429, retryAfterMs: until - now });
   }
-  await waitForGeminiRequest(key, requestId, until, `${model.label || formatGeminiModel(model.id)} 免費請求限速`);
+  await waitForGeminiRequest(key, requestId, until, discoveryUntil > now
+    ? `已取得模型清單，等待後使用 ${model.label || formatGeminiModel(model.id)}`
+    : `${model.label || formatGeminiModel(model.id)} 免費請求限速`);
   // 每次實際 HTTP 嘗試都記錄，包含重試、擴充輸出與備援，不能只限制外層功能。
   pacing.lastStartedAt = Date.now();
   pacing.intervalMs = intervalMs;
@@ -273,8 +278,16 @@ function compareGeminiModels(a, b) {
 }
 
 function compareFreeGeminiModels(a, b) {
-  // 免費配額與模型能力分開處理：正式版優先，再選較新的可用版本。
-  if (a.stage !== b.stage) return a.stage === 'stable' ? -1 : 1;
+  const rank = { stable: 0, preview: 1, alias: 2 };
+  if (a.stage !== b.stage) return rank[a.stage] - rank[b.stage];
+  // 免費主規劃採清單中較早的正式 Flash，同版本仍優先最新修訂。
+  // 版本號不代表價格、剩餘配額或即時負載；不猜已退役的模型名稱。
+  if (a.type === 'flash' && b.type === 'flash') {
+    for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
+      const difference = (a.version[i] || 0) - (b.version[i] || 0);
+      if (difference) return difference;
+    }
+  }
   return compareGeminiModels(a, b);
 }
 
@@ -450,6 +463,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
     await loadGeminiModels(key);
   } catch (error) {
     if ([400, 401, 402, 403].includes(error.status)) throw error;
+    if (policy.mode === 'free' && family === 'flash' && !cache.updatedAt) throw error;
     // 清單暫時無法讀取時，仍可嘗試快取中的模型或官方 alias。
   }
   const attempted = new Set();
@@ -551,6 +565,7 @@ function getGeminiSnapshot(apiKey) {
   }
   return {
     key, labels, lastUsed: { ...cache?.lastUsed }, updatedAt: cache?.updatedAt || 0,
+    listedModels: cache ? cache.models.map(model => ({ id: model.id, label: model.label, type: model.type, stage: model.stage })) : [],
     freeModel: cache ? getGeminiCandidates(key, 'flash', { ...cache.policy, mode: 'free' })[0] || null : null,
     requestState: cache ? Array.from(cache.requestStates.values()).at(-1) || null : null,
     status: !key ? 'idle' : cache?.pending ? 'loading' : cache?.error ? 'error' : cache?.updatedAt ? 'ready' : 'loading',
@@ -3110,7 +3125,7 @@ function mergeTripItemDetails(item, details) {
 
 const TRIP_CHECKPOINT_KEY = 'gemini_trip_generation_checkpoint';
 const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily, planningMode = 'full' }) =>
-  JSON.stringify({ revision: planningMode === 'basic' ? 'basic-itinerary-1' : 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
+  JSON.stringify({ revision: planningMode === 'basic' ? 'basic-city-windows-2' : 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
 function readTripCheckpoint(signature) {
   try {
     const saved = JSON.parse(globalThis.localStorage?.getItem(TRIP_CHECKPOINT_KEY) || 'null');
@@ -3125,45 +3140,128 @@ function clearTripCheckpoint() {
 }
 
 const basicTripText = (value, length = 100) => bookingText(value).slice(0, length);
-const basicStayArea = stay => basicTripText(stay?.address || stay?.name);
+// 這些別名只協助辨識城市，不取代地圖查詢；無法辨識時保留使用者的地區文字。
+const BASIC_TRIP_CITY_HINTS = [
+  ['東京', /東京|东京|墨田|台東|淺草|浅草|上野|押上|\b(?:tokyo|sumida|taito|asakusa|ueno|narita|haneda|nrt|hnd)\b|淺草寺|浅草寺|晴空塔|skytree|senso[ -]?ji|阿美橫町|合羽橋/iu],
+  ['名古屋', /名古屋|千種|今池|\b(?:nagoya|chikusa|imaike|aichi|ngo)\b|德川園|徳川園|熱田神宮|大須觀音|大須観音|名古屋城/iu],
+  ['京都', /京都|\bkyoto\b|清水寺|伏見稻荷|伏見稲荷|金閣寺/iu],
+  ['大阪', /大阪|\bosaka\b|\bkix\b|道頓堀|通天閣/iu],
+  ['首爾', /首爾|首尔|서울|\b(?:seoul|hongdae|icn|gmp)\b|弘大|明洞|景福宮/iu],
+  ['台北', /台北|臺北|\b(?:taipei|tpe|tsa)\b/iu],
+];
+const basicTripCities = text => BASIC_TRIP_CITY_HINTS.filter(([, pattern]) => pattern.test(bookingText(text))).map(([city]) => city);
+const basicTripCity = text => { const cities = basicTripCities(text); return cities.length === 1 ? cities[0] : ''; };
+function basicStayArea(stay) {
+  const text = bookingText(stay?.address || stay?.name);
+  const city = basicTripCity(text);
+  if (city === '東京') {
+    if (/asakusa|淺草|浅草/iu.test(text)) return '東京・淺草周邊';
+    if (/ueno|上野/iu.test(text)) return '東京・上野周邊';
+    if (/sumida|墨田|押上/iu.test(text)) return '東京・墨田／押上周邊';
+  }
+  if (city === '名古屋' && /chikusa|imaike|千種|今池/iu.test(text)) return '名古屋・千種／今池周邊';
+  return basicTripText(text);
+}
+const basicTripDayMinute = (eventDate, time, date) => {
+  const minute = tripTimeMinutes(time);
+  return minute === null || !isTripDate(eventDate) || !isTripDate(date) ? null
+    : (new Date(`${eventDate}T00:00:00Z`) - new Date(`${date}T00:00:00Z`)) / 60000 + minute;
+};
 
 function getBasicTripDayContext(bookingContext, date, fallbackArea = '') {
-  const rules = bookingContext?.days.find(day => day.date === date)
+  const rules = bookingContext?.days?.find(day => day.date === date)
     || { required_events: [], blocked_intervals: [], start_stay: null, end_stay: null };
   const records = bookingContext?.transport || [];
-  const entry = records.filter(record => ['outbound', 'transit'].includes(record.role)).at(-1);
   const startArea = basicStayArea(rules.start_stay) || basicStayArea(rules.end_stay) || fallbackArea;
   const endArea = basicStayArea(rules.end_stay);
-  const transfers = [];
-  for (const event of rules.required_events.filter(event => event.booking_event === 'terminal_arrival')) {
-    const end = tripTimeMinutes(event.time);
-    if (end !== null) transfers.push({ start: Math.max(0, end - 60), end, title: '前往機場／車站', area: event.station || '', booking_id: event.booking_id });
+  const startCity = basicTripCity(startArea), endCity = basicTripCity(endArea);
+  const hasLeftDestination = records.some(record => record.role === 'inbound' && record.departure_date && record.departure_date <= date);
+  const connectionFrom = new Set(), connectionTo = new Set(), blocks = [...rules.blocked_intervals], transfers = [];
+  const clipBlock = (start, end, extras = {}) => {
+    if (start !== null && end !== null && start < 1440 && end > 0 && end > start) return { start: Math.max(0, start), end: Math.min(1440, end), ...extras };
+    return null;
+  };
+  // 自動用途有時把第二班轉機標成 transfer。短時間的連續航班仍按機場銜接處理。
+  for (let i = 0; i + 1 < records.length; i++) {
+    const previous = records[i], next = records[i + 1];
+    if (previous.mode !== 'flight' || next.mode !== 'flight' || previous.role === 'inbound') continue;
+    const arrival = basicTripDayMinute(previous.arrival_date, previous.arrival_time, date);
+    const departure = basicTripDayMinute(next.departure_date, next.departure_time, date);
+    if (arrival === null || departure === null || departure < arrival) continue;
+    const gap = departure - arrival;
+    const connectingRole = ['outbound', 'transit'].includes(previous.role) || next.role === 'transit';
+    const sameAirport = previous.arrival_station && previous.arrival_station.toLowerCase() === next.departure_station?.toLowerCase();
+    if (!(connectingRole || sameAirport) || gap > 1440) continue;
+    const usable = gap - previous.arrival_buffer_minutes - next.departure_buffer_minutes;
+    if (bookingContext?.allow_transit_tour && usable >= 360) continue;
+    connectionFrom.add(previous.booking_id); connectionTo.add(next.booking_id);
+    const block = clipBlock(arrival, departure);
+    if (block) blocks.push(block);
+    const ready = basicTripDayMinute(previous.city_ready_date, previous.city_ready_time, date);
+    const terminal = basicTripDayMinute(next.terminal_arrival_date, next.terminal_arrival_time, date);
+    const waiting = clipBlock(ready ?? arrival, terminal ?? departure, { kind: 'connection',
+      title: `中轉候機：${previous.code || '前段航班'} → ${next.code || '後段航班'}（不進市區）`,
+      area: previous.arrival_station || previous.station_hint || '中轉機場', booking_id: previous.booking_id });
+    if (waiting) transfers.push(waiting);
   }
-  for (const record of records) if ((record === entry || record.role === 'transfer') && record.city_ready_date === date) {
-    const start = tripTimeMinutes(record.city_ready_time);
-    if (start !== null && start < 1440) transfers.push({ start, end: Math.min(1440, start + 45), title: '機場／車站前往住宿或市區', area: endArea || startArea, booking_id: record.booking_id });
+  const arrivalArea = record => {
+    const city = basicTripCity(record.arrival_station || record.station_hint);
+    if (endArea && (!city || !endCity || city === endCity)) return endArea;
+    return basicTripText(record.arrival_station || record.station_hint) || endArea || startArea;
+  };
+  const arrivals = [];
+  for (const record of records) {
+    if (!connectionTo.has(record.booking_id) && record.terminal_arrival_date) {
+      const end = basicTripDayMinute(record.terminal_arrival_date, record.terminal_arrival_time, date);
+      const transfer = clipBlock(end === null ? null : end - (record.mode === 'train' ? 30 : 60), end,
+        { kind: 'departure', title: record.mode === 'train' ? '前往出發車站' : '前往出發機場',
+          area: record.departure_station || record.station_hint || '', booking_id: record.booking_id });
+      if (transfer) transfers.push(transfer);
+    }
+    if (record.role === 'inbound' || connectionFrom.has(record.booking_id)) continue;
+    const ready = basicTripDayMinute(record.city_ready_date, record.city_ready_time, date);
+    if (ready === null || ready < 0 || ready >= 1440) continue;
+    const area = arrivalArea(record);
+    const duration = record.mode === 'train' ? 30 : /\bnrt\b|narita|成田/iu.test(record.arrival_station || record.station_hint || '') ? 90 : 60;
+    const transfer = clipBlock(ready, ready + duration, { kind: 'arrival', title: record.mode === 'train' ? '抵達車站後前往住宿地區／市區' : '抵達機場後前往住宿地區／市區',
+      area, booking_id: record.booking_id });
+    // 接駁不能跨入下一段已訂交通；沒有足夠時間時不宣稱已進市區。
+    if (transfer && !blocks.some(block => block.start < transfer.end && block.end > transfer.start)) {
+      transfers.push(transfer);
+      arrivals.push({ minute: transfer.end, area, city: basicTripCity(area) || basicTripCity(record.arrival_station || record.station_hint), booking_id: record.booking_id });
+    }
   }
+  arrivals.sort((a, b) => a.minute - b.minute);
   const unknownTransport = records.some(record => record.departure_date === date && !record.departure_time
     || record.arrival_date === date && !record.arrival_time);
-  let windows = unknownTransport ? [] : [{ start: 540, end: 1200 }];
-  const blocks = [...rules.blocked_intervals, ...transfers];
-  for (const block of blocks) windows = windows.flatMap(window => {
+  let windows = unknownTransport || hasLeftDestination && !records.some(record => record.role === 'inbound' && record.departure_date === date)
+    ? [] : [{ start: 540, end: 1200 }];
+  for (const block of [...blocks, ...transfers]) windows = windows.flatMap(window => {
     if (block.end <= window.start || block.start >= window.end) return [window];
-    return [
-      ...(block.start > window.start ? [{ start: window.start, end: block.start }] : []),
-      ...(block.end < window.end ? [{ start: block.end, end: window.end }] : []),
-    ];
+    return [...(block.start > window.start ? [{ start: window.start, end: block.start }] : []),
+      ...(block.end < window.end ? [{ start: block.end, end: window.end }] : [])];
   });
-  // 入住地區之間的交通只作概估，避免接駁與下一段已訂交通重疊。
-  const usableTransfers = transfers.filter(transfer => !rules.blocked_intervals.some(block =>
-    block.start < transfer.end && block.end > transfer.start));
-  return { rules, startArea, endArea, windows, transfers: usableTransfers, unknownTransport };
+  windows = windows.map((window, index) => {
+    const arrival = arrivals.filter(point => point.minute <= window.start).at(-1);
+    const area = arrival?.area || startArea, city = arrival?.city || startCity;
+    const nextDeparture = transfers.find(transfer => transfer.kind === 'departure' && transfer.start === window.end);
+    const collectLuggage = rules.start_stay && rules.required_events.some(event => event.booking_event === 'check_out') && nextDeparture
+      && (!city || !startCity || city === startCity);
+    const returnToStay = index === windows.length - 1 && rules.end_stay && !hasLeftDestination;
+    return { ...window, end: Math.max(window.start, window.end - (collectLuggage || returnToStay ? 30 : 0)),
+      id: `w${index + 1}`, area, city, collectLuggage: Boolean(collectLuggage), returnToStay: Boolean(returnToStay), departure: nextDeparture || null };
+  }).filter(window => window.end - window.start >= 45);
+  return { rules, startArea, endArea, startCity, endCity, windows, transfers, arrivals, unknownTransport, hasLeftDestination };
 }
 
-function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, source = 'ai') {
+const basicStopIdentity = title => bookingText(title).toLowerCase().replace(/[\s・·（）()、，,。.!！／/：:—-]/gu, '');
+const isBasicPlaceholder = (title, type) => /自行選|自行挑|自由活動|鄰近地區|住宿地區散步|附近景點|景點\s*\d+|待安排|待選擇|placeholder|free time|nearby sights/iu.test(title)
+  || /^(?:附近用餐|附近午餐|附近晚餐|早餐|午餐|晚餐|用餐|散步|觀光|景點|旅遊景點)(?:[（(].*[）)])?$/u.test(title)
+  || type === 'spot' && /^(?:附近|周邊|市區|住宿附近|nearby)$/iu.test(title);
+
+function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, source = 'ai', usedSpots = new Set()) {
   const context = getBasicTripDayContext(bookingContext, date, fallbackArea);
-  const { rules, windows, startArea, endArea, transfers, unknownTransport } = context;
-  const hasLeftDestination = (bookingContext?.transport || []).some(record => record.role === 'inbound' && record.departure_date && record.departure_date <= date);
+  const { rules, windows, startArea, endArea, transfers, unknownTransport, hasLeftDestination } = context;
   const timeline = [];
   const item = (time, type, title, extras = {}) => ({ time, type, title, description: '', location_query: startArea,
     transport_detail: '', price_level: '', warnings_tips: '', menu_recommendations: [], is_basic: true, time_estimated: true, ...extras });
@@ -3187,65 +3285,86 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
   }
   for (const transfer of transfers) timeline.push(item(tripTimeLabel(transfer.start), 'transport', transfer.title, {
     end_time: tripTimeLabel(transfer.end), location_query: transfer.area,
-    transport_detail: `接駁概估 ${transfer.end - transfer.start} 分鐘，請依實際距離與交通確認。`,
+    ...(transfer.kind === 'connection' ? { at_terminal: true, booking_id: transfer.booking_id } : {}),
+    transport_detail: transfer.kind === 'connection' ? '預留轉機與候機，不安排市區景點；航廈銜接依航空公司指示。'
+      : `接駁概估 ${transfer.end - transfer.start} 分鐘，請依實際距離與交通確認。`,
   }));
-  if (rules.start_stay && windows.length) timeline.push(item(tripTimeLabel(windows[0].start), 'hotel', `從住宿地區出發：${startArea}`, {
-    booking_id: rules.start_stay.booking_id, booking_event: 'leave_hotel',
-    warnings_tips: rules.required_events.some(event => event.booking_event === 'check_out') ? '今天需退房；退房時間與行李寄放請向住宿確認。' : '每日起點以住宿地區概估。',
-  }));
+  const hotelDeparture = transfers.filter(transfer => transfer.kind === 'departure').at(0);
+  if (rules.start_stay && (windows.length || hotelDeparture || unknownTransport)) {
+    const checkout = rules.required_events.find(event => event.booking_event === 'check_out');
+    const leave = unknownTransport ? null : Math.max(0, Math.min(540, hotelDeparture ? hotelDeparture.start - 10 : 540,
+      checkout ? (tripTimeMinutes(checkout.latest_time) ?? 550) - 10 : 540));
+    timeline.push(item(leave === null ? '待確認' : tripTimeLabel(leave), 'hotel', `${checkout ? '退房／寄放行李' : '從住宿地區出發'}：${startArea}`, {
+      booking_id: rules.start_stay.booking_id, booking_event: checkout ? 'check_out' : 'leave_hotel',
+      location_query: rules.start_stay.address || rules.start_stay.name,
+      warnings_tips: checkout ? '退房與寄放／領取行李需向住宿確認；早班交通應提早完成退房。' : '每日起點以住宿地區概估。',
+    }));
+  }
   const periods = { morning: 540, noon: 720, afternoon: 840, evening: 1080 };
-  let cursor = windows[0]?.start || 0;
-  let lastArea = startArea;
-  let lastActivityEnd = null;
+  const states = new globalThis.Map(windows.map(window => [window.id, { cursor: window.start, area: window.area, lastEnd: null }]));
   let omitted = 0;
-  const stops = Array.isArray(raw?.stops) ? raw.stops.slice(0, 4) : [];
+  const stops = Array.isArray(raw?.stops) ? raw.stops.slice(0, 5) : [];
   for (const stop of stops) {
-    if (!['spot', 'meal'].includes(stop?.type) || !basicTripText(stop.title)) { omitted++; continue; }
+    const title = basicTripText(stop?.title, 80);
+    if (!['spot', 'meal'].includes(stop?.type) || !title || isBasicPlaceholder(title, stop.type)) { omitted++; continue; }
+    const window = windows.find(window => window.id === stop.window_id);
+    if (!window) { omitted++; continue; }
+    const cities = basicTripCities(`${title} ${bookingText(stop.area)}`);
+    if (window.city && cities.some(city => city !== window.city)) { omitted++; continue; }
+    const identity = basicStopIdentity(title);
+    if (stop.type === 'spot' && usedSpots.has(identity)) { omitted++; continue; }
+    const state = states.get(window.id), area = basicTripText(stop.area) || window.area;
+    const travel = state.lastEnd !== null && basicStopIdentity(state.area) === basicStopIdentity(area) ? 15 : 30;
     const duration = stop.type === 'meal' ? 45 : 90;
-    const travel = lastActivityEnd === null ? 0 : 30;
-    const preferred = periods[stop.period] ?? cursor;
-    let slot = null;
-    for (const window of windows) {
-      const start = Math.max(window.start, cursor, preferred);
-      if (start + travel + duration <= window.end) { slot = { start, activityStart: start + travel, end: start + travel + duration }; break; }
-    }
-    if (!slot) { omitted++; continue; }
-    const area = basicTripText(stop.area) || lastArea || fallbackArea;
-    if (travel) timeline.push(item(tripTimeLabel(slot.start), 'transport', `前往 ${area}`, {
-      end_time: tripTimeLabel(slot.activityStart), location_query: area, transport_detail: '地區間移動概估 30 分鐘，實際路線請用地圖確認。',
+    const start = Math.max(state.cursor, periods[stop.period] ?? state.cursor);
+    const activityStart = start + travel, end = activityStart + duration;
+    // 指定的城市／時段放不下就略過，不能搬到下一個城市繼續排原地景點。
+    if (end > window.end) { omitted++; continue; }
+    timeline.push(item(tripTimeLabel(start), 'transport', `前往 ${title}`, {
+      end_time: tripTimeLabel(activityStart), location_query: `${window.city || ''} ${area} ${title}`.trim(),
+      activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
+      transport_detail: `步行／市區交通概估 ${travel} 分鐘，實際路線請用地圖確認。`,
     }));
-    timeline.push(item(tripTimeLabel(slot.activityStart), stop.type, basicTripText(stop.title, 80), {
-      end_time: tripTimeLabel(slot.end), location_query: `${area} ${basicTripText(stop.title, 80)}`.trim(),
-      description: source === 'local' ? '這是可自行修改的區域範本，並非 AI 已確認的景點推薦。' : '免費簡易建議；時間、地區與停留長度為概估。',
-      warnings_tips: '營業、票價與交通需自行確認。',
+    timeline.push(item(tripTimeLabel(activityStart), stop.type, title, {
+      end_time: tripTimeLabel(end), location_query: `${window.city || ''} ${area} ${title}`.trim(),
+      activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
+      description: '免費簡易建議；時間與停留長度為概估。', warnings_tips: '營業、票價與交通需自行確認。',
     }));
-    cursor = slot.end;
-    lastActivityEnd = slot.end;
-    lastArea = area;
+    if (stop.type === 'spot') usedSpots.add(identity);
+    state.cursor = end; state.lastEnd = end; state.area = area;
+  }
+  for (const window of windows.filter(window => window.collectLuggage)) {
+    const state = states.get(window.id);
+    if (state.lastEnd === null) continue;
+    const pickup = state.lastEnd + 30;
+    timeline.push(item(tripTimeLabel(state.lastEnd), 'transport', `返回住宿領取行李：${startArea}`, {
+      end_time: tripTimeLabel(pickup), location_query: rules.start_stay.address || rules.start_stay.name,
+      transport_detail: '返回住宿概估 30 分鐘，確認行李寄放後再前往車站／機場。',
+    }));
   }
   if (rules.end_stay && !hasLeftDestination) {
     const checkIn = rules.required_events.find(event => event.booking_event === 'check_in');
-    const afterTransfer = Math.max(0, ...transfers.filter(transfer => transfer.title.includes('住宿或市區')).map(transfer => transfer.end));
-    const hotelMinute = unknownTransport ? null : Math.max(afterTransfer, lastActivityEnd === null ? (rules.start_stay ? 1080 : 900) : lastActivityEnd + 45,
+    const afterArrival = Math.max(0, ...transfers.filter(transfer => transfer.kind === 'arrival').map(transfer => transfer.end));
+    const finalWindow = windows.at(-1), finalState = finalWindow ? states.get(finalWindow.id) : null;
+    const lastEnd = finalState?.lastEnd;
+    const hotelMinute = unknownTransport ? null : Math.max(afterArrival, lastEnd !== null && lastEnd !== undefined ? lastEnd + 30 : (rules.start_stay && !afterArrival ? 1080 : 900),
       tripTimeMinutes(checkIn?.earliest_time) ?? 0);
     const time = hotelMinute !== null && hotelMinute < 1440 ? tripTimeLabel(hotelMinute) : '待確認';
-    // 返回住宿的交通也保留，但只顯示概估，不作逐地址精準驗證。
-    if (lastActivityEnd !== null && lastActivityEnd >= afterTransfer && hotelMinute < 1440) timeline.push(item(tripTimeLabel(Math.max(lastActivityEnd, hotelMinute - 45)), 'transport', `返回住宿地區：${endArea}`, {
-      end_time: time, location_query: endArea, transport_detail: '返回住宿概估 45 分鐘，請依實際位置確認。',
+    if (lastEnd !== null && lastEnd !== undefined && hotelMinute < 1440) timeline.push(item(tripTimeLabel(Math.max(lastEnd, hotelMinute - 30)), 'transport', `返回住宿地區：${endArea}`, {
+      end_time: time, location_query: rules.end_stay.address || rules.end_stay.name, transport_detail: '返回住宿概估 30 分鐘，請依實際位置確認。',
     }));
     timeline.push(item(time, 'hotel', `入住／返回住宿地區：${endArea}`, {
-      booking_id: rules.end_stay.booking_id, booking_event: checkIn ? 'check_in' : 'return_to_hotel', location_query: endArea,
+      booking_id: rules.end_stay.booking_id, booking_event: checkIn ? 'check_in' : 'return_to_hotel', location_query: rules.end_stay.address || rules.end_stay.name,
       warnings_tips: '入住時間、晚到安排與行李寄放需向住宿確認。',
     }));
   }
   timeline.sort((a, b) => (tripTimeMinutes(a.time) ?? 1500) - (tripTimeMinutes(b.time) ?? 1500));
-  const warnings = ['免費簡易模式：活動與接駁時間為概估，請確認跨區距離。'];
+  const warnings = ['活動與接駁時間為概估；跨城市交通抵達後，活動改在抵達地安排。'];
   if (unknownTransport) warnings.push('當天交通時間未填完整，先保留交通與住宿，暫不安排景點。');
-  if (omitted) warnings.push('部分建議因當天交通時段或可用時間不足而未排入。');
-  const bookedArea = rules.start_stay || rules.end_stay
-    ? (endArea && endArea !== startArea ? `${startArea} → ${endArea}` : startArea) : '';
-  return { day_index: dayIndex, date, city: bookedArea || basicTripText(raw?.city) || fallbackArea || '目的地',
-    title: basicTripText(raw?.title) || '交通與住宿地區概略行程', weather_forecast: '', clothing_suggestion: '',
+  if (omitted) warnings.push('重複、過於籠統、城市不符或時間不足的建議已略過。');
+  const cities = [...new Set([context.startCity, ...windows.map(window => window.city), context.endCity].filter(Boolean))];
+  return { day_index: dayIndex, date, city: cities.join(' → ') || basicTripText(raw?.city) || fallbackArea || '目的地',
+    title: basicTripText(raw?.title) || '每日景點與交通規劃', weather_forecast: '', clothing_suggestion: '',
     timeline, planning_mode: 'basic', generation_source: source, planning_notes: warnings.join(' ') };
 }
 
@@ -3266,75 +3385,68 @@ async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookin
   const checkpoint = readTripCheckpoint(signature) || { signature, scheduleDays: [], completedDays: [] };
   const saved = new globalThis.Map((checkpoint.completedDays || []).filter(day => day.planning_mode === 'basic'
     && day.generation_source === 'ai' && day.date === dateList[day.day_index - 1] && Array.isArray(day.timeline)).map(day => [day.date, day]));
+  const usedSpots = new Set([...saved.values()].flatMap(day => day.timeline.filter(item => item.type === 'spot').map(item => basicStopIdentity(item.title))));
   const days = [];
-  let fallbackMessage = '';
   for (let offset = 0; offset < dateList.length;) {
     if (saved.has(dateList[offset])) { days.push(saved.get(dateList[offset++])); continue; }
     let end = Math.min(offset + 10, dateList.length);
     for (let i = offset + 1; i < end; i++) if (saved.has(dateList[i])) { end = i; break; }
     const dates = dateList.slice(offset, end);
-    const compactDays = dates.map(date => {
-      const context = getBasicTripDayContext(bookingContext, date, preferences.destinations);
-      const transport = (bookingContext?.transport || []).filter(record => record.departure_date === date || record.arrival_date === date)
-        .map(record => ({ code: record.code, mode: record.mode, departure_date: record.departure_date, departure: record.departure_time,
-          from: basicTripText(record.departure_station || record.station_hint), arrival_date: record.arrival_date,
-          arrival: record.arrival_time, to: basicTripText(record.arrival_station || record.station_hint) }));
-      return { date, start_area: context.startArea, overnight_area: context.endArea, transport,
-        available: context.windows.map(window => `${tripTimeLabel(window.start)}-${tripTimeLabel(window.end)}`) };
-    });
-    let rawDays;
-    if (!fallbackMessage) {
-      try {
-        const response = await requestGemini(apiKey, 'flash', {
-          contents: [{ parts: [{ text: `Plan a BASIC travel itinerary in Traditional Chinese. Output compact JSON only.
+    const contexts = dates.map(date => getBasicTripDayContext(bookingContext, date, preferences.destinations));
+    const compactDays = dates.map((date, i) => ({ date,
+      windows: contexts[i].windows.map(window => ({ id: window.id, from: tripTimeLabel(window.start), to: tripTimeLabel(window.end), city: window.city, base_area: window.area })),
+    }));
+    const response = await requestGemini(apiKey, 'flash', {
+      contents: [{ parts: [{ text: `Plan a BASIC travel itinerary in Traditional Chinese. Output compact JSON only.
 Preferences: ${JSON.stringify(preferences)}
-Days and local-time constraints: ${JSON.stringify(compactDays)}
+Days and local-time CITY WINDOWS: ${JSON.stringify(compactDays)}
+Previously visited sights (avoid repeats): ${JSON.stringify([...usedSpots].slice(-90))}
 Return exactly these dates, indexed ${offset + 1}-${end}. Each day: day_index, date, city, title, stops.
-At most 4 short stops per day: 1-2 nearby sights and simple meal suggestions, clustered around start/overnight areas.
-Each stop: type (spot or meal), title, area, period (morning/noon/afternoon/evening), in chronological order.
-Only suggest stops in available windows; use [] for transit-only days. Leave transport and hotel markers to the app.
-Do not output exact times, booking IDs, descriptions, menus, weather, currency, city guides or detailed addresses.
-Keep titles and areas brief. Avoid distant detours. This is approximate planning, not a precise reservation audit.` }] }],
-          generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 6144,
-            responseJsonSchema: tripObjectSchema({ days: { type: 'array', minItems: dates.length, maxItems: dates.length,
-              items: tripObjectSchema({ day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
-                stops: { type: 'array', maxItems: 4, items: tripObjectSchema({ type: { type: 'string', enum: ['spot', 'meal'] },
-                  title: tripStringSchema(), area: tripStringSchema(), period: { type: 'string', enum: ['morning', 'noon', 'afternoon', 'evening'] } }) } }) } }),
-          },
-        });
-        const parsed = JSON.parse(cleanJsonResult(getGeminiText(response)));
-        if (!Array.isArray(parsed.days) || parsed.days.length !== dates.length) throw tripShapeError('簡易行程日期不完整。');
-        const byDate = new globalThis.Map(parsed.days.map(day => [day.date, day]));
-        if (byDate.size !== dates.length) throw tripShapeError('簡易行程日期重複。');
-        rawDays = dates.map((date, i) => {
-          const day = byDate.get(date);
-          if (day?.day_index !== offset + i + 1 || !Array.isArray(day.stops)) throw tripShapeError('簡易行程資料不完整。');
-          return day;
-        });
-      } catch (error) {
-        // 格式或服務忙碌時提供明確標示的本機範本，不把一次生成擴成逐日修復／補文字。
-        if ([400, 401, 402, 403, 404, 429].includes(error.status)) throw error;
-        fallbackMessage = `AI 未能完成簡易建議：${error.message} 目前先提供交通住宿範本，景點需自行選擇；稍後可回到首頁再按規劃。`;
-      }
-    }
-    const generated = dates.map((date, i) => {
-      const context = getBasicTripDayContext(bookingContext, date, preferences.destinations);
-      const local = { city: context.startArea, title: '交通住宿範本（非 AI 景點推薦）', stops: [
-        { type: 'spot', title: '住宿地區散步／自行選景點', area: context.startArea, period: 'morning' },
-        { type: 'meal', title: '附近用餐（自行挑選店家）', area: context.startArea, period: 'noon' },
-        { type: 'spot', title: '鄰近地區自由活動', area: context.startArea, period: 'afternoon' },
-      ] };
-      return buildBasicTripDay(rawDays?.[i] || local, date, offset + i + 1, bookingContext, preferences.destinations, rawDays ? 'ai' : 'local');
+An ordinary full day needs 2-3 REAL NAMED sights and 1-2 meals; at most 5 stops. Short arrival/departure windows need fewer stops.
+Each stop: window_id from THAT date, type (spot or meal), specific title, nearby area, period (morning/noon/afternoon/evening). Sort by window and period.
+Every stop MUST stay in that window's city. A rail arrival changes the activity city immediately. Do not reuse the departure hotel's area after arrival.
+Cluster each day's stops in one or two nearby districts. Allow 30 minutes from the base, 15-30 minutes between stops, 90 minutes per sight and 45 minutes per meal.
+The app reserves airport/station connections and hotel/luggage return time. Fit stops entirely inside windows; use [] when none are usable.
+Sight titles must name actual attractions, markets, museums or shopping streets. NEVER use generic walks, free time, nearby sights, hotel-area sightseeing or choose-it-yourself placeholders.
+Meal titles should name a restaurant or a specific district AND food suggestion. Avoid duplicate attractions across the trip.
+Respect requests and pacing. Do not output times, booking IDs, descriptions, menus, weather, exchange rates, city guides or full addresses.
+The app preserves original booked flight/train codes and times; you only select meaningful local visits.` }] }],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192,
+        responseJsonSchema: tripObjectSchema({ days: { type: 'array', minItems: dates.length, maxItems: dates.length,
+          items: tripObjectSchema({ day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
+            stops: { type: 'array', maxItems: 5, items: tripObjectSchema({ window_id: tripStringSchema(), type: { type: 'string', enum: ['spot', 'meal'] },
+              title: tripStringSchema(), area: tripStringSchema(), period: { type: 'string', enum: ['morning', 'noon', 'afternoon', 'evening'] } }) } }) } }),
+      },
     });
-    days.push(...generated);
-    for (const day of generated.filter(day => day.generation_source === 'ai')) saved.set(day.date, day);
-    checkpoint.scheduleDays = [...saved.values()]; checkpoint.completedDays = [...saved.values()];
-    writeTripCheckpoint(checkpoint);
+    let parsed;
+    try { parsed = JSON.parse(cleanJsonResult(getGeminiText(response))); }
+    catch { throw tripShapeError('AI 未完成有效的景點規劃，已保留輸入資料。請稍後重試；不會以制式散步範本代替。'); }
+    if (!Array.isArray(parsed?.days) || parsed.days.length !== dates.length) throw tripShapeError('AI 行程日期不完整，已保留輸入資料，請稍後重試。');
+    const byDate = new globalThis.Map(parsed.days.map(day => [day.date, day]));
+    if (byDate.size !== dates.length) throw tripShapeError('AI 行程日期重複，請稍後重試。');
+    for (let i = 0; i < dates.length; i++) {
+      const raw = byDate.get(dates[i]);
+      if (raw?.day_index !== offset + i + 1 || !Array.isArray(raw.stops)) throw tripShapeError('AI 景點資料不完整，請稍後重試。');
+      const context = contexts[i];
+      const day = buildBasicTripDay(raw, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
+      const available = context.windows.reduce((total, window) => total + window.end - window.start, 0);
+      const minimumSights = available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
+      if (day.timeline.filter(item => item.type === 'spot').length < minimumSights) {
+        throw tripShapeError(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點，AI 尚未完成有效規劃。輸入與已完成的天數會保留，請稍後重試。`);
+      }
+      for (const window of context.windows) if (window.end - window.start >= 150
+          && !day.timeline.some(item => item.type === 'spot' && item.planning_window_id === window.id)) {
+        throw tripShapeError(`第 ${day.day_index} 天的 ${window.city || window.area || '可用時段'} 尚未安排有效景點，已保留輸入與已完成的天數，請稍後重試。`);
+      }
+      days.push(day); saved.set(day.date, day);
+      checkpoint.scheduleDays = [...saved.values()]; checkpoint.completedDays = [...saved.values()];
+      writeTripCheckpoint(checkpoint);
+    }
     offset = end;
   }
-  if (!fallbackMessage) clearTripCheckpoint();
-  return { planning_mode: 'basic', fallback_message: fallbackMessage,
-    trip_summary: `免費簡易行程：${preferences.destinations || '旅遊目的地'}。依已填交通時間與住宿地區概估每日路線。`,
+  clearTripCheckpoint();
+  return { planning_mode: 'basic',
+    trip_summary: `免費簡易行程：${preferences.destinations || '旅遊目的地'}。保留具名景點，依已填交通時間與住宿地區安排每日路線。`,
     currency_rate: '簡易模式未查詢匯率；記帳預設台幣，可自行調整', currency_rate_val: 1, currency_code: 'TWD',
     city_guides: {}, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
@@ -4137,14 +4249,17 @@ const App = () => {
   const handleShareText = (mode = 'simple') => {
     if (!itineraryData) return;
     let text = `${basicData.destinations}\n`;
+    if (itineraryData.planning_mode === 'basic') text += '免費簡易行程：活動與接駁時間為概估，班次時間依輸入保留。\n';
+    if (itineraryData.fallback_message) text += `${itineraryData.fallback_message}\n`;
     (itineraryData.days || []).forEach(day => {
-      text += `\nDay ${day.day_index}\n`;
+      text += `\nDay ${day.day_index}${day.planning_mode === 'basic' ? `｜${day.city}` : ''}\n`;
       day.timeline.forEach(item => {
+        const time = `${item.time_estimated && tripTimeMinutes(item.time) !== null ? '約 ' : ''}${item.time}`;
         if (mode === 'simple') {
-          text += `${item.time}｜${item.title}\n`;
+          text += `${time}｜${item.title}\n`;
         } else {
           const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
-          text += `${item.time}｜${item.title}｜${desc}\n`;
+          text += `${time}｜${item.title}｜${desc}\n`;
         }
       });
     });
@@ -4202,7 +4317,7 @@ const App = () => {
     }
     
     const totalDays = dateList.length;
-    const batchSize = apiUsageMode === 'free' ? 2 : 4; // 免費模式減少每筆輸出；超長時仍可拆到單日或逐景點。
+    const batchSize = 4; // 完整模式分批；免費模式另以精簡全程請求處理。
 
     // --- 2. 準備使用者約束條件 ---
     let bookingContext;
@@ -4508,7 +4623,13 @@ const App = () => {
               </p>
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，只提供少量景點、用餐與概略路線；以已填的交通時間及住宿地區安排起終點，不提供精準跨區路線、完整指南、菜單或天氣。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。服務忙碌時先提供清楚標示的交通住宿範本。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，保留具名景點、用餐與概略路線；依交通時間切換城市，以住宿地區安排起終點，省略長篇指南、菜單與天氣。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。AI 未完成時顯示原因並保留資料，不以制式散步範本代替。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先清單中較早的正式 Flash；取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。模型版本較早不代表一定較便宜或不會過載，實際額度請在 AI Studio 確認。</p>
+                {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
+                  <summary className="cursor-pointer">查看查詢到的文字模型（{geminiModels.listedModels.length} 個）</summary>
+                  <ul className="mt-1 space-y-1">{geminiModels.listedModels.map(model => <li key={model.id}>{model.label} · {model.id}</li>)}</ul>
+                  <p className="mt-1">清單包含 Flash、Flash-Lite 與 Pro；列出不代表具有免費配額。主行程使用 Flash。</p>
+                </details>}
                 <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">建議開通 Gemini API 計費後使用完整模式，可取得較高配額與更完整的規劃。Flash 少量文字規劃可能只需幾元；實際費用依模型、Token 用量、重試與當時費率而定，付費仍可能遇到服務忙碌。</p>
                 <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
                   <summary className="cursor-pointer">查看費用估算範例</summary>
