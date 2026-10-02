@@ -202,15 +202,22 @@ function getGeminiFreeInterval(model) {
   return model.version[0] === 3 ? 5000 : model.version[0] <= 2 ? 7000 : 15000;
 }
 
-async function waitForGeminiRequest(key, requestId, until, message) {
+function throwIfGeminiCancelled(signal) {
+  if (signal?.aborted) throw Object.assign(new Error('已停止規劃，填寫資料已保留。'), { code: 'GEMINI_CANCELLED' });
+}
+
+async function waitForGeminiRequest(key, requestId, until, message, signal) {
   while (until > Date.now()) {
+    throwIfGeminiCancelled(signal);
     const remaining = until - Date.now();
     setGeminiRequestState(key, requestId, `${message}，剩餘 ${Math.ceil(remaining / 1000)} 秒…`);
     await new Promise(resolve => setTimeout(resolve, Math.min(remaining, 1000)));
   }
+  throwIfGeminiCancelled(signal);
 }
 
-async function paceGeminiAttempt(key, model, policy, requestId) {
+async function paceGeminiAttempt(key, model, policy, requestId, signal) {
+  throwIfGeminiCancelled(signal);
   if (policy.mode !== 'free') return;
   const pacing = getGeminiFreePacing(model.type);
   const now = Date.now();
@@ -228,7 +235,7 @@ async function paceGeminiAttempt(key, model, policy, requestId) {
   }
   await waitForGeminiRequest(key, requestId, until, discoveryUntil > now
     ? `已取得模型清單，等待後使用 ${model.label || formatGeminiModel(model.id)}`
-    : `${model.label || formatGeminiModel(model.id)} 免費請求限速`);
+    : `${model.label || formatGeminiModel(model.id)} 免費請求限速`, signal);
   // 每次實際 HTTP 嘗試都記錄，包含重試、擴充輸出與備援，不能只限制外層功能。
   pacing.lastStartedAt = Date.now();
   pacing.intervalMs = intervalMs;
@@ -269,7 +276,7 @@ function getGeminiRetryInfo(error) {
 }
 
 function explainGeminiError(error) {
-  if (error.code === 'GEMINI_REQUEST_LIMIT') return error;
+  if (['GEMINI_REQUEST_LIMIT', 'GEMINI_SESSION_LIMIT', 'GEMINI_CANCELLED'].includes(error.code)) return error;
   const info = getGeminiRetryInfo(error);
   let message;
   let code = error.code;
@@ -302,16 +309,23 @@ function explainGeminiError(error) {
 async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retryBudget) {
   const maxRetries = policy.mode === 'free' ? GEMINI_FREE_MAX_TRANSIENT_RETRIES : GEMINI_MAX_TRANSIENT_RETRIES;
   for (let retry = 0; retry <= maxRetries; retry++) {
+    throwIfGeminiCancelled(retryBudget.signal);
+    if (retryBudget.session && retryBudget.session.attempts >= retryBudget.session.maxAttempts) {
+      throw Object.assign(new Error('這次規劃已達自動嘗試上限，已保留輸入與完成的行程。請查看顯示的原因再調整設定。'), {
+        status: retryBudget.lastError?.status, code: 'GEMINI_SESSION_LIMIT',
+      });
+    }
     if (policy.mode === 'free' && retryBudget.attempts >= GEMINI_FREE_MAX_HTTP_ATTEMPTS) {
       throw Object.assign(new Error(`這次需求已嘗試 ${GEMINI_FREE_MAX_HTTP_ATTEMPTS} 次，先停止送出以避免快速消耗 RPM。${retryBudget.lastError?.message || '請稍後重試。'} 已保留填寫資料。`), {
         status: retryBudget.lastError?.status || 503, code: 'GEMINI_REQUEST_LIMIT', modelId: model.id,
       });
     }
-    await paceGeminiAttempt(apiKey, model, policy, requestId);
+    await paceGeminiAttempt(apiKey, model, policy, requestId, retryBudget.signal);
     try {
       retryBudget.attempts++;
+      if (retryBudget.session) retryBudget.session.attempts++;
       return await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, apiKey,
-        { method: 'POST', body: JSON.stringify(body) }, 180000);
+        { method: 'POST', body: JSON.stringify(body), signal: retryBudget.signal }, 180000);
     } catch (error) {
       error.modelId = model.id;
       retryBudget.lastError = error;
@@ -333,7 +347,7 @@ async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retr
         const pacing = getGeminiFreePacing(model.type);
         pacing.notBefore = Math.max(pacing.notBefore, Date.now() + delayMs);
         saveGeminiFreePacing();
-        await waitForGeminiRequest(apiKey, requestId, Date.now() + delayMs, `${message}，等待後自動重試（${retryBudget.used}/${maxRetries}）`);
+        await waitForGeminiRequest(apiKey, requestId, Date.now() + delayMs, `${message}，等待後自動重試（${retryBudget.used}/${maxRetries}）`, retryBudget.signal);
       } else {
         setGeminiRequestState(apiKey, requestId, `${message}，${Math.ceil(delayMs / 1000)} 秒後自動重試（${retry + 1}/${maxRetries}）。`);
         await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -423,6 +437,10 @@ function isGeminiModelWithoutQuota(error, model) {
 
 async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
+  const externalSignal = options.signal;
+  throwIfGeminiCancelled(externalSignal);
+  const cancel = () => controller.abort();
+  externalSignal?.addEventListener('abort', cancel, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${GEMINI_API_BASE}/${path}`, {
@@ -453,10 +471,12 @@ async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
     }
     return data;
   } catch (error) {
+    throwIfGeminiCancelled(externalSignal);
     if (error.name === 'AbortError') throw new Error('Gemini 請求逾時，請稍後再試。');
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', cancel);
   }
 }
 
@@ -552,12 +572,12 @@ function getGeminiText(data) {
   return text;
 }
 
-async function requestGemini(apiKey, type, payload) {
+async function requestGemini(apiKey, type, payload, requestOptions = {}) {
   const key = normalizeGeminiKey(apiKey);
   if (!key) throw new Error('請先輸入 Gemini API Key。');
   const cache = getGeminiCache(key);
   const policy = { ...cache.policy };
-  const run = () => performGeminiRequest(key, type, payload, policy);
+  const run = () => performGeminiRequest(key, type, payload, policy, requestOptions);
   // 同一頁的免費功能與不同 Key 共用佇列；換 Key 不能繞過同一專案的限速。
   if (policy.mode !== 'free') return run();
   const result = geminiFreeQueue.then(run, run);
@@ -566,11 +586,11 @@ async function requestGemini(apiKey, type, payload) {
   return result;
 }
 
-async function performGeminiRequest(key, type, payload, policy) {
+async function performGeminiRequest(key, type, payload, policy, requestOptions = {}) {
   const family = getGeminiRequestFamily(type, policy);
   const requestId = Symbol('gemini-request');
   try {
-    return await performGeminiModelRequest(key, family, payload, policy, requestId);
+    return await performGeminiModelRequest(key, family, payload, policy, requestId, requestOptions);
   } catch (error) {
     throw explainGeminiError(error);
   } finally {
@@ -578,7 +598,8 @@ async function performGeminiRequest(key, type, payload, policy) {
   }
 }
 
-async function performGeminiModelRequest(key, family, payload, policy, requestId) {
+async function performGeminiModelRequest(key, family, payload, policy, requestId, requestOptions = {}) {
+  throwIfGeminiCancelled(requestOptions.signal);
   const cache = getGeminiCache(key);
   if (policy.mode === 'free') {
     const remaining = getGeminiFreePacing(family).pausedUntil - Date.now();
@@ -596,7 +617,8 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
   let lastError;
   let busyFallbacks = 0;
   let backupModel = null;
-  const retryBudget = { used: 0, attempts: 0, lastError: null, schemaFallbackUsed: false };
+  throwIfGeminiCancelled(requestOptions.signal);
+  const retryBudget = { used: 0, attempts: 0, lastError: null, schemaFallbackUsed: false, ...requestOptions };
   for (let attempt = 0; attempt < (policy.mode === 'free' ? 8 : 4); attempt++) {
     const model = backupModel || getGeminiCandidates(key, family, policy).find(candidate => !attempted.has(candidate.id));
     backupModel = null;
@@ -647,7 +669,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       return data;
     } catch (error) {
       lastError = error;
-      if (error.code === 'GEMINI_REQUEST_LIMIT') throw error;
+      if (['GEMINI_REQUEST_LIMIT', 'GEMINI_SESSION_LIMIT', 'GEMINI_CANCELLED'].includes(error.code)) throw error;
       if (error.status === 503) {
         if (error.code === 'GEMINI_BUSY_COOLDOWN') throw error;
         const serverDelayMs = getGeminiRetryInfo(error).serverDelayMs || 0;
@@ -1519,86 +1541,26 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialDat
     </div>
   );
 };
-const FunLoading = ({ destination }) => {
-  const [progress, setProgress] = useState(0);
-  const [messageIndex, setMessageIndex] = useState(0);
-
-  const funMessages = [
-    `正在打包 AI 的虛擬行李...`,
-    `正在與 ${destination} 的當地貓咪打好關係...`,
-    `正在計算最佳拉麵湯頭/美食比例...`,
-    `正在幫您預測哪天會出大太陽...`,
-    `正在跟 Google Maps 吵架找最佳路線...`,
-    `正在搜尋哪裡的廁所最乾淨...`,
-    `AI 導遊正在繫緊鞋帶準備出發...`,
-    `正在幫您省下每一分冤枉錢...`,
-    `正在整理當地交通與旅遊小提醒...` 
-  ];
-
+const FunLoading = ({ destination, status, selectedInfo = [], onCancel }) => {
+  const [startedAt] = useState(() => Date.now());
+  const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    // 立即執行一次，避免畫面剛出來是空白
-    const timer = setInterval(() => {
-      setProgress(prev => {
-        // 優化後的進度條邏輯：
-        // 1. 0-30%: 快速衝刺 (啟動感)
-        // 2. 30-70%: 穩定前進 (處理感)
-        // 3. 70-85%: 變慢 (思考感)
-        // 4. 85%+: 極慢並卡在 95% (等待感，不會讓人覺得當機)
-        
-        if (prev >= 95) return 95; // 卡在 95%，等待 API 回傳
-        
-        let increment = 0;
-        if (prev < 30) increment = 2;       // 快
-        else if (prev < 70) increment = 0.5; // 中
-        else if (prev < 85) increment = 0.1; // 慢
-        else increment = 0.02;               // 龜速 (85%~95%)
-
-        return prev + increment;
-      });
-    }, 50); // 更新頻率加快，動畫更流暢
-
-    const msgInterval = setInterval(() => {
-      setMessageIndex(prev => (prev + 1) % funMessages.length);
-    }, 2500);
-
-    return () => {
-      clearInterval(timer);
-      clearInterval(msgInterval);
-    };
-  }, []);
-
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
   return (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] px-4 animate-in fade-in duration-500">
-      <div className="w-full max-w-md space-y-6 text-center">
-        
-        {/* 動畫 Icon */}
-        <div className="relative inline-block">
-          <div className="absolute inset-0 bg-blue-400 blur-2xl opacity-20 rounded-full animate-pulse"></div>
-          <Plane className="w-16 h-16 text-blue-600 animate-bounce relative z-10" />
+    <div className="flex flex-col items-center justify-center min-h-[75vh] px-4 animate-in fade-in duration-500">
+      <div className="w-full max-w-lg space-y-5 text-center">
+        <Plane className="w-14 h-14 mx-auto text-blue-600 animate-bounce" />
+        <h2 className="text-xl md:text-2xl font-bold text-slate-700 dark:text-[#ebd5c1]">正在規劃 {destination || '你的旅程'}</h2>
+        <div className="rounded-2xl border border-blue-200 dark:border-[#5d4037] bg-blue-50 dark:bg-[#2c1f1b] p-5 space-y-3" role="status" aria-live="polite">
+          <Loader2 className="w-6 h-6 mx-auto animate-spin text-blue-600" />
+          <p className="text-sm text-blue-800 dark:text-sky-200">{status?.message || '正在處理行程資料…'}</p>
+          {status?.remainingSeconds > 0 && <p className="text-3xl font-bold tabular-nums text-blue-700 dark:text-sky-300">{status.remainingSeconds} 秒</p>}
+          <p className="text-xs text-slate-500 dark:text-[#a08d85]">已等待 {elapsed} 秒；請保持此頁開啟。結果完成後會自動顯示。</p>
         </div>
-
-        {/* 趣味文字 */}
-        <div className="h-16 flex items-center justify-center">
-             <h2 className="text-xl md:text-2xl font-bold text-slate-700 animate-in slide-in-from-bottom-2 fade-in duration-500 key={messageIndex}">
-               {funMessages[messageIndex]}
-             </h2>
-        </div>
-
-        {/* 進度條 */}
-        <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner border border-slate-200 relative">
-          <div 
-            className="bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 h-full rounded-full transition-all duration-300 ease-out relative"
-            style={{ width: `${progress}%` }}
-          >
-              <div className="absolute inset-0 bg-white/30 w-full h-full animate-[shimmer_2s_infinite] border-t border-white/20"></div>
-          </div>
-        </div>
-        
-        <div className="flex justify-between text-xs font-bold text-slate-400 font-mono">
-          <span>START</span>
-          <span>{Math.floor(progress)}%</span>
-          <span>READY</span>
-        </div>
+        {selectedInfo.length > 0 && <p className="text-xs text-slate-500 dark:text-[#a08d85]">此次一併產生：{selectedInfo.join('、')}。資訊越多，通常需要較長時間。</p>}
+        <button type="button" onClick={onCancel} className="rounded-xl border border-slate-300 dark:border-[#5d4037] px-5 py-2 text-sm text-slate-600 dark:text-[#d6c0b3] hover:bg-slate-100 dark:hover:bg-[#33241f]">停止等待，保留資料</button>
       </div>
     </div>
   );
@@ -3268,8 +3230,9 @@ function mergeTripItemDetails(item, details) {
 }
 
 const TRIP_CHECKPOINT_KEY = 'gemini_trip_generation_checkpoint';
-const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily, planningMode = 'full' }) =>
-  JSON.stringify({ revision: planningMode === 'basic' ? 'basic-city-windows-2' : 'flash-schedule-1', baseConstraints, dateList, bookingContext, modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
+const getTripCheckpointSignature = ({ baseConstraints, dateList, bookingContext, modelFamily, planningMode = 'full', basicPreferences }) =>
+  JSON.stringify({ revision: planningMode === 'basic' ? 'basic-requests-details-3' : 'flash-schedule-1', baseConstraints, dateList, bookingContext,
+    ...(planningMode === 'basic' ? { preferences: getBasicTripPreferences(baseConstraints, basicPreferences) } : {}), modelFamily: modelFamily === 'lite' ? 'flash' : modelFamily });
 function readTripCheckpoint(signature) {
   try {
     const saved = JSON.parse(globalThis.localStorage?.getItem(TRIP_CHECKPOINT_KEY) || 'null');
@@ -3284,6 +3247,90 @@ function clearTripCheckpoint() {
 }
 
 const basicTripText = (value, length = 100) => bookingText(value).slice(0, length);
+const BASIC_TRIP_DETAIL_OPTIONS = [
+  { key: 'introductions', label: '景點簡短介紹', detail: '認識看點與安排理由', default: true },
+  { key: 'transportTips', label: '交通方式建議', detail: '步行、地鐵或自駕的概略路線', default: true },
+  { key: 'practicalTips', label: '門票、預約與行李提醒', detail: '出發前需要確認的事項', default: false },
+  { key: 'dining', label: '餐飲與點餐建議', detail: '簡短菜色翻譯與預估價位', default: false },
+  { key: 'cityGuides', label: '城市指南與常用語', detail: '交通、文化與旅遊提醒', default: false },
+  { key: 'seasonalAdvice', label: '季節與穿著建議', detail: '依季節概估，並非即時天氣預報', default: false },
+];
+const normalizeBasicDetailOptions = value => Object.fromEntries(BASIC_TRIP_DETAIL_OPTIONS.map(option =>
+  [option.key, typeof value?.[option.key] === 'boolean' ? value[option.key] : option.default]));
+
+function getTripAutomaticRetryDelay(error, recovery) {
+  if (['GEMINI_CANCELLED', 'GEMINI_SESSION_LIMIT', 'TRIP_INPUT_CONFLICT'].includes(error.code)) return null;
+  if (canSplitTripOutput(error)) return 15000;
+  const info = getGeminiRetryInfo(error);
+  if (error.status === 429 && !info.retryable) return null;
+  if (![408, 429, 500, 502, 503, 504].includes(error.status)) return null;
+  const delay = Math.max(info.serverDelayMs || 0, 60000 * (2 ** recovery));
+  // 每日配額、權限與過長的伺服器等待不能用無限重試解決。
+  return delay <= 5 * 60000 ? delay : null;
+}
+
+async function runTripWithWaiting(generate, { mode, signal, session, onStatus = () => {} }) {
+  for (let recovery = 0; recovery <= 2; recovery++) {
+    throwIfGeminiCancelled(signal);
+    onStatus({ stage: 'generating', message: recovery ? '正在接續未完成的行程…' : '正在依交通、住宿與特殊要求規劃…' });
+    try {
+      const result = await generate();
+      throwIfGeminiCancelled(signal);
+      return result;
+    } catch (error) {
+      throwIfGeminiCancelled(signal);
+      const delay = mode === 'free' && recovery < 2 && (!session || session.attempts < session.maxAttempts)
+        ? getTripAutomaticRetryDelay(error, recovery) : null;
+      if (delay === null) throw error;
+      const until = Date.now() + delay;
+      const reason = canSplitTripOutput(error) ? '正在補齊未完成的景點與特殊要求' : '服務或短時間配額暫時受限';
+      while (until > Date.now()) {
+        throwIfGeminiCancelled(signal);
+        const seconds = Math.ceil((until - Date.now()) / 1000);
+        onStatus({ stage: 'waiting', remainingSeconds: seconds, message: `${reason}，${seconds} 秒後自動接續（${recovery + 1}/2）。不需要再按規劃。` });
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000, until - Date.now())));
+      }
+    }
+  }
+}
+
+function getBasicTripRequests(text, dateList, fixedActivities = []) {
+  const requests = bookingText(text).split(/\r?\n|[；;]/u).map(line => line.replace(/^\s*(?:[-•]\s*|\d+[.)、]\s*)/u, '').trim()).filter(Boolean)
+    .map((text, index) => ({ id: `request-${index + 1}`, text }));
+  const pins = [];
+  const addPin = (value, requestId) => {
+    const title = bookingText(value.title), start = tripTimeMinutes(value.startTime), explicitEnd = tripTimeMinutes(value.endTime);
+    if (!title || !value.date || start === null) throw Object.assign(new Error('固定活動需要填寫日期、開始時間與名稱。'), { code: 'TRIP_INPUT_CONFLICT' });
+    if (!dateList.includes(value.date)) throw Object.assign(new Error(`「${title}」的日期不在這次旅程內。`), { code: 'TRIP_INPUT_CONFLICT' });
+    const type = ['meal', 'logistics', 'activity', 'spot'].includes(value.type) ? value.type
+      : /行李|寄放|寄存|luggage/iu.test(title) ? 'logistics' : /餐|燒肉|焼肉|料理|dinner|lunch/iu.test(title) ? 'meal' : 'activity';
+    const duration = type === 'logistics' ? 20 : type === 'meal' ? 90 : /演唱會|演唱会|concert/iu.test(title) ? 180 : 90;
+    const end = explicitEnd ?? start + duration;
+    if (end <= start || end > 1439) throw Object.assign(new Error(`「${title}」的結束時間必須晚於開始時間，跨日活動請拆成兩天。`), { code: 'TRIP_INPUT_CONFLICT' });
+    pins.push({ id: value.id || `fixed-${pins.length + 1}`, request_id: requestId, date: value.date, title,
+      type, area: bookingText(value.area), start, end, end_estimated: explicitEnd === null });
+  };
+  for (const request of requests) {
+    const days = new Set();
+    for (const match of request.text.matchAll(/(?:第\s*(\d{1,2})\s*天|\bday\s*(\d{1,2})\b)/giu)) {
+      const date = dateList[Number(match[1] || match[2]) - 1]; if (date) days.add(date);
+    }
+    for (const match of request.text.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) if (dateList.includes(match[0])) days.add(match[0]);
+    const times = [...request.text.matchAll(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g)].map(match => match[0].padStart(5, '0'));
+    if (days.size && times.length && !/不要|不想|避免|不必|不用|之前|之後|前後|航班|班機|起飛|報到|新幹線|車次|\b(?:flight|train)\b/iu.test(request.text)) {
+      const title = request.text.replace(/\b\d{4}-\d{2}-\d{2}\b|第\s*\d{1,2}\s*天|\bday\s*\d{1,2}\b|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/giu, '')
+        .replace(/^[\s:：,，、~～–—-]*(?:一定要|必須|請安排)?\s*/u, '').replace(/^[到至~～–—-]+\s*/u, '').trim();
+      if (title) for (const date of days) addPin({ id: `${request.id}-${date}`, date, startTime: times[0], endTime: times[1], title }, request.id);
+    }
+  }
+  for (const activity of fixedActivities) {
+    if (![activity.title, activity.date, activity.startTime, activity.endTime].some(bookingText)) continue;
+    const id = `fixed-request-${pins.length + 1}`;
+    requests.push({ id, text: `${activity.date} ${activity.startTime}–${activity.endTime || '結束待確認'} ${activity.title}${activity.area ? `（${activity.area}）` : ''}` });
+    addPin(activity, id);
+  }
+  return { requests, pins };
+}
 // 這些別名只協助辨識城市，不取代地圖查詢；無法辨識時保留使用者的地區文字。
 const BASIC_TRIP_CITY_HINTS = [
   ['東京', /東京|东京|墨田|台東|淺草|浅草|上野|押上|\b(?:tokyo|sumida|taito|asakusa|ueno|narita|haneda|nrt|hnd)\b|淺草寺|浅草寺|晴空塔|skytree|senso[ -]?ji|阿美橫町|合羽橋/iu],
@@ -3312,7 +3359,7 @@ const basicTripDayMinute = (eventDate, time, date) => {
     : (new Date(`${eventDate}T00:00:00Z`) - new Date(`${date}T00:00:00Z`)) / 60000 + minute;
 };
 
-function getBasicTripDayContext(bookingContext, date, fallbackArea = '') {
+function getBasicTripDayContext(bookingContext, date, fallbackArea = '', planningPins = []) {
   const rules = bookingContext?.days?.find(day => day.date === date)
     || { required_events: [], blocked_intervals: [], start_stay: null, end_stay: null };
   const records = bookingContext?.transport || [];
@@ -3379,7 +3426,7 @@ function getBasicTripDayContext(bookingContext, date, fallbackArea = '') {
   const unknownTransport = records.some(record => record.departure_date === date && !record.departure_time
     || record.arrival_date === date && !record.arrival_time);
   let windows = unknownTransport || hasLeftDestination && !records.some(record => record.role === 'inbound' && record.departure_date === date)
-    ? [] : [{ start: 540, end: 1200 }];
+    ? [] : [{ start: Math.max(0, Math.min(540, ...planningPins.map(pin => pin.start - 30))), end: 1380 }];
   for (const block of [...blocks, ...transfers]) windows = windows.flatMap(window => {
     if (block.end <= window.start || block.start >= window.end) return [window];
     return [...(block.start > window.start ? [{ start: window.start, end: block.start }] : []),
@@ -3404,7 +3451,7 @@ const isBasicPlaceholder = (title, type) => /自行選|自行挑|自由活動|�
   || type === 'spot' && /^(?:附近|周邊|市區|住宿附近|nearby)$/iu.test(title);
 
 function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, source = 'ai', usedSpots = new Set()) {
-  const context = getBasicTripDayContext(bookingContext, date, fallbackArea);
+  const context = getBasicTripDayContext(bookingContext, date, fallbackArea, raw?.fixed_pins || []);
   const { rules, windows, startArea, endArea, transfers, unknownTransport, hasLeftDestination } = context;
   const timeline = [];
   const item = (time, type, title, extras = {}) => ({ time, type, title, description: '', location_query: startArea,
@@ -3436,7 +3483,7 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
   const hotelDeparture = transfers.filter(transfer => transfer.kind === 'departure').at(0);
   if (rules.start_stay && (windows.length || hotelDeparture || unknownTransport)) {
     const checkout = rules.required_events.find(event => event.booking_event === 'check_out');
-    const leave = unknownTransport ? null : Math.max(0, Math.min(540, hotelDeparture ? hotelDeparture.start - 10 : 540,
+    const leave = unknownTransport ? null : Math.max(0, Math.min(540, windows[0]?.start ?? 540, hotelDeparture ? hotelDeparture.start - 10 : 540,
       checkout ? (tripTimeMinutes(checkout.latest_time) ?? 550) - 10 : 540));
     timeline.push(item(leave === null ? '待確認' : tripTimeLabel(leave), 'hotel', `${checkout ? '退房／寄放行李' : '從住宿地區出發'}：${startArea}`, {
       booking_id: rules.start_stay.booking_id, booking_event: checkout ? 'check_out' : 'leave_hotel',
@@ -3444,47 +3491,88 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
       warnings_tips: checkout ? '退房與寄放／領取行李需向住宿確認；早班交通應提早完成退房。' : '每日起點以住宿地區概估。',
     }));
   }
+  const options = normalizeBasicDetailOptions(raw?.detail_options);
+  const pins = Array.isArray(raw?.fixed_pins) ? raw.fixed_pins : [];
+  const reservations = pins.map(pin => {
+    const city = basicTripCity(`${pin.area} ${pin.title}`);
+    const window = windows.find(window => pin.start >= window.start + 30 && pin.end <= window.end && (!city || !window.city || city === window.city));
+    if (!window) throw Object.assign(new Error(`第 ${dayIndex} 天「${pin.title}」${tripTimeLabel(pin.start)}–${tripTimeLabel(pin.end)} 與已填交通、住宿或可用城市時段衝突，請調整固定活動。`), { code: 'TRIP_INPUT_CONFLICT' });
+    return { ...pin, window, from: Math.max(window.start, pin.start - 30), to: pin.end };
+  });
+  for (let i = 0; i < reservations.length; i++) if (reservations.slice(i + 1).some(other =>
+    other.window.id === reservations[i].window.id && other.from < reservations[i].to && other.to > reservations[i].from)) {
+    throw Object.assign(new Error(`第 ${dayIndex} 天的固定活動與接駁時間重疊，請調整起訖時間。`), { code: 'TRIP_INPUT_CONFLICT' });
+  }
   const periods = { morning: 540, noon: 720, afternoon: 840, evening: 1080 };
   const states = new globalThis.Map(windows.map(window => [window.id, { cursor: window.start, area: window.area, lastEnd: null }]));
   let omitted = 0;
-  const stops = Array.isArray(raw?.stops) ? raw.stops.slice(0, 5) : [];
+  const proposed = (Array.isArray(raw?.stops) ? raw.stops.slice(0, 8) : []).filter(stop => {
+    if (stop?.type !== 'meal') return true;
+    const minute = tripTimeMinutes(stop.start_time) ?? (stop.period === 'evening' ? 1080 : stop.period === 'noon' ? 720 : 540);
+    return !reservations.some(pin => pin.type === 'meal' && pin.window.id === stop.window_id && Math.abs(pin.start - minute) <= 180
+      && !stop.request_ids?.includes(pin.request_id) && basicStopIdentity(stop.title) !== basicStopIdentity(pin.title));
+  });
+  const matchesPin = (stop, pin) => stop?.request_ids?.includes(pin.request_id)
+    || basicStopIdentity(stop?.title) === basicStopIdentity(pin.title);
+  const fixed = reservations.map(pin => ({ ...proposed.find(stop => matchesPin(stop, pin)), title: pin.title, area: pin.area || pin.window.area,
+    window_id: pin.window.id, type: pin.type, fixed_pin: pin, start_time: tripTimeLabel(pin.start), end_time: tripTimeLabel(pin.end), request_ids: [pin.request_id] }));
+  const stops = [...proposed.filter(stop => !reservations.some(pin => matchesPin(stop, pin))), ...fixed]
+    .sort((a, b) => (tripTimeMinutes(a.start_time) ?? periods[a.period] ?? 540) - (tripTimeMinutes(b.start_time) ?? periods[b.period] ?? 540));
   for (const stop of stops) {
-    const title = basicTripText(stop?.title, 80);
-    if (!['spot', 'meal'].includes(stop?.type) || !title || isBasicPlaceholder(title, stop.type)) { omitted++; continue; }
+    const title = basicTripText(stop?.title, 120).replace(/^(?:約\s*)?(?:[01]?\d|2[0-3]):[0-5]\d\s*[｜|:：-]?\s*/u, '');
+    if (!['spot', 'meal', 'activity', 'logistics'].includes(stop?.type) || !title || isBasicPlaceholder(title, stop.type)) { omitted++; continue; }
     const window = windows.find(window => window.id === stop.window_id);
     if (!window) { omitted++; continue; }
     const cities = basicTripCities(`${title} ${bookingText(stop.area)}`);
     if (window.city && cities.some(city => city !== window.city)) { omitted++; continue; }
     const identity = basicStopIdentity(title);
-    if (stop.type === 'spot' && usedSpots.has(identity)) { omitted++; continue; }
+    if (stop.type === 'spot' && !stop.fixed_pin && usedSpots.has(identity)) { omitted++; continue; }
     const state = states.get(window.id), area = basicTripText(stop.area) || window.area;
-    const travel = state.lastEnd !== null && basicStopIdentity(state.area) === basicStopIdentity(area) ? 15 : 30;
-    const duration = stop.type === 'meal' ? 45 : 90;
-    const start = Math.max(state.cursor, periods[stop.period] ?? state.cursor);
-    const activityStart = start + travel, end = activityStart + duration;
+    const travel = stop.fixed_pin ? 30 : Math.min(120, Math.max(15, Number(stop.travel_minutes) || (state.lastEnd !== null && basicStopIdentity(state.area) === basicStopIdentity(area) ? 15 : 30)));
+    const requestedStart = tripTimeMinutes(stop.start_time) ?? tripTimeMinutes(bookingText(stop.title).match(/^(\d{1,2}:\d{2})\b/)?.[1]);
+    const requestedEnd = tripTimeMinutes(stop.end_time);
+    const typicalDuration = stop.type === 'meal' ? 60 : stop.type === 'logistics' ? 20 : /演唱會|concert/iu.test(title) ? 180 : 90;
+    const duration = stop.fixed_pin ? stop.fixed_pin.end - stop.fixed_pin.start
+      : requestedStart !== null && requestedEnd !== null && requestedEnd > requestedStart ? requestedEnd - requestedStart
+        : Math.min(360, Math.max(15, Number(stop.duration_minutes) || typicalDuration));
+    let activityStart = stop.fixed_pin ? stop.fixed_pin.start : Math.max(state.cursor + travel, requestedStart ?? (periods[stop.period] ?? state.cursor) + travel);
+    let start = activityStart - travel, end = activityStart + duration;
+    if (!stop.fixed_pin && reservations.some(pin => pin.window.id === window.id && start < pin.to && end > pin.from)) { omitted++; continue; }
     // 指定的城市／時段放不下就略過，不能搬到下一個城市繼續排原地景點。
-    if (end > window.end) { omitted++; continue; }
+    if (end > window.end || start < state.cursor) {
+      if (stop.fixed_pin) throw Object.assign(new Error(`第 ${dayIndex} 天「${title}」的固定時間無法銜接，請調整活動或接駁時間。`), { code: 'TRIP_INPUT_CONFLICT' });
+      omitted++; continue;
+    }
     timeline.push(item(tripTimeLabel(start), 'transport', `前往 ${title}`, {
       end_time: tripTimeLabel(activityStart), location_query: `${window.city || ''} ${area} ${title}`.trim(),
       activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
-      transport_detail: `步行／市區交通概估 ${travel} 分鐘，實際路線請用地圖確認。`,
+      transport_detail: `${options.transportTips && bookingText(stop.route_suggestion) ? `${basicTripText(stop.route_suggestion, 200)}\n` : ''}接駁概估 ${travel} 分鐘，實際路線請用地圖確認。`,
     }));
-    timeline.push(item(tripTimeLabel(activityStart), stop.type, title, {
+    timeline.push(item(tripTimeLabel(activityStart), stop.type === 'logistics' ? 'activity' : stop.type, title, {
       end_time: tripTimeLabel(end), location_query: `${window.city || ''} ${area} ${title}`.trim(),
       activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
-      description: '免費簡易建議；時間與停留長度為概估。', warnings_tips: '營業、票價與交通需自行確認。',
+      description: options.introductions ? basicTripText(stop.description, 240) : '',
+      warnings_tips: `${options.practicalTips && bookingText(stop.tips) ? `${basicTripText(stop.tips, 240)}\n` : ''}${stop.type === 'logistics' ? '行李寄放服務、預約與營業時間需先向店家或車站確認。' : '營業、票價與交通請於出發前確認。'}${stop.fixed_pin?.end_estimated ? ' 此活動只提供開始時間，停留長度為概估。' : ''}`,
+      menu_recommendations: options.dining && stop.type === 'meal' && Array.isArray(stop.menu_recommendations)
+        ? stop.menu_recommendations.slice(0, 2).filter(menu => ['local', 'cn', 'price'].every(field => typeof menu?.[field] === 'string')) : [],
+      price_level: options.dining && ['Low', 'Mid', 'High'].includes(stop.price_level) ? stop.price_level : '',
+      request_ids: Array.isArray(stop.request_ids) ? stop.request_ids.filter(id => typeof id === 'string') : [],
+      is_logistics: stop.type === 'logistics', fixed_activity_id: stop.fixed_pin?.id,
+      time_estimated: !stop.fixed_pin, end_time_estimated: !stop.fixed_pin || stop.fixed_pin.end_estimated,
     }));
     if (stop.type === 'spot') usedSpots.add(identity);
     state.cursor = end; state.lastEnd = end; state.area = area;
+    if (stop.type === 'logistics' && /寄放|寄存|存放|storage|locker/iu.test(title)) state.luggageAt = { title, location: `${window.city || ''} ${area} ${title}`.trim() };
   }
-  for (const window of windows.filter(window => window.collectLuggage)) {
+  for (const window of windows.filter(window => window.collectLuggage || states.get(window.id).luggageAt)) {
     const state = states.get(window.id);
     if (state.lastEnd === null) continue;
     const pickup = state.lastEnd + 30;
-    timeline.push(item(tripTimeLabel(state.lastEnd), 'transport', `返回住宿領取行李：${startArea}`, {
-      end_time: tripTimeLabel(pickup), location_query: rules.start_stay.address || rules.start_stay.name,
-      transport_detail: '返回住宿概估 30 分鐘，確認行李寄放後再前往車站／機場。',
+    timeline.push(item(tripTimeLabel(state.lastEnd), 'transport', state.luggageAt ? `領取行李：${state.luggageAt.title}` : `返回住宿領取行李：${startArea}`, {
+      end_time: tripTimeLabel(pickup), location_query: state.luggageAt?.location || rules.start_stay.address || rules.start_stay.name,
+      transport_detail: '領取行李與接駁概估 30 分鐘，寄放服務、營業時間與最後領取時間需先確認。',
     }));
+    state.lastEnd = pickup; state.cursor = pickup;
   }
   if (rules.end_stay && !hasLeftDestination) {
     const checkIn = rules.required_events.find(event => event.booking_event === 'check_in');
@@ -3506,97 +3594,162 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
   const warnings = ['活動與接駁時間為概估；跨城市交通抵達後，活動改在抵達地安排。'];
   if (unknownTransport) warnings.push('當天交通時間未填完整，先保留交通與住宿，暫不安排景點。');
   if (omitted) warnings.push('重複、過於籠統、城市不符或時間不足的建議已略過。');
+  const returnArrival = hasLeftDestination && !windows.length && bookingContext?.transport?.find(record => record.role === 'inbound' && record.arrival_date === date);
   const cities = [...new Set([context.startCity, ...windows.map(window => window.city), context.endCity].filter(Boolean))];
   return { day_index: dayIndex, date, city: cities.join(' → ') || basicTripText(raw?.city) || fallbackArea || '目的地',
-    title: basicTripText(raw?.title) || '每日景點與交通規劃', weather_forecast: '', clothing_suggestion: '',
+    ...(returnArrival ? { city: basicTripCity(returnArrival.arrival_station) || returnArrival.arrival_station || '回程抵達地' } : {}),
+    title: basicTripText(raw?.title) || '每日景點與交通規劃',
+    weather_forecast: options.seasonalAdvice ? basicTripText(raw?.seasonal_advice, 160) : '',
+    clothing_suggestion: options.seasonalAdvice ? basicTripText(raw?.clothing_suggestion, 160) : '',
     timeline, planning_mode: 'basic', generation_source: source, planning_notes: warnings.join(' ') };
 }
 
 function getBasicTripPreferences(baseConstraints, basicPreferences) {
   const fromConstraints = label => baseConstraints.match(new RegExp(`- ${label}: ([^\\n]*)`))?.[1] || '';
+  const requestText = basicPreferences && Object.hasOwn(basicPreferences, 'requests') ? bookingText(basicPreferences.requests)
+    : bookingText(baseConstraints.match(/- Special Requests: ([\s\S]*?)(?=\n\s*- [A-Za-z &]+:|$)/)?.[1]);
   return {
     destinations: basicTripText(basicPreferences?.destinations || fromConstraints('Destinations'), 200),
     style: basicTripText(basicPreferences?.style || fromConstraints('Travel Style & Pacing'), 100),
     transport: basicTripText(basicPreferences?.transport || fromConstraints('Transport Mode'), 80),
-    requests: basicTripText(basicPreferences?.requests || fromConstraints('Special Requests'), 800),
+    requests: /^(?:none|無|沒有|n\/a)$/iu.test(requestText) ? '' : requestText,
     budget: basicTripText(basicPreferences?.budget || fromConstraints('Restaurant Budget'), 80),
+    details: normalizeBasicDetailOptions(basicPreferences?.details),
+    fixedActivities: Array.isArray(basicPreferences?.fixedActivities) ? basicPreferences.fixedActivities : [],
   };
 }
 
-async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences }) {
+function getBasicTripSchema(dates, options, requests) {
+  const stop = { window_id: tripStringSchema(), type: { type: 'string', enum: ['spot', 'meal', 'activity', 'logistics'] },
+    title: tripStringSchema(), area: tripStringSchema(), period: { type: 'string', enum: ['morning', 'noon', 'afternoon', 'evening'] },
+    start_time: tripStringSchema(), end_time: tripStringSchema(), duration_minutes: { type: 'integer' }, travel_minutes: { type: 'integer' },
+    request_ids: { type: 'array', items: tripStringSchema() } };
+  if (options.introductions) stop.description = tripStringSchema();
+  if (options.transportTips) stop.route_suggestion = tripStringSchema();
+  if (options.practicalTips) stop.tips = tripStringSchema();
+  if (options.dining) { stop.price_level = { type: 'string', enum: ['Low', 'Mid', 'High'] }; stop.menu_recommendations = { ...TRIP_MENU_SCHEMA, maxItems: 2 }; }
+  const day = { day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
+    stops: { type: 'array', maxItems: 8, items: tripObjectSchema(stop) } };
+  if (options.seasonalAdvice) { day.seasonal_advice = tripStringSchema(); day.clothing_suggestion = tripStringSchema(); }
+  const root = { days: { type: 'array', minItems: dates.length, maxItems: dates.length, items: tripObjectSchema(day) } };
+  if (requests.length) root.request_reports = { type: 'array', items: tripObjectSchema({ id: tripStringSchema(),
+    status: { type: 'string', enum: ['scheduled', 'considered', 'needs_confirmation', 'cannot_fit'] }, note: tripStringSchema() }) };
+  if (options.cityGuides) root.city_infos = { type: 'array', maxItems: 6, items: tripObjectSchema({ city: tripStringSchema(),
+    history_culture: tripStringSchema(), transport_tips: tripStringSchema(), safety_scams: tripStringSchema(), subsidies: tripStringSchema(), tax_refund: tripStringSchema(),
+    basic_phrases: { type: 'array', maxItems: 3, items: tripObjectSchema({ label: tripStringSchema(), local: tripStringSchema(), roman: tripStringSchema() }) } }) };
+  return tripObjectSchema(root);
+}
+
+async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences, requestOptions = {} }) {
   const preferences = getBasicTripPreferences(baseConstraints, basicPreferences);
-  const signature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily: 'flash', planningMode: 'basic' });
+  const { requests, pins } = getBasicTripRequests(preferences.requests, dateList, preferences.fixedActivities);
+  // 在呼叫 AI 前確認使用者指定的時段有空間，避免把輸入衝突当成服務錯誤重試。
+  for (const date of dateList) if (pins.some(pin => pin.date === date)) buildBasicTripDay({ stops: [], fixed_pins: pins.filter(pin => pin.date === date) }, date, dateList.indexOf(date) + 1, bookingContext, preferences.destinations);
+  const signature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, basicPreferences, modelFamily: 'flash', planningMode: 'basic' });
   const checkpoint = readTripCheckpoint(signature) || { signature, scheduleDays: [], completedDays: [] };
   const saved = new globalThis.Map((checkpoint.completedDays || []).filter(day => day.planning_mode === 'basic'
     && day.generation_source === 'ai' && day.date === dateList[day.day_index - 1] && Array.isArray(day.timeline)).map(day => [day.date, day]));
   const usedSpots = new Set([...saved.values()].flatMap(day => day.timeline.filter(item => item.type === 'spot').map(item => basicStopIdentity(item.title))));
   const days = [];
+  const guideData = preferences.details.cityGuides ? { ...checkpoint.city_guides } : {};
+  const reports = new globalThis.Map((checkpoint.request_reports || []).map(report => [report.id, report]));
   for (let offset = 0; offset < dateList.length;) {
+    throwIfGeminiCancelled(requestOptions.signal);
     if (saved.has(dateList[offset])) { days.push(saved.get(dateList[offset++])); continue; }
     let end = Math.min(offset + 10, dateList.length);
     for (let i = offset + 1; i < end; i++) if (saved.has(dateList[i])) { end = i; break; }
     const dates = dateList.slice(offset, end);
-    const contexts = dates.map(date => getBasicTripDayContext(bookingContext, date, preferences.destinations));
+    const contexts = dates.map(date => getBasicTripDayContext(bookingContext, date, preferences.destinations, pins.filter(pin => pin.date === date)));
     const compactDays = dates.map((date, i) => ({ date,
       windows: contexts[i].windows.map(window => ({ id: window.id, from: tripTimeLabel(window.start), to: tripTimeLabel(window.end), city: window.city, base_area: window.area })),
     }));
     const response = await requestGemini(apiKey, 'flash', {
       contents: [{ parts: [{ text: `Plan a BASIC travel itinerary in Traditional Chinese. Output compact JSON only.
-Preferences: ${JSON.stringify(preferences)}
+Preferences: ${JSON.stringify({ destinations: preferences.destinations, style: preferences.style, transport: preferences.transport, budget: preferences.budget })}
+SPECIAL REQUESTS (higher priority than extra sightseeing): ${JSON.stringify(requests)}
+FIXED ACTIVITIES (exact dates/start/end; never shorten, move or repeat): ${JSON.stringify(pins.filter(pin => dates.includes(pin.date)).map(pin => ({ ...pin, start: tripTimeLabel(pin.start), end: tripTimeLabel(pin.end) })))}
+REQUESTED INFORMATION: ${JSON.stringify(preferences.details)}
 Days and local-time CITY WINDOWS: ${JSON.stringify(compactDays)}
 Previously visited sights (avoid repeats): ${JSON.stringify([...usedSpots].slice(-90))}
+Previous incomplete attempt: ${checkpoint.last_issue || 'None'}
 Return exactly these dates, indexed ${offset + 1}-${end}. Each day: day_index, date, city, title, stops.
-An ordinary full day needs 2-3 REAL NAMED sights and 1-2 meals; at most 5 stops. Short arrival/departure windows need fewer stops.
-Each stop: window_id from THAT date, type (spot or meal), specific title, nearby area, period (morning/noon/afternoon/evening). Sort by window and period.
+An ordinary full day needs 2-3 REAL NAMED sights and 1-2 meals; at most 8 stops. Concert/reservation days prioritize the actual event and need fewer extra sights.
+Each stop: window_id from THAT date, type (spot/meal/activity/logistics), specific title WITHOUT clock text, nearby area, period, start_time/end_time (HH:mm or empty), duration_minutes, travel_minutes from the preceding area and request_ids.
+Give useful planned times and appropriate duration: meals 45-90 min, luggage 15-30 min, sights 45-120 min; concerts must retain the full requested duration, not become 90-min sightseeing. Sort by city window and time.
+Include each fixed activity with its request ID; exact user times take precedence. Allow 30 minutes of travel before fixed activities. Plan optional stops around them, not over them.
 Every stop MUST stay in that window's city. A rail arrival changes the activity city immediately. Do not reuse the departure hotel's area after arrival.
-Cluster each day's stops in one or two nearby districts. Allow 30 minutes from the base, 15-30 minutes between stops, 90 minutes per sight and 45 minutes per meal.
+Cluster each day's stops in one or two nearby districts. Allow 30 minutes from the base, 15-30 minutes between nearby stops, and 45-60 minutes for distant districts. Respect requested pace and restaurant budget; do not fill an event day with unnecessary sights.
 The app reserves airport/station connections and hotel/luggage return time. Fit stops entirely inside windows; use [] when none are usable.
 Sight titles must name actual attractions, markets, museums or shopping streets. NEVER use generic walks, free time, nearby sights, hotel-area sightseeing or choose-it-yourself placeholders.
 Meal titles should name a restaurant or a specific district AND food suggestion. Avoid duplicate attractions across the trip.
-Respect requests and pacing. Do not output times, booking IDs, descriptions, menus, weather, exchange rates, city guides or full addresses.
+Luggage handling is logistics, not a sight. Do not assume a convenience store has luggage storage; mark service availability as unconfirmed. Once luggage is stored at a station, collect it there rather than returning to the old hotel.
+If introductions=true, each visit needs a useful 40-90 character description of its highlights or why it suits this day. If transportTips=true, give a short route_suggestion from the preceding area; label routes as suggestions, no invented live schedules.
+If practicalTips=true, add brief tickets/reservation/storage tips. If dining=true, meals may include at most 2 menu_recommendations (local/cn/estimated price) and price_level. Omit unselected fields.
+If seasonalAdvice=true, add seasonal_advice and clothing_suggestion explicitly labeled seasonal estimates, not real-time weather. If cityGuides=true, return short city_infos only for cities in this batch, with at most 3 basic_phrases each.
+For every special request, return request_reports with its id, status (scheduled/considered/needs_confirmation/cannot_fit) and a brief honest note. scheduled requires matching request_ids on the actual stop. Never claim all requests fulfilled when dates, times or services are unknown.
+Do not output booking IDs, exchange rates, unrequested long guides or full hotel addresses.
 The app preserves original booked flight/train codes and times; you only select meaningful local visits.` }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 8192,
-        responseJsonSchema: tripObjectSchema({ days: { type: 'array', minItems: dates.length, maxItems: dates.length,
-          items: tripObjectSchema({ day_index: { type: 'integer' }, date: { type: 'string', enum: dates }, city: tripStringSchema(), title: tripStringSchema(),
-            stops: { type: 'array', maxItems: 5, items: tripObjectSchema({ window_id: tripStringSchema(), type: { type: 'string', enum: ['spot', 'meal'] },
-              title: tripStringSchema(), area: tripStringSchema(), period: { type: 'string', enum: ['morning', 'noon', 'afternoon', 'evening'] } }) } }) } }),
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: Object.values(preferences.details).filter(Boolean).length > 2 ? 24576 : 16384,
+        responseJsonSchema: getBasicTripSchema(dates, preferences.details, requests),
       },
-    });
+    }, requestOptions);
+    const incomplete = message => { checkpoint.last_issue = message; writeTripCheckpoint(checkpoint); return tripShapeError(message); };
     let parsed;
     try { parsed = JSON.parse(cleanJsonResult(getGeminiText(response))); }
-    catch { throw tripShapeError('AI 未完成有效的景點規劃，已保留輸入資料。請稍後重試；不會以制式散步範本代替。'); }
-    if (!Array.isArray(parsed?.days) || parsed.days.length !== dates.length) throw tripShapeError('AI 行程日期不完整，已保留輸入資料，請稍後重試。');
+    catch { throw incomplete('AI 回覆尚未形成有效的景點資料，已保留輸入與完成的部分。'); }
+    if (!Array.isArray(parsed?.days) || parsed.days.length !== dates.length) throw incomplete('AI 行程日期尚未完整，正在保留已完成資料。');
     const byDate = new globalThis.Map(parsed.days.map(day => [day.date, day]));
-    if (byDate.size !== dates.length) throw tripShapeError('AI 行程日期重複，請稍後重試。');
+    if (byDate.size !== dates.length) throw incomplete('AI 行程日期重複，尚未完成有效規劃。');
+    // 同一份回覆中的選填資訊也要保存，補生成其他日期時不必重新索取。
+    if (preferences.details.cityGuides && Array.isArray(parsed.city_infos)) for (const guide of parsed.city_infos) {
+      if (bookingText(guide?.city) && ['history_culture', 'transport_tips', 'safety_scams', 'subsidies', 'tax_refund'].every(field => typeof guide[field] === 'string') && Array.isArray(guide.basic_phrases)) guideData[guide.city] = guide;
+    }
+    if (Array.isArray(parsed.request_reports)) for (const report of parsed.request_reports) if (requests.some(request => request.id === report?.id)) {
+      if (reports.get(report.id)?.status !== 'scheduled') reports.set(report.id, report);
+    }
+    checkpoint.city_guides = guideData; checkpoint.request_reports = [...reports.values()];
     for (let i = 0; i < dates.length; i++) {
       const raw = byDate.get(dates[i]);
-      if (raw?.day_index !== offset + i + 1 || !Array.isArray(raw.stops)) throw tripShapeError('AI 景點資料不完整，請稍後重試。');
+      if (raw?.day_index !== offset + i + 1 || !Array.isArray(raw.stops)) throw incomplete('AI 景點資料尚未完整。');
       const context = contexts[i];
-      const day = buildBasicTripDay(raw, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
+      const day = buildBasicTripDay({ ...raw, detail_options: preferences.details, fixed_pins: pins.filter(pin => pin.date === dates[i]) }, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
       const available = context.windows.reduce((total, window) => total + window.end - window.start, 0);
-      const minimumSights = available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
-      if (day.timeline.filter(item => item.type === 'spot').length < minimumSights) {
-        throw tripShapeError(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點，AI 尚未完成有效規劃。輸入與已完成的天數會保留，請稍後重試。`);
+      const hasLongActivity = day.timeline.some(item => item.type === 'activity' && !item.is_logistics && tripTimeMinutes(item.end_time) - tripTimeMinutes(item.time) >= 120);
+      const minimumSights = hasLongActivity ? 1 : available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
+      if (day.timeline.filter(item => item.type === 'spot' || item.type === 'activity' && !item.is_logistics).length < minimumSights) {
+        throw incomplete(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點或指定活動，AI 尚未完成有效規劃。`);
       }
       for (const window of context.windows) if (window.end - window.start >= 150
-          && !day.timeline.some(item => item.type === 'spot' && item.planning_window_id === window.id)) {
-        throw tripShapeError(`第 ${day.day_index} 天的 ${window.city || window.area || '可用時段'} 尚未安排有效景點，已保留輸入與已完成的天數，請稍後重試。`);
+          && !day.timeline.some(item => (item.type === 'spot' || item.type === 'activity' && !item.is_logistics) && item.planning_window_id === window.id)) {
+        throw incomplete(`第 ${day.day_index} 天的 ${window.city || window.area || '可用時段'} 尚未安排有效景點或指定活動。`);
+      }
+      if (preferences.details.introductions && day.timeline.some(item => ['spot', 'meal', 'activity'].includes(item.type) && !item.is_logistics && !item.fixed_activity_id && !bookingText(item.description))) {
+        throw incomplete(`第 ${day.day_index} 天尚未完成你選擇的景點簡短介紹。`);
       }
       days.push(day); saved.set(day.date, day);
       checkpoint.scheduleDays = [...saved.values()]; checkpoint.completedDays = [...saved.values()];
       writeTripCheckpoint(checkpoint);
     }
+    checkpoint.city_guides = guideData; checkpoint.request_reports = [...reports.values()]; checkpoint.last_issue = '';
+    writeTripCheckpoint(checkpoint);
     offset = end;
   }
   clearTripCheckpoint();
+  const requestReports = requests.map(request => {
+    const report = reports.get(request.id);
+    const scheduled = days.some(day => day.timeline.some(item => item.request_ids?.includes(request.id)));
+    return { ...request, status: scheduled ? 'scheduled' : ['considered', 'needs_confirmation', 'cannot_fit'].includes(report?.status) ? report.status : 'needs_confirmation',
+      note: scheduled ? bookingText(report?.note) || '已依日期與時段納入行程。' : report?.status === 'scheduled'
+        ? '時間表中未找到對應安排，請確認此需求。' : bookingText(report?.note) || 'AI 未提供可核對的安排，請確認此需求。' };
+  });
   return { planning_mode: 'basic',
     trip_summary: `免費簡易行程：${preferences.destinations || '旅遊目的地'}。保留具名景點，依已填交通時間與住宿地區安排每日路線。`,
     currency_rate: '簡易模式未查詢匯率；記帳預設台幣，可自行調整', currency_rate_val: 1, currency_code: 'TWD',
-    city_guides: {}, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
+    city_guides: guideData, detail_options: preferences.details, request_reports: requestReports, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
 
-async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null, basicPreferences = null }) {
-  if (getGeminiCache(apiKey).policy.mode === 'free') return generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences });
+async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList, batchSize = 4, bookingContext = null, basicPreferences = null, requestOptions = {} }) {
+  if (getGeminiCache(apiKey).policy.mode === 'free') return generateBasicTripData({ apiKey, baseConstraints, dateList, bookingContext, basicPreferences, requestOptions });
   const totalDays = dateList.length;
   const effectiveBatchSize = Math.max(1, Math.floor(batchSize));
   const planningFamily = modelFamily === 'lite' ? 'flash' : modelFamily;
@@ -3637,7 +3790,7 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
       generationConfig: { responseMimeType: 'application/json', maxOutputTokens: schema || taskFamily === 'lite' ? 8192 : GEMINI_TRIP_OUTPUT_TOKENS,
         ...(schema ? { responseJsonSchema: schema } : {}),
       },
-    });
+    }, requestOptions);
     try {
       const parsed = JSON.parse(cleanJsonResult(getGeminiText(response)));
       if (!isRecord(parsed)) throw new Error('Expected a JSON object.');
@@ -3949,6 +4102,10 @@ const App = () => {
   const [apiKey, setApiKey] = usePersistentState('gemini_api_key', '');
   const [apiUsageMode, setApiUsageMode] = usePersistentState('gemini_api_usage_mode', 'free');
   const [allowBusyFallback, setAllowBusyFallback] = usePersistentState('gemini_busy_fallback', true);
+  const [detailOptions, setDetailOptions] = usePersistentState('travel_detail_options', normalizeBasicDetailOptions());
+  const [fixedActivities, setFixedActivities] = usePersistentState('travel_fixed_activities', []);
+  const [generationStatus, setGenerationStatus] = useState(null);
+  const generationController = useRef(null);
   const effectiveModelType = apiUsageMode === 'paid' ? (modelType === 'pro' ? 'pro' : 'flash') : 'flash';
   const geminiModels = useGeminiModels(apiKey, apiUsageMode, allowBusyFallback);
   const [showInputTutorial, setShowInputTutorial] = useState(true); // 預設開啟，內部會檢查 localStorage
@@ -4429,6 +4586,7 @@ const App = () => {
   };
 
   const generateItinerary = async () => {
+    if (generationController.current && !generationController.current.signal.aborted) return;
     if (!normalizeGeminiKey(apiKey)) {
       alert("請輸入您的 Gemini API Key");
       return;
@@ -4518,12 +4676,18 @@ const App = () => {
       - Output Language: Traditional Chinese (Taiwan)
     `;
 
+    const controller = new AbortController();
+    generationController.current = controller;
+    const session = apiUsageMode === 'free' ? { attempts: 0, maxAttempts: 6 } : null;
+    const planningPreferences = { destinations: basicData.destinations, style: basicData.type, transport: transportConstraint,
+      requests: basicData.specialRequests, budget: priceConstraint, details: normalizeBasicDetailOptions(detailOptions),
+      fixedActivities: Array.isArray(fixedActivities) ? fixedActivities : [] };
     try {
-      const tripData = await generateTripData({
+      const tripData = await runTripWithWaiting(() => generateTripData({
         apiKey: apiKey, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
-        basicPreferences: { destinations: basicData.destinations, style: basicData.type, transport: transportConstraint,
-          requests: basicData.specialRequests, budget: priceConstraint },
-      });
+        basicPreferences: planningPreferences, requestOptions: { signal: controller.signal, session },
+      }), { mode: apiUsageMode, signal: controller.signal, session, onStatus: setGenerationStatus });
+      throwIfGeminiCancelled(controller.signal);
       const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations }, created: Date.now() };
 
       // 根據 AI 回傳的幣別設定符號
@@ -4551,14 +4715,20 @@ const App = () => {
       setStep('result');
 
     } catch (error) {
+      if (controller.signal.aborted || error.code === 'GEMINI_CANCELLED') {
+        if (generationController.current === controller) { setErrorMsg('已停止規劃，填寫資料與已完成的部分會保留。'); setStep('input'); }
+        return;
+      }
       console.error(error);
       const progress = readTripCheckpoint(getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, modelFamily,
-        planningMode: apiUsageMode === 'free' ? 'basic' : 'full' }));
+        planningMode: apiUsageMode === 'free' ? 'basic' : 'full', basicPreferences: planningPreferences }));
       const schedules = Array.isArray(progress?.scheduleDays) ? progress.scheduleDays.length : 0;
       const completed = Array.isArray(progress?.completedDays) ? progress.completedDays.length : 0;
       setErrorMsg("行程生成失敗：" + error.message + (schedules || completed
-        ? ` 已保留 ${schedules} 天時間表與 ${completed} 天完整行程；資料不變時，再按規劃即可繼續。` : ''));
+        ? ` 已保留 ${schedules} 天時間表與 ${completed} 天完整行程；下次規劃會接續未完成的部分。` : ''));
       setStep('input');
+    } finally {
+      if (generationController.current === controller) { generationController.current = null; setGenerationStatus(null); }
     }
   };
 
@@ -4736,7 +4906,7 @@ const App = () => {
             <fieldset className="mt-4 space-y-2">
               <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[{ value: 'free', title: '免費 API：簡易規劃', detail: '依交通時間與住宿地區概估路線，省略長篇介紹與精準修復，減少請求量。' },
+                {[{ value: 'free', title: '免費 API：簡易規劃', detail: '保留特殊要求、簡短介紹與概略路線；可自選資訊，盡量一次生成。' },
                   { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
                   <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
                     <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
@@ -4767,7 +4937,8 @@ const App = () => {
               </p>
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，保留具名景點、用餐與概略路線；依交通時間切換城市，以住宿地區安排起終點，省略長篇指南、菜單與天氣。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。AI 未完成時顯示原因並保留資料，不以制式散步範本代替。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，保留具名景點、簡短介紹、用餐與特殊要求；依交通時間切換城市，以住宿地區安排起終點。進階資訊可在下方勾選，與行程一起產生。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。</p>
+                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並有限次自動接續。整次規劃最多送出 6 次生成嘗試；每日額度、權限或輸入衝突會明確停止。成功時只需一次請求，等待本身不消耗生成額度。</p>
                 <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
                 {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
                   <summary className="cursor-pointer">查看查詢到的文字模型（{geminiModels.listedModels.length} 個）</summary>
@@ -4923,14 +5094,49 @@ const App = () => {
                 ref={textareaRef} // 綁定 ref
                 name="specialRequests" 
                 value={basicData.specialRequests} 
-                maxLength={apiUsageMode === 'free' ? 800 : undefined}
+                maxLength={apiUsageMode === 'free' ? 6000 : undefined}
                 onChange={handleBasicChange} 
                 rows={2} 
                 className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
                 placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
               />
-              {apiUsageMode === 'free' && <p className="text-xs text-slate-500 dark:text-[#a08d85]">免費簡易模式最多採用前 800 字特殊需求；複雜偏好建議使用完整模式。</p>}
+              {apiUsageMode === 'free' && <p className="text-xs text-slate-500 dark:text-[#a08d85]">每行一項需求，最多 6,000 字，送出時會完整保留。固定時間可寫「第 3 天 17:00–21:00 名古屋巨蛋演唱會」，或填寫下方固定活動；未提供的營業與寄存服務會標示待確認。</p>}
             </div>
+            {apiUsageMode === 'free' && <>
+              <fieldset className="rounded-2xl border border-purple-200 dark:border-[#5d4037] p-4 space-y-3">
+                <legend className="px-2 text-sm font-bold text-slate-700 dark:text-[#ebd5c1]">希望一起產生哪些資訊？</legend>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {BASIC_TRIP_DETAIL_OPTIONS.map(option => <label key={option.key} className="flex items-start gap-3 cursor-pointer">
+                    <input type="checkbox" name={`detail_${option.key}`} checked={normalizeBasicDetailOptions(detailOptions)[option.key]}
+                      onChange={event => setDetailOptions(previous => ({ ...normalizeBasicDetailOptions(previous), [option.key]: event.target.checked }))} className="mt-1 w-4 h-4 rounded text-purple-600" />
+                    <span><span className="block text-sm font-semibold text-slate-700 dark:text-[#ebd5c1]">{option.label}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85]">{option.detail}</span></span>
+                  </label>)}
+                </div>
+                <p className="text-xs text-slate-500 dark:text-[#a08d85]">勾選越多，回覆內容與等待時間通常越多；資訊會併入同一次行程生成，避免每個項目另外發送請求。</p>
+              </fieldset>
+              <details className="rounded-2xl border border-purple-200 dark:border-[#5d4037] p-4" open={fixedActivities.length > 0 || undefined}>
+                <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-[#ebd5c1]">固定活動／訂位時間（選填）</summary>
+                <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">演唱會、餐廳訂位或必排行程先保留，再安排其他景點。請填日期與開始時間；填結束時間可避免活動被提早結束。</p>
+                <div className="mt-3 space-y-3">{fixedActivities.map((activity, index) => <div key={activity.id} className="rounded-xl bg-slate-50 dark:bg-[#2c1f1b] p-3 space-y-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    {[{ key: 'date', label: '活動日期', type: 'date' }, { key: 'startTime', label: '開始時間', type: 'time' }, { key: 'endTime', label: '結束時間（選填）', type: 'time' },
+                      { key: 'title', label: '活動／餐廳名稱', type: 'text' }, { key: 'area', label: '城市／地區（選填）', type: 'text' }].map(field => <label key={field.key} className="text-xs text-slate-600 dark:text-[#d6c0b3]">
+                      {field.label}<input type={field.type} aria-label={`固定活動 ${index + 1} ${field.label}`} value={activity[field.key] || ''}
+                        onChange={event => setFixedActivities(previous => previous.map(item => item.id === activity.id ? { ...item, [field.key]: event.target.value } : item))}
+                        className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#1e1410] p-2" />
+                    </label>)}
+                    <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">活動類型<select aria-label={`固定活動 ${index + 1} 活動類型`} value={activity.type || 'activity'}
+                      onChange={event => setFixedActivities(previous => previous.map(item => item.id === activity.id ? { ...item, type: event.target.value } : item))}
+                      className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#1e1410] p-2">
+                      <option value="activity">活動／演唱會</option><option value="meal">用餐／訂位</option><option value="spot">必訪景點</option><option value="logistics">行李／接送</option>
+                    </select></label>
+                  </div>
+                  <button type="button" onClick={() => setFixedActivities(previous => previous.filter(item => item.id !== activity.id))} className="text-xs text-red-500">移除此固定活動</button>
+                </div>)}</div>
+                <button type="button" onClick={() => setFixedActivities(previous => [...previous, { id: `fixed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, date: '', startTime: '', endTime: '', title: '', area: '', type: 'activity' }])}
+                  className="mt-3 flex items-center gap-1 text-sm font-bold text-purple-600 dark:text-purple-300"><Plus className="w-4 h-4" />新增固定活動</button>
+              </details>
+            </>}
             <div className="space-y-2">
               <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3] flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
               <div className="flex flex-wrap gap-3">
@@ -5191,7 +5397,9 @@ const App = () => {
   };
 
   const renderLoading = () => (
-      <FunLoading destination={basicData.destinations} />
+      <FunLoading destination={basicData.destinations} status={generationStatus?.stage === 'waiting' ? generationStatus : geminiModels.requestState || generationStatus}
+        selectedInfo={apiUsageMode === 'free' ? BASIC_TRIP_DETAIL_OPTIONS.filter(option => normalizeBasicDetailOptions(detailOptions)[option.key]).map(option => option.label) : []}
+        onCancel={() => generationController.current?.abort()} />
   );
 
   const renderSavedList = () => (
@@ -5343,9 +5551,16 @@ const App = () => {
 
         {itineraryData.planning_mode === 'basic' && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-bold">免費簡易行程：交通時間保留，活動時間與住宿地區路線為概估。</p>
-          <p className="mt-1">不包含完整城市指南、菜單、天氣與精準路線驗證；營業、接駁與住宿政策請自行確認。想取得完整規劃，可回首頁開通 API 計費後選擇完整模式。</p>
+          <p className="mt-1">{itineraryData.detail_options ? `本次選擇：${BASIC_TRIP_DETAIL_OPTIONS.filter(option => itineraryData.detail_options[option.key]).map(option => option.label).join('、') || '景點與交通時間表'}。` : '景點與交通時間表。'}路線、價格與季節資訊為建議，營業、寄存服務與住宿政策請於出發前確認。</p>
           {itineraryData.fallback_message && <p className="mt-2 font-medium">{itineraryData.fallback_message}</p>}
         </div>}
+        {itineraryData.request_reports?.length > 0 && <details className="rounded-2xl border border-purple-200 bg-purple-50 p-4 text-sm text-purple-900">
+          <summary className="cursor-pointer font-bold">特殊要求檢核（{itineraryData.request_reports.length} 項）</summary>
+          <ul className="mt-3 space-y-3">{itineraryData.request_reports.map(report => <li key={report.id}>
+            <span className="font-bold">{{ scheduled: '已安排', considered: '已納入偏好', needs_confirmation: '需要確認', cannot_fit: '目前無法安排' }[report.status] || '需要確認'}：</span>{report.text}
+            <p className="mt-1 text-xs text-purple-700">{report.note}</p>
+          </li>)}</ul>
+        </details>}
 
         {/* --- 功能 3: 城市指南區域 --- */}
         {itineraryData.city_guides && Object.keys(itineraryData.city_guides).length > 0 && (
