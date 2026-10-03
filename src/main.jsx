@@ -28,6 +28,8 @@ const TRAVEL_THEME_CSS = `
   .travel-header, .travel-panel { transition: background-color .25s, border-color .25s, box-shadow .25s; }
   .travel-share-content { min-height: 18rem; height: min(48vh, 30rem); line-height: 1.8; resize: none; }
   .travel-share-overlay { background: rgb(8 18 35 / .58); backdrop-filter: blur(8px); }
+  .travel-icon-input { padding-inline-start: 3rem; }
+  .travel-expense-amount { padding-inline-start: 2.5rem; padding-inline-end: 7rem; }
   html[data-travel-theme="dark"] { color-scheme: dark; background: #081321; color: #e8f1ff; }
   html[data-travel-theme="dark"] .travel-shell { color: #e8f1ff; background: radial-gradient(ellipse at 8% 0%, rgb(41 108 163 / .28), transparent 44%), radial-gradient(ellipse at 96% 36%, rgb(46 129 132 / .14), transparent 42%), linear-gradient(145deg, #081321, #101e32 58%, #081623); }
   html[data-travel-theme="dark"] .travel-header { background: linear-gradient(125deg, rgb(24 45 70 / .9), rgb(15 34 49 / .92)); border-color: #304963; box-shadow: 0 20px 64px rgb(0 0 0 / .24), inset 0 1px 0 rgb(170 214 255 / .06); }
@@ -1564,7 +1566,7 @@ const ExpenseForm = ({ travelers, onSave, onCancel, currencySettings, initialDat
              placeholder={isGoDutch ? "每人金額 (單價)" : "總金額"} 
              value={form.amount} 
              onChange={handleChange} 
-             className="w-full pl-8 p-2 border rounded outline-none focus:border-emerald-500" 
+             className="travel-expense-amount w-full p-2 border rounded outline-none focus:border-emerald-500" 
            />
            <div className="absolute right-2 top-2.5 text-[10px] text-emerald-600 bg-emerald-100 px-1.5 rounded">
              匯率 {form.exchangeRate}
@@ -1831,7 +1833,63 @@ const CityGuide = ({ guideData, cities }) => {
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, geminiRequestMessage = '', updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather, onIconClick }) => {
+const DayAdjustmentModal = ({ state, onClose, onInstructionChange, onSubmit, requestMessage }) => {
+  const dialogRef = useRef(null);
+  const inputRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    inputRef.current?.focus();
+    const keyboard = event => {
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); }
+      if (event.key !== 'Tab') return;
+      const controls = [...(dialogRef.current?.querySelectorAll('button:not(:disabled), textarea:not(:disabled), summary') || [])];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', keyboard);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener('keydown', keyboard);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+  return createPortal(
+    <div className="travel-share-overlay fixed inset-0 z-[10000] flex items-center justify-center p-3 md:p-6 print:hidden" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="day-adjustment-title" className="travel-share-dialog w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-3xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+        <div className="px-5 py-4 md:px-6 border-b border-slate-100 flex items-center justify-between gap-3">
+          <div><h3 id="day-adjustment-title" className="font-bold text-lg text-slate-800">單日調整 · 第 {state.snapshot.day_index} 天</h3><p className="text-xs text-slate-500 mt-1">{state.snapshot.date} · {state.snapshot.city}</p></div>
+          <button type="button" onClick={onClose} aria-label="關閉單日調整" className="rounded-full p-2 text-slate-500 hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 md:p-6 flex-1 min-h-0 overflow-y-auto space-y-4">
+          <p className="text-sm leading-relaxed text-slate-600">AI 會先讀取目前這一天的內容，再修改你指定的部分與必要的接駁時間。已訂交通、住宿與固定活動會保留。</p>
+          <details className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+            <summary className="font-bold cursor-pointer">查看目前當日行程（{state.snapshot.timeline.length} 項）</summary>
+            <ol className="mt-3 space-y-2">{state.snapshot.timeline.map((item, index) => <li key={index}><span className="font-mono mr-2">{item.time}</span>{item.title}</li>)}</ol>
+          </details>
+          <div>
+            <label htmlFor="day-adjustment-request" className="block font-bold text-sm text-slate-700 mb-2">這一天想怎麼微調？</label>
+            <textarea ref={inputRef} id="day-adjustment-request" value={state.instruction} onChange={event => onInstructionChange(event.target.value)} maxLength={2000} rows={5} disabled={state.processing} placeholder="例如：下午改逛秋葉原，晚餐延後到 20:00，上午行程維持原樣。" className="w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-60" />
+            <p className="mt-1 text-xs text-slate-500">僅生成這一天的修改內容，其他天的行程保持原樣。</p>
+          </div>
+          {state.processing && <div role="status" aria-live="polite" className="rounded-xl bg-blue-50 p-3 text-sm text-blue-700 flex items-start gap-2"><Loader2 className="w-4 h-4 shrink-0 animate-spin mt-0.5" /><span>{requestMessage || '正在讀取目前行程並調整這一天…'}</span></div>}
+          {state.error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{state.error}</p>}
+          {state.summary && <p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700 whitespace-pre-wrap">{state.summary}</p>}
+        </div>
+        <div className="px-5 py-4 md:px-6 border-t border-slate-100 flex flex-wrap gap-3 justify-end shrink-0">
+          <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50">{state.processing ? '停止等待，保留行程' : '關閉'}</button>
+          <button type="button" onClick={onSubmit} disabled={state.processing || !state.instruction.trim()} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"><Sparkles className="w-4 h-4" /> 重新生成這一天</button>
+        </div>
+      </div>
+    </div>, document.body
+  );
+};
+
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, geminiRequestMessage = '', updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather, onIconClick, onAdjustDay }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [expenseToEdit, setExpenseToEdit] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
@@ -1967,9 +2025,14 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
       <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : 'travel-day-header'}`}>
         {!isPrintMode && (<><div className="travel-day-glow absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div><div className="travel-day-glow absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-teal-200 opacity-20 rounded-full blur-3xl"></div><div className="travel-day-plane absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div></>)}
         <div className="relative z-10">
-           <div className="flex items-end gap-2 mb-2">{isPrintMode ? (<h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>) : (<input value={day.city} onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })} className="travel-day-input bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/70 drop-shadow-sm" placeholder="輸入城市名稱" />)}</div>
-           <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : 'travel-day-subtitle'}`}><Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> {isPrintMode ? <span>{day.title}</span> : (<input value={day.title} onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })} className="travel-day-input travel-day-subtitle bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full md:w-1/2 transition-colors placeholder-sky-100/70" placeholder="輸入行程主題" />)}</div>
-           {day.planning_notes && <p className="mt-3 text-xs text-white/90">{day.planning_notes}</p>}
+          <div className="flex flex-wrap items-start gap-3 justify-between">
+            <div className="min-w-0 flex-1 basis-64">
+           <div className="flex items-end gap-2 mb-2">{isPrintMode ? (<h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>) : (<input value={day.city} onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })} className="travel-day-input bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full min-w-0 transition-colors placeholder-white/70 drop-shadow-sm" placeholder="輸入城市名稱" />)}</div>
+           <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : 'travel-day-subtitle'}`}><Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> {isPrintMode ? <span>{day.title}</span> : (<input value={day.title} onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })} className="travel-day-input travel-day-subtitle bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full min-w-0 transition-colors placeholder-sky-100/70" placeholder="輸入行程主題" />)}</div>
+            </div>
+            {!isPrintMode && onAdjustDay && <button type="button" onClick={() => onAdjustDay(dayIndex)} aria-label={`單日調整：第 ${day.day_index} 天`} className="travel-day-refresh shrink-0 rounded-xl border border-slate-200/60 px-3 py-2 text-sm font-bold flex items-center gap-2 hover:opacity-80 transition-opacity"><Edit3 className="w-4 h-4" /> 單日調整</button>}
+          </div>
+           {day.planning_notes && <p className="travel-day-subtitle mt-3 text-xs">{day.planning_notes}</p>}
            {(day.weather_forecast || day.clothing_suggestion) && (<div className={`mt-4 flex flex-wrap gap-3 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>{day.weather_forecast && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-sky-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'travel-day-badge'}`}><CloudSun className="w-4 h-4" /><span>{day.weather_forecast}</span></div>)}{day.clothing_suggestion && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-orange-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'travel-day-badge travel-day-clothing'}`}><Shirt className="w-4 h-4" /><span>{day.clothing_suggestion}</span></div>)}{!isPrintMode && (<button onClick={handleWeatherClick} disabled={isRefreshingWeather} className={`travel-day-refresh p-2 rounded-full bg-white/20 hover:bg-white/40 transition-all text-white ${isRefreshingWeather ? 'animate-spin' : 'hover:rotate-180'}`} title="重新預測天氣"><RefreshCw className="w-5 h-5" /></button>)}</div>)}
         </div>
       </div>
@@ -1987,21 +2050,15 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                     {item.type === 'flight' && <Plane className="w-6 h-6 md:w-7 md:h-7" />}{item.type === 'transport' && <Train className="w-6 h-6 md:w-7 md:h-7" />}{item.type === 'meal' && <Utensils className="w-6 h-6 md:w-7 md:h-7" />}{item.type === 'hotel' && <Hotel className="w-6 h-6 md:w-7 md:h-7" />}{item.type === 'activity' && <BookOpen className="w-6 h-6 md:w-7 md:h-7" />}{item.type === 'shopping' && <Wallet className="w-6 h-6 md:w-7 md:h-7" />}{(item.type === 'spot' || !['flight','transport','meal','hotel','activity','shopping'].includes(item.type)) && <MapPin className="w-6 h-6 md:w-7 md:h-7" />}
                   </div>
 
-                  <div className={`flex-1 bg-white rounded-[2rem] p-5 md:p-7 shadow-[0_4px_20px_rgb(0,0,0,0.06)] hover:shadow-[0_8px_25px_rgb(0,0,0,0.1)] transition-all duration-300 transform relative group border-2 border-slate-50 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
-                    <div className="absolute top-3 right-3 flex items-center gap-1 bg-white/90 backdrop-blur-sm p-1 rounded-full shadow-sm z-20 print:hidden border border-slate-200">
-                        <button onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-2 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-full transition-colors" title="編輯"><Edit3 className="w-4 h-4" /></button>
-                        <div className="w-px h-4 bg-slate-200"></div>
-                        <button onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors" title="刪除"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-
-                    <div className="flex flex-col md:flex-row justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
-                      <div>
+                  <div className={`min-w-0 flex-1 bg-white rounded-[2rem] p-5 md:p-7 shadow-[0_4px_20px_rgb(0,0,0,0.06)] hover:shadow-[0_8px_25px_rgb(0,0,0,0.1)] transition-all duration-300 transform relative group border-2 border-slate-50 ${isPrintMode ? 'shadow-none border-l-4 border-slate-300 rounded-none pl-4 border-t-0 border-r-0 border-b-0 hover:transform-none' : ''}`}>
+                    <div className="flex flex-wrap justify-between items-start mb-3 md:mb-4 gap-3 md:gap-4">
+                      <div className="min-w-0 flex-1 basis-64 break-words">
                         {editingTimeId === timelineIndex && !isPrintMode ? (<input type="time" defaultValue={item.time} autoFocus onBlur={(e) => { onTimeUpdate(dayIndex, timelineIndex, e.target.value); setEditingTimeId(null); }} onKeyDown={(e) => { if(e.key === 'Enter') { onTimeUpdate(dayIndex, timelineIndex, e.currentTarget.value); setEditingTimeId(null); } }} className="bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-sm font-bold border-2 border-sky-200 outline-none mb-2 font-mono" />) : (<div onClick={() => !isPrintMode && setEditingTimeId(timelineIndex)} className={`inline-flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-1 rounded-full text-xs md:text-sm font-bold mb-2 cursor-pointer hover:bg-sky-100 transition-colors ${isPrintMode ? 'bg-transparent p-0 text-black pl-0' : ''}`} title="點擊修改時間"><Clock className={`w-3.5 h-3.5 ${isPrintMode ? 'hidden' : ''}`} />{item.time_estimated && item.time !== '待確認' ? '約 ' : ''}{item.time}</div>)}
                         <h4 className="font-bold text-xl md:text-2xl text-slate-700 flex flex-wrap items-center gap-2">{item.title}{item.price_level && <span className={`text-[10px] md:text-xs px-2 py-1 rounded-full font-bold ${isPrintMode ? 'border-black text-black border' : item.price_level === 'High' ? 'bg-rose-100 text-rose-600' : item.price_level === 'Mid' ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}`}>{item.price_level === 'High' ? '$$$' : item.price_level === 'Mid' ? '$$' : '$'}</span>}</h4>
                       </div>
-                      <div className={`flex items-center gap-1 ${isPrintMode ? 'hidden' : ''}`}>
-                         <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="p-2.5 rounded-full hover:bg-sky-100 text-sky-400 hover:text-sky-600 transition-colors"><Map className="w-5 h-5" /></a>
-                         <button onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2.5 rounded-full transition-colors ${item.user_notes ? 'bg-amber-100 text-amber-600' : 'text-amber-300 hover:bg-amber-50 hover:text-amber-500'}`}><FileText className="w-5 h-5" /></button>
+                      <div role="toolbar" aria-label={`${item.title}的功能`} className={`travel-card-toolbar max-w-full flex flex-wrap shrink-0 items-center gap-1 ${isPrintMode ? 'hidden' : ''}`}>
+                         <a aria-label={`地圖：${item.title}`} href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location_query || item.title)}`} target="_blank" rel="noreferrer" className="p-2.5 rounded-full hover:bg-sky-100 text-sky-400 hover:text-sky-600 transition-colors"><Map className="w-5 h-5" /></a>
+                         <button aria-label={`筆記：${item.title}`} onClick={() => setActiveNote(activeNote === timelineIndex ? null : timelineIndex)} className={`p-2.5 rounded-full transition-colors ${item.user_notes ? 'bg-amber-100 text-amber-600' : 'text-amber-300 hover:bg-amber-50 hover:text-amber-500'}`}><FileText className="w-5 h-5" /></button>
                          
                          {/* ✅ 修改：加入照片按鈕 + 提示文字 */}
                          <label className="p-2.5 rounded-full hover:bg-rose-50 text-rose-300 hover:text-rose-500 cursor-pointer transition-colors relative group/cam">
@@ -2014,6 +2071,10 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                          </label>
 
                          <button onClick={() => handleDeepDive(timelineIndex, item)} disabled={activeDeepDive?.isLoading} aria-label={`AI 深度導覽：${item.title}`} title={item.ai_details ? '查看已生成的 AI 深度導覽' : '點擊後獨立生成 AI 深度導覽'} className={`p-2.5 rounded-full transition-colors relative disabled:opacity-50 ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-400 hover:bg-violet-50 hover:text-violet-600'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>
+                         <div className="flex items-center gap-1 ml-1 pl-1 border-l border-slate-200 print:hidden">
+                           <button aria-label={`編輯：${item.title}`} onClick={(e) => { e.stopPropagation(); onEditClick(dayIndex, timelineIndex, item.title, day.city); }} className="p-2.5 text-slate-400 hover:text-sky-500 hover:bg-sky-50 rounded-full transition-colors" title="編輯"><Edit3 className="w-4 h-4" /></button>
+                           <button aria-label={`刪除：${item.title}`} onClick={(e) => { e.stopPropagation(); onDeleteClick(dayIndex, timelineIndex); }} className="p-2.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-colors" title="刪除"><Trash2 className="w-4 h-4" /></button>
+                         </div>
                       </div>
                     </div>
                     <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line pl-2 ${isPrintMode ? 'text-black pl-0' : ''}`}>{item.description}</div>
@@ -4251,6 +4312,183 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   return { ...baseData, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
 
+// --- 單日微調：AI 回傳局部修改，程式合併、保留個人資料並驗證訂單 ---
+const DAY_ADJUSTMENT_FIELDS = ['time', 'end_time', 'type', 'title', 'description', 'location_query', 'transport_detail',
+  'price_level', 'warnings_tips', 'menu_recommendations', 'booking_id', 'booking_event', 'at_terminal'];
+const dayAdjustmentError = message => Object.assign(new Error(message), { code: 'GEMINI_DAY_ADJUSTMENT' });
+
+function getDayAdjustmentLocks(item, rules) {
+  const event = rules?.required_events?.find(event => event.booking_id === item.booking_id && event.booking_event === item.booking_event)
+    || rules?.required_events?.find(event => event.code && event.type === item.type && event.time === item.time
+      && bookingText(`${item.title} ${item.transport_detail}`).toLowerCase().includes(event.code.toLowerCase()));
+  const booked = Boolean(event || item.booking_id && item.booking_event) || ['flight', 'hotel'].includes(item.type);
+  const fields = booked ? ['type', 'title', 'location_query', 'booking_id', 'booking_event'] : [];
+  if (item.type === 'flight' || event?.time || booked && item.time === '待確認') fields.push('time', 'end_time');
+  if (item.fixed_activity_id) fields.push('time', 'end_time', 'type', 'title', 'location_query');
+  return { cannot_remove: booked || Boolean(item.fixed_activity_id), fields: [...new Set(fields)] };
+}
+
+function getDayAdjustmentSchema(day) {
+  const fields = Object.fromEntries(DAY_ADJUSTMENT_FIELDS.filter(field => !['menu_recommendations', 'at_terminal', 'type'].includes(field))
+    .map(field => [field, tripStringSchema()]));
+  fields.type = { type: 'string', enum: ['spot', 'activity', 'meal', 'shopping', 'transport', 'hotel', 'flight'] };
+  fields.at_terminal = { type: 'boolean' };
+  fields.menu_recommendations = { ...TRIP_MENU_SCHEMA, maxItems: 3 };
+  return tripObjectSchema({
+    day_index: { type: 'integer' }, date: { type: 'string', enum: [day.date] }, summary: tripStringSchema(),
+    title: tripStringSchema(),
+    changes: { type: 'array', maxItems: 30, items: tripObjectSchema({
+      action: { type: 'string', enum: ['update', 'remove', 'add'] }, item_id: tripStringSchema(), fields: tripObjectSchema(fields, []),
+    }, ['action', 'item_id']) },
+  }, ['day_index', 'date', 'summary', 'changes']);
+}
+
+function applyDayAdjustment(day, patch, bookingContext) {
+  if (patch?.day_index !== day.day_index || patch?.date !== day.date || !Array.isArray(patch.changes)
+      || patch.changes.length > 30 || typeof patch.summary !== 'string' || !patch.summary.trim()) {
+    throw dayAdjustmentError('AI 未回傳完整的單日修改內容，原行程已保留。');
+  }
+  if (Object.keys(patch).some(key => !['day_index', 'date', 'summary', 'title', 'changes'].includes(key))) {
+    throw dayAdjustmentError('AI 試圖修改單日以外的資料，原行程已保留。');
+  }
+  const rules = bookingContext?.days?.find(value => value.date === day.date);
+  const entries = day.timeline.map((item, index) => ({ id: `item-${index + 1}`, originalIndex: index, item, changed: false }));
+  const touched = new Set();
+  for (const change of patch.changes) {
+    if (!change || typeof change.item_id !== 'string' || touched.has(change.item_id)
+        || !['update', 'remove', 'add'].includes(change.action)) throw dayAdjustmentError('AI 的修改項目重複或無法辨識，原行程已保留。');
+    touched.add(change.item_id);
+    const index = entries.findIndex(entry => entry.id === change.item_id);
+    const current = entries[index];
+    const fields = change.fields || {};
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)
+        || Object.keys(fields).some(field => !DAY_ADJUSTMENT_FIELDS.includes(field))) throw dayAdjustmentError('AI 回傳了不支援的修改欄位。');
+    for (const [field, value] of Object.entries(fields)) {
+      const valid = field === 'at_terminal' ? typeof value === 'boolean' : field === 'menu_recommendations'
+        ? Array.isArray(value) && value.length <= 3 && value.every(menu => menu && ['local', 'cn', 'price'].every(key => typeof menu[key] === 'string'))
+        : typeof value === 'string' && value.length <= 6000;
+      if (!valid) throw dayAdjustmentError('AI 回傳的景點資料格式不完整。');
+    }
+    if (change.action !== 'add' && !current || change.action === 'add' && (current || !/^new-[\w-]+$/.test(change.item_id))) {
+      throw dayAdjustmentError('AI 修改了不存在的行程項目，原行程已保留。');
+    }
+    if (current) {
+      const locks = getDayAdjustmentLocks(current.item, rules);
+      if (change.action === 'remove' && locks.cannot_remove
+          || change.action === 'update' && [...locks.fields, 'booking_id', 'booking_event', 'at_terminal']
+            .some(field => Object.hasOwn(fields, field) && fields[field] !== current.item[field])) {
+        throw dayAdjustmentError(`「${current.item.title}」屬於已訂交通、住宿或固定活動，不能更改訂單或移除。`);
+      }
+    }
+    if (change.action === 'remove') { entries.splice(index, 1); continue; }
+    const next = change.action === 'add'
+      ? { description: '', location_query: '', transport_detail: '', warnings_tips: '', price_level: '', menu_recommendations: [],
+          ...(day.planning_mode === 'basic' ? { is_basic: true, time_estimated: true, end_time_estimated: true } : {}), ...fields }
+      : { ...current.item, ...fields };
+    if (current && ['hotel', 'flight'].includes(next.type) && next.type !== current.item.type) throw dayAdjustmentError('不能把一般活動改成新的交通或住宿訂單。');
+    if (!['spot', 'activity', 'meal', 'shopping', 'transport', 'hotel', 'flight'].includes(next.type)
+        || typeof next.title !== 'string' || !next.title.trim()) throw dayAdjustmentError('調整後的項目缺少類型或名稱。');
+    const identityChanged = current && (next.title !== current.item.title || next.location_query !== current.item.location_query);
+    if (change.action === 'add' || identityChanged) {
+      if (!fields.description?.trim() || !fields.location_query?.trim()) throw dayAdjustmentError(`「${next.title}」缺少新地點的介紹或地圖查詢名稱。`);
+      if (isBasicPlaceholder(next.title, next.type)) throw dayAdjustmentError('調整後需要具名景點或店家，不能以自由活動代替。');
+      if (identityChanged) {
+        next.ai_details = null;
+        next.request_ids = [];
+        if (!Object.hasOwn(fields, 'menu_recommendations')) next.menu_recommendations = [];
+        for (const field of ['transport_detail', 'warnings_tips', 'price_level']) if (!Object.hasOwn(fields, field)) next[field] = '';
+      }
+    }
+    if (change.action === 'add' && (next.type === 'flight' || next.booking_id && next.type !== 'hotel')) throw dayAdjustmentError('單日調整不能新增已訂航班或交通班次。');
+    if (change.action === 'add' && next.type === 'hotel'
+        && !(next.booking_id === rules?.end_stay?.booking_id && next.booking_event === 'return_to_hotel')) throw dayAdjustmentError('新增住宿事件必須是返回當晚已訂住宿。');
+    const start = tripTimeMinutes(next.time), end = tripTimeMinutes(next.end_time);
+    if (change.action === 'add' && next.at_terminal && !rules?.terminal_windows?.some(window =>
+      window.booking_id === next.booking_id && start >= window.start && end <= window.end)) throw dayAdjustmentError('候機區活動缺少可確認的航班銜接時段。');
+    if (start === null || start >= 1440 || end !== null && end < start
+        || !['hotel', 'flight'].includes(next.type) && !next.booking_event && (end === null || end <= start)) {
+      throw dayAdjustmentError(`「${next.title}」的時間不完整，需提供合理的開始與結束時間。`);
+    }
+    const entry = { id: change.item_id, originalIndex: current?.originalIndex ?? null, item: next, changed: true };
+    if (current) entries[index] = entry; else entries.push(entry);
+  }
+  if (!entries.length) throw dayAdjustmentError('調整後沒有任何行程，原行程已保留。');
+  if (patch.changes.some(change => change.action !== 'update' || Object.hasOwn(change.fields || {}, 'time'))) {
+    entries.sort((a, b) => (tripTimeMinutes(a.item.time) ?? 1500) - (tripTimeMinutes(b.item.time) ?? 1500));
+  }
+  const overlappingPairs = list => {
+    const pairs = new Set();
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const a = list[i], b = list[j];
+      const fromA = tripTimeMinutes(a.item.time), fromB = tripTimeMinutes(b.item.time);
+      const toA = tripTimeMinutes(a.item.end_time) ?? fromA, toB = tripTimeMinutes(b.item.end_time) ?? fromB;
+      if (fromA !== null && fromB !== null && (fromA < toB && fromB < toA || fromA === fromB && toA > fromA && toB > fromB)) pairs.add([a.id, b.id].sort().join('|'));
+    }
+    return pairs;
+  };
+  const originalPairs = overlappingPairs(day.timeline.map((item, index) => ({ id: `item-${index + 1}`, item })));
+  if ([...overlappingPairs(entries)].some(pair => !originalPairs.has(pair))) throw dayAdjustmentError('調整後的活動或接駁時間互相重疊，原行程已保留。');
+  const nextDay = { ...day, timeline: entries.map(entry => entry.item),
+    ...(Object.hasOwn(patch, 'title') ? { title: typeof patch.title === 'string' && patch.title.trim() ? patch.title : day.title } : {}) };
+  const originalConflicts = new Set(findTripBookingConflicts(protectTripBookingDay(day, rules), rules));
+  const conflicts = findTripBookingConflicts(protectTripBookingDay(nextDay, rules), rules).filter(message => !originalConflicts.has(message));
+  if (conflicts.length) throw dayAdjustmentError(`調整後與已訂交通／住宿衝突：${conflicts.slice(0, 2).join(' ')}`);
+  if (bookingContext) {
+    const activityStarts = entries.filter(entry => ['spot', 'activity', 'meal', 'shopping'].includes(entry.item.type))
+      .map(entry => ({ start: tripTimeMinutes(entry.item.time) })).filter(pin => pin.start !== null);
+    const context = getBasicTripDayContext(bookingContext, day.date, day.city, activityStarts);
+    // 09:00／23:00 是簡易生成的預設步調，不是訂單限制；微調可明確要求更早或更晚。
+    const eveningBoundary = Math.min(1440, ...[...(rules?.blocked_intervals || []), ...context.transfers]
+      .filter(block => block.end > 1380).map(block => Math.max(1380, block.start)));
+    const windows = context.windows.map(window => !window.departure && window.end + (window.returnToStay ? 30 : 0) === 1380
+      ? { ...window, end: eveningBoundary - (window.returnToStay ? 30 : 0) } : window);
+    for (const entry of entries.filter(entry => entry.changed && ['spot', 'activity', 'meal', 'shopping'].includes(entry.item.type))) {
+      const item = entry.item, start = tripTimeMinutes(item.time), end = tripTimeMinutes(item.end_time);
+      if (item.at_terminal) continue;
+      const window = windows.find(window => start >= window.start && end <= window.end);
+      if (!window) throw dayAdjustmentError(`「${item.title}」超出當天可活動的時間，原行程已保留。`);
+      const city = basicTripCity(item.location_query) || basicTripCity(item.activity_city);
+      if (city && window.city && basicStopIdentity(city) !== basicStopIdentity(window.city)) throw dayAdjustmentError(`「${item.title}」的城市與當時所在城市不符。`);
+    }
+  }
+  return { day: nextDay, summary: patch.summary.trim(), changesCount: patch.changes.length + Number(nextDay.title !== day.title),
+    indexMap: Object.fromEntries(entries.filter(entry => entry.originalIndex !== null).map(entry =>
+      [entry.originalIndex, entries.indexOf(entry)])) };
+}
+
+async function generateDayAdjustment({ apiKey, modelFamily = 'flash', day, instruction, bookingContext, preferences = {}, requestOptions = {} }) {
+  const request = bookingText(instruction).trim();
+  if (!request || request.length > 2000) throw dayAdjustmentError('請填寫 2,000 字以內的單日調整需求。');
+  const rules = bookingContext?.days?.find(value => value.date === day.date);
+  const projection = { day_index: day.day_index, date: day.date, city: day.city, title: day.title,
+    timeline: day.timeline.map((item, index) => ({ item_id: `item-${index + 1}`,
+      ...Object.fromEntries([...DAY_ADJUSTMENT_FIELDS, 'fixed_activity_id', 'activity_city'].filter(field => Object.hasOwn(item, field)).map(field => [field, item[field]])),
+      user_notes: bookingText(item.user_notes).slice(0, 1000), locks: getDayAdjustmentLocks(item, rules) })) };
+  const prompt = `Adjust ONLY the existing single travel day below. Respond in Traditional Chinese with one valid JSON object.
+READ CURRENT DAY FIRST: ${JSON.stringify(projection)}
+USER ADJUSTMENT: ${JSON.stringify(request)}
+TRAVEL PREFERENCES: ${JSON.stringify(preferences)}
+AUTHORITATIVE BOOKINGS FOR THIS DATE: ${JSON.stringify(getTripPromptBookings(bookingContext, [day.date]))}
+Return a MINIMAL patch, not a replacement itinerary. Use the original item_id for update/remove, and unique new-* item_id for add. Each item_id may appear only once. fields contains ONLY changed fields; add requires time, end_time, type, title, description and location_query. Moving an item means changing time/end_time. Preserve descriptions and all unmentioned items. Change only what the request asks and the transfers/times necessary to connect it logically; do not redesign the rest of the day.
+Keep day_index, date, city, booked train/flight codes and times, hotel identity, check-in/out limits and fixed activities. Respect each item's locks and cannot_remove. For lodging only arrival/return/departure time may be adjusted within constraints. After an evening outing, update the final hotel return or add a hotel return_to_hotel with the booked hotel ID/name/address. Preserve enough travel and luggage time. Cross-city activities must take place in the city reached at that time. Never overlap events, use an impossible transit window or invent booked transport.
+Replacing a location requires its new description, location_query and transport_detail, plus any relevant tips/menu. Include end_time on changed/new activities and transfers. Keep actual named sights/eateries and useful brief introductions. Retain all original user data; do not send photos or ai_details back. If a request cannot fit or requires altering a locked booking, return changes:[] and explain why in summary. title is optional and must be omitted unless its change is needed. summary briefly describes the actual modifications or unmet request. Do not return any other day, city guides, currency or booking changes.`;
+  const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', responseJsonSchema: getDayAdjustmentSchema(day), maxOutputTokens: 8192 } }, requestOptions);
+  let patch;
+  try { patch = JSON.parse(cleanJsonResult(getGeminiText(data))); }
+  catch (error) { if (error.code) throw error; throw dayAdjustmentError('AI 回覆格式不完整，原行程已保留。'); }
+  throwIfGeminiCancelled(requestOptions.signal);
+  return applyDayAdjustment(day, patch, bookingContext);
+}
+
+function mergeDayAdjustment(itinerary, dayIndex, adjustment) {
+  const days = itinerary.days.map((day, index) => index === dayIndex ? adjustment.day : day);
+  const activeRequestIds = new Set(days.flatMap(day => day.timeline.flatMap(item => item.request_ids || [])));
+  const removedIds = new Set(itinerary.days[dayIndex].timeline.flatMap(item => item.request_ids || []).filter(id => !activeRequestIds.has(id)));
+  return { ...itinerary, days, ...(removedIds.size && itinerary.request_reports ? { request_reports: itinerary.request_reports.map(report =>
+    removedIds.has(report.id) ? { ...report, status: 'needs_confirmation', note: '此項安排已於單日調整中變更，請確認是否仍符合原先要求。' } : report) } : {}) };
+}
+
 const getItineraryShareText = (itinerary, destination, mode = 'simple') => {
   if (!itinerary) return '';
   let text = `${destination || ''}\n`;
@@ -4287,6 +4525,17 @@ const App = () => {
   const textareaRef = useRef(null);
   const [showApiKeyTutorial, setShowApiKeyTutorial] = useState(false);
   const [editModalData, setEditModalData] = useState(null);
+  const [dayAdjustment, setDayAdjustment] = useState(null);
+  const dayAdjustmentRequest = useRef(null);
+  const itineraryRef = useRef(itineraryData);
+  itineraryRef.current = itineraryData;
+  useEffect(() => {
+    setDayAdjustment(null);
+    return () => {
+      dayAdjustmentRequest.current?.controller.abort();
+      dayAdjustmentRequest.current = null;
+    };
+  }, [apiKey, step]);
   const [addModalData, setAddModalData] = useState(null);
   const [isProcessingEdit, setIsProcessingEdit] = useState(false); // AI 處理中的 loading 狀態
   const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
@@ -4705,6 +4954,62 @@ const App = () => {
         newDays[dayIndex].timeline = newTimeline;
         return { ...prev, days: newDays };
      });
+  };
+
+  const closeDayAdjustment = () => {
+    dayAdjustmentRequest.current?.controller.abort();
+    dayAdjustmentRequest.current = null;
+    setDayAdjustment(null);
+  };
+  const openDayAdjustment = dayIndex => {
+    if (dayAdjustmentRequest.current) return;
+    const day = itineraryRef.current?.days?.[dayIndex];
+    if (!day) return;
+    setDayAdjustment({ dayIndex, snapshot: JSON.parse(JSON.stringify(day)), instruction: '', processing: false, error: '', summary: '' });
+  };
+  const submitDayAdjustment = async () => {
+    if (!dayAdjustment || dayAdjustmentRequest.current || !dayAdjustment.instruction.trim()) return;
+    if (!normalizeGeminiKey(apiKey)) {
+      setDayAdjustment(prev => ({ ...prev, error: '請先填入 Gemini API Key 才能使用單日調整。' }));
+      return;
+    }
+    const { dayIndex, instruction } = dayAdjustment;
+    const sourceItinerary = itineraryRef.current;
+    const day = sourceItinerary?.days?.[dayIndex];
+    if (!day) return;
+    const request = { controller: new AbortController(), original: JSON.stringify(day) };
+    dayAdjustmentRequest.current = request;
+    setDayAdjustment(prev => ({ ...prev, snapshot: JSON.parse(request.original), processing: true, error: '', summary: '' }));
+    try {
+      const inputs = sourceItinerary.booking_inputs || { simpleFlights, multiFlights, accommodations };
+      const bookingContext = sourceItinerary.booking_context || buildTripBookingContext({ basicData, ...inputs,
+        dateList: sourceItinerary.days.map(value => value.date) });
+      const result = await generateDayAdjustment({ apiKey, modelFamily: effectiveModelType, day: JSON.parse(request.original), instruction,
+        bookingContext, preferences: { style: basicData.type, transportMode: basicData.transportMode, travelers: basicData.travelers,
+          restaurantBudget: basicData.priceRanges, specialRequests: bookingText(basicData.specialRequests).slice(0, 6000) },
+        requestOptions: { signal: request.controller.signal, ...(apiUsageMode === 'free' ? { session: { attempts: 0, maxAttempts: 4 } } : {}) } });
+      if (dayAdjustmentRequest.current !== request || request.controller.signal.aborted) return;
+      const latest = itineraryRef.current;
+      if (JSON.stringify(latest?.days?.[dayIndex]) !== request.original) {
+        throw dayAdjustmentError('這一天在等待期間已有其他修改，已保留最新內容。請再次送出調整以讀取新版行程。');
+      }
+      if (result.changesCount) {
+        result.day = { ...result.day, adjustment_revision: Date.now() };
+        setItineraryData(mergeDayAdjustment(latest, dayIndex, result));
+        setExpenses(prev => prev.map(expense => {
+          if (expense.dayIndex !== dayIndex || !Number.isInteger(expense.timelineIndex) || expense.timelineIndex < 0) return expense;
+          const index = Object.hasOwn(result.indexMap, expense.timelineIndex) ? result.indexMap[expense.timelineIndex] : -1;
+          return index === expense.timelineIndex ? expense : { ...expense, timelineIndex: index };
+        }));
+      }
+      setDayAdjustment(prev => ({ ...prev, snapshot: JSON.parse(JSON.stringify(result.changesCount ? result.day : day)), processing: false,
+        summary: `${result.changesCount ? `已完成第 ${day.day_index} 天的調整。` : '目前行程未更動。'}\n${result.summary}`, error: '' }));
+    } catch (error) {
+      if (dayAdjustmentRequest.current !== request || request.controller.signal.aborted) return;
+      setDayAdjustment(prev => ({ ...prev, processing: false, error: `${error.message}\n原行程與其他天的內容已保留。` }));
+    } finally {
+      if (dayAdjustmentRequest.current === request) dayAdjustmentRequest.current = null;
+    }
   };
 
   const generateItinerary = async () => {
@@ -5130,12 +5435,12 @@ const App = () => {
                   className="relative cursor-pointer"
                   onClick={() => setShowCalendar(!showCalendar)}
                 >
-                  <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />
+                  <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 pointer-events-none text-slate-400 dark:text-[#8ea3bf]" />
                   <input 
                     name="dates" 
                     value={basicData.dates} 
                     readOnly 
-                    className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base cursor-pointer dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" 
+                    className="travel-icon-input w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base cursor-pointer dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" 
                     placeholder="點擊選擇日期範圍"
                   />
                 </div>
@@ -5166,8 +5471,8 @@ const App = () => {
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">人數</label>
                 <div className="relative">
-                  <Users className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />
-                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#e8f1ff]" />
+                  <Users className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 pointer-events-none text-slate-400 dark:text-[#8ea3bf]" />
+                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="travel-icon-input w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#e8f1ff]" />
                 </div>
               </div>
             </div>
@@ -5176,8 +5481,8 @@ const App = () => {
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">交通偏好</label>
                 <div className="relative">
-                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />}
-                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#e8f1ff]">
+                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 pointer-events-none text-slate-400 dark:text-[#8ea3bf]" /> : <Train className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 pointer-events-none text-slate-400 dark:text-[#8ea3bf]" />}
+                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="travel-icon-input w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#e8f1ff]">
                     <option value="public">大眾交通</option>
                     <option value="self_driving">自駕</option>
                   </select>
@@ -5700,6 +6005,7 @@ const App = () => {
         {/* Timeline Content */}
         <div className="print:hidden">
            <DayTimeline 
+             key={`${activeTab}-${currentDay.adjustment_revision || 0}`}
              day={currentDay} 
              dayIndex={activeTab} 
              expenses={expenses}
@@ -5718,6 +6024,7 @@ const App = () => {
              onIconClick={(dIdx, tIdx) => setIconSelectModalData({ dayIndex: dIdx, timelineIndex: tIdx })}
              onUpdateDayInfo={updateDayInfo}
              onRefreshWeather={handleWeatherRefresh}
+             onAdjustDay={openDayAdjustment}
            />
         </div>
 
@@ -5803,6 +6110,9 @@ const App = () => {
         )}
 
         {/* Modal 區塊 */}
+        {step === 'result' && dayAdjustment && <DayAdjustmentModal state={dayAdjustment} onClose={closeDayAdjustment}
+          onInstructionChange={instruction => setDayAdjustment(prev => ({ ...prev, instruction, error: '', summary: '' }))}
+          onSubmit={submitDayAdjustment} requestMessage={geminiModels.requestState?.message} />}
         {step === 'result' && sharePreviewMode && <ShareItineraryModal mode={sharePreviewMode}
           text={getItineraryShareText(itineraryData, basicData.destinations, sharePreviewMode)}
           onModeChange={setSharePreviewMode} onClose={() => setSharePreviewMode(null)} />}
