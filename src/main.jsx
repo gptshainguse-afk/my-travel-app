@@ -3746,10 +3746,13 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
     const identity = basicStopIdentity(title);
     if (stop.type === 'spot' && !stop.fixed_pin && usedSpots.has(identity)) { omitted++; continue; }
     const state = states.get(window.id), area = basicTripText(stop.area) || window.area;
-    const travel = stop.fixed_pin ? 30 : Math.min(120, Math.max(15, Number(stop.travel_minutes) || (state.lastEnd !== null && basicStopIdentity(state.area) === basicStopIdentity(area) ? 15 : 30)));
+    const familyRest = Boolean(raw?.family_profile) && stop.type === 'logistics' && /休息|午休|午睡|餵奶|換尿布|rest|nap|feeding/iu.test(title);
+    const sameAreaRest = familyRest && basicStopIdentity(state.area) === basicStopIdentity(area);
+    const travel = stop.fixed_pin ? 30 : sameAreaRest ? Math.min(120, Math.max(0, Number(stop.travel_minutes) || 0))
+      : Math.min(120, Math.max(15, Number(stop.travel_minutes) || (state.lastEnd !== null && basicStopIdentity(state.area) === basicStopIdentity(area) ? 15 : 30)));
     const requestedStart = tripTimeMinutes(stop.start_time) ?? tripTimeMinutes(bookingText(stop.title).match(/^(\d{1,2}:\d{2})\b/)?.[1]);
     const requestedEnd = tripTimeMinutes(stop.end_time);
-    const typicalDuration = stop.type === 'meal' ? 60 : stop.type === 'logistics' ? 20 : /演唱會|concert/iu.test(title) ? 180 : 90;
+    const typicalDuration = stop.type === 'meal' || familyRest ? 60 : stop.type === 'logistics' ? 20 : /演唱會|concert/iu.test(title) ? 180 : 90;
     const duration = stop.fixed_pin ? stop.fixed_pin.end - stop.fixed_pin.start
       : requestedStart !== null && requestedEnd !== null && requestedEnd > requestedStart ? requestedEnd - requestedStart
         : Math.min(360, Math.max(15, Number(stop.duration_minutes) || typicalDuration));
@@ -3761,7 +3764,7 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
       if (stop.fixed_pin) throw Object.assign(new Error(`第 ${dayIndex} 天「${title}」的固定時間無法銜接，請調整活動或接駁時間。`), { code: 'TRIP_INPUT_CONFLICT' });
       omitted++; continue;
     }
-    timeline.push(item(tripTimeLabel(start), 'transport', `前往 ${title}`, {
+    if (travel > 0) timeline.push(item(tripTimeLabel(start), 'transport', `前往 ${title}`, {
       end_time: tripTimeLabel(activityStart), location_query: `${window.city || ''} ${area} ${title}`.trim(),
       activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
       transport_detail: `${options.transportTips && bookingText(stop.route_suggestion) ? `${basicTripText(stop.route_suggestion, 200)}\n` : ''}接駁概估 ${travel} 分鐘，實際路線請用地圖確認。`,
@@ -3770,7 +3773,7 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
       end_time: tripTimeLabel(end), location_query: `${window.city || ''} ${area} ${title}`.trim(),
       activity_city: window.city || cities[0] || basicTripText(raw?.city), planning_window_id: window.id,
       description: options.introductions ? basicTripText(stop.description, 240) : '',
-      warnings_tips: `${options.practicalTips && bookingText(stop.tips) ? `${basicTripText(stop.tips, 240)}\n` : ''}${stop.type === 'logistics' ? '行李寄放服務、預約與營業時間需先向店家或車站確認。' : '營業、票價與交通請於出發前確認。'}${stop.fixed_pin?.end_estimated ? ' 此活動只提供開始時間，停留長度為概估。' : ''}`,
+      warnings_tips: `${options.practicalTips && bookingText(stop.tips) ? `${basicTripText(stop.tips, 240)}\n` : ''}${familyRest ? '依孩子狀況彈性調整休息長度；休息、育兒設施與推車通行條件請先確認。' : stop.type === 'logistics' ? '行李寄放服務、預約與營業時間需先向店家或車站確認。' : '營業、票價與交通請於出發前確認。'}${stop.fixed_pin?.end_estimated ? ' 此活動只提供開始時間，停留長度為概估。' : ''}`,
       menu_recommendations: options.dining && stop.type === 'meal' && Array.isArray(stop.menu_recommendations)
         ? stop.menu_recommendations.slice(0, 2).filter(menu => ['local', 'cn', 'price'].every(field => typeof menu?.[field] === 'string')) : [],
       price_level: options.dining && ['Low', 'Mid', 'High'].includes(stop.price_level) ? stop.price_level : '',
@@ -3822,18 +3825,73 @@ function buildBasicTripDay(raw, date, dayIndex, bookingContext, fallbackArea, so
     timeline, planning_mode: 'basic', generation_source: source, planning_notes: warnings.join(' ') };
 }
 
+const FAMILY_TRAVEL_STYLE = '育兒旅遊行程';
+const isFamilyTravelStyle = style => bookingText(style).includes(FAMILY_TRAVEL_STYLE);
+
+function getFamilyTravelProfile(data = {}) {
+  if (!isFamilyTravelStyle(data.type || data.style)) return null;
+  const saved = data.family;
+  const count = Number(data.childCount ?? saved?.child_count ?? '');
+  if (!Number.isSafeInteger(count) || count < 1) throw Object.assign(new Error('育兒旅遊請填寫小孩人數（至少 1 位）。'), { code: 'TRIP_INPUT_CONFLICT' });
+  const text = bookingText(data.childAges ?? (Array.isArray(saved?.ages) ? saved.ages.join('、')
+    : Array.isArray(saved?.ages_years) ? saved.ages_years.join('、') : '')).normalize('NFKC').trim();
+  const ages = text.split(/[、,，;；/\n]+|(?:和|與|及)/u).map(age => age.trim()).filter(Boolean);
+  if (ages.length !== count) throw Object.assign(new Error(`請填寫 ${count} 位小孩各自的年齡，以逗號分隔，例如「3、7」或「6 個月、3 歲」。`), { code: 'TRIP_INPUT_CONFLICT' });
+  const agesYears = ages.map(age => {
+    const compact = age.replace(/\s+/gu, '');
+    const combined = compact.match(/^(\d+)(?:歲|岁|年)(\d+)(?:個|个)?月$/u);
+    const simple = compact.match(/^(\d+(?:\.\d+)?)(歲|岁|年|years?|y|(?:個|个)?月|months?|m)?$/iu);
+    const years = combined && Number(combined[2]) < 12 ? Number(combined[1]) + Number(combined[2]) / 12
+      : !combined && simple ? Number(simple[1]) / (/月|months?|^m$/iu.test(simple[2] || '') ? 12 : 1) : NaN;
+    if (!Number.isFinite(years) || years < 0 || years >= 18) throw Object.assign(new Error(`小孩年齡「${age}」格式不正確；請填 0 至未滿 18 歲，嬰兒可填「6 個月」。`), { code: 'TRIP_INPUT_CONFLICT' });
+    return Number(years.toFixed(4));
+  });
+  if (data.travelers !== undefined && (!Number.isSafeInteger(Number(data.travelers)) || Number(data.travelers) < count)) {
+    throw Object.assign(new Error('旅遊總人數請包含成人與小孩，且不能少於小孩人數。'), { code: 'TRIP_INPUT_CONFLICT' });
+  }
+  return { child_count: count, ages, ages_years: agesYears };
+}
+
+function getFamilyTravelGuidance(family, adjustment = false) {
+  if (!family) return '';
+  const youngest = Math.min(...family.ages_years);
+  return `FAMILY TRAVEL NEEDS (important): ${adjustment ? 'Apply to changed/new stops only; preserve unmentioned items. ' : 'Plan only 1-2 main visits per ordinary day; never add sights just to fill time. '}
+Use every child's age, especially the youngest, to select suitable real named venues and realistic durations. Cluster nearby stops, shorten walks/transfers, allow generous meals, bathroom/snack breaks and an early return when bookings allow it. Prefer interactive indoor/outdoor options suited to these ages; avoid strenuous hikes and adult-oriented venues.
+${youngest < 3 ? 'Include flexible feeding/diaper breaks and a timed quiet rest/nap, with easy access back to the lodging area. Prefer stroller-friendly routes and elevators where available; availability must be confirmed.'
+  : youngest < 6 ? 'Include a timed midday rest and short play breaks; prefer short walks and routes usable with a stroller when needed. Confirm elevators and stroller access.'
+    : 'Balance interactive experiences with breaks; respect different interests and stamina when the children have different ages.'}
+Rest/nap is logistics, not a sightseeing attraction. Keep its location specific and allow its full duration. Choose child-appropriate meals and meal times. Never invent childcare, stroller access, child ticket prices, age/height limits or facilities; mark unverified details as requiring confirmation. Preserve fixed bookings/events; reduce optional sightseeing first when family needs cannot all fit.`;
+}
+
+function getDayTravelPreferences(itinerary, basicData = {}) {
+  const source = itinerary?.travel_preferences || { style: basicData.type, transportMode: basicData.transportMode,
+    travelers: basicData.travelers, restaurantBudget: basicData.priceRanges, specialRequests: basicData.specialRequests,
+    childCount: basicData.childCount, childAges: basicData.childAges };
+  const family = getFamilyTravelProfile(source);
+  return { style: source.style, transportMode: source.transportMode, travelers: source.travelers,
+    restaurantBudget: source.restaurantBudget, specialRequests: bookingText(source.specialRequests).slice(0, 6000),
+    ...(family ? { family } : {}) };
+}
+
 function getBasicTripPreferences(baseConstraints, basicPreferences) {
   const fromConstraints = label => baseConstraints.match(new RegExp(`- ${label}: ([^\\n]*)`))?.[1] || '';
+  const style = basicTripText(basicPreferences?.style || fromConstraints('Travel Style & Pacing'), 100);
+  let savedFamily = null;
+  if (isFamilyTravelStyle(style) && fromConstraints('Children')) {
+    try { savedFamily = JSON.parse(fromConstraints('Children')); } catch { /* 由下方驗證顯示可修正的輸入提示。 */ }
+  }
+  const family = getFamilyTravelProfile({ ...basicPreferences, style, family: basicPreferences?.family || savedFamily });
   const requestText = basicPreferences && Object.hasOwn(basicPreferences, 'requests') ? bookingText(basicPreferences.requests)
     : bookingText(baseConstraints.match(/- Special Requests: ([\s\S]*?)(?=\n\s*- [A-Za-z &]+:|$)/)?.[1]);
   return {
     destinations: basicTripText(basicPreferences?.destinations || fromConstraints('Destinations'), 200),
-    style: basicTripText(basicPreferences?.style || fromConstraints('Travel Style & Pacing'), 100),
+    style,
     transport: basicTripText(basicPreferences?.transport || fromConstraints('Transport Mode'), 80),
     requests: /^(?:none|無|沒有|n\/a)$/iu.test(requestText) ? '' : requestText,
     budget: basicTripText(basicPreferences?.budget || fromConstraints('Restaurant Budget'), 80),
     details: normalizeBasicDetailOptions(basicPreferences?.details),
     fixedActivities: Array.isArray(basicPreferences?.fixedActivities) ? basicPreferences.fixedActivities : [],
+    ...(family ? { family, travelers: basicPreferences?.travelers || fromConstraints('Travelers') } : {}),
   };
 }
 
@@ -3883,7 +3941,9 @@ async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookin
     }));
     const response = await requestGemini(apiKey, 'flash', {
       contents: [{ parts: [{ text: `Plan a BASIC travel itinerary in Traditional Chinese. Output compact JSON only.
-Preferences: ${JSON.stringify({ destinations: preferences.destinations, style: preferences.style, transport: preferences.transport, budget: preferences.budget })}
+Preferences: ${JSON.stringify({ destinations: preferences.destinations, style: preferences.style, transport: preferences.transport, budget: preferences.budget,
+  ...(preferences.family ? { travelers: preferences.travelers, family: preferences.family } : {}) })}
+${getFamilyTravelGuidance(preferences.family)}
 SPECIAL REQUESTS (higher priority than extra sightseeing): ${JSON.stringify(requests)}
 FIXED ACTIVITIES (exact dates/start/end; never shorten, move or repeat): ${JSON.stringify(pins.filter(pin => dates.includes(pin.date)).map(pin => ({ ...pin, start: tripTimeLabel(pin.start), end: tripTimeLabel(pin.end) })))}
 REQUESTED INFORMATION: ${JSON.stringify(preferences.details)}
@@ -3891,7 +3951,7 @@ Days and local-time CITY WINDOWS: ${JSON.stringify(compactDays)}
 Previously visited sights (avoid repeats): ${JSON.stringify([...usedSpots].slice(-90))}
 Previous incomplete attempt: ${checkpoint.last_issue || 'None'}
 Return exactly these dates, indexed ${offset + 1}-${end}. Each day: day_index, date, city, title, stops.
-An ordinary full day needs 2-3 REAL NAMED sights and 1-2 meals; at most 8 stops. Concert/reservation days prioritize the actual event and need fewer extra sights.
+${preferences.family ? 'A family full day needs only 1-2 REAL NAMED sights, age-appropriate meals and breaks; do not force sightseeing into every city window.' : 'An ordinary full day needs 2-3 REAL NAMED sights and 1-2 meals;'} at most 8 stops. Concert/reservation days prioritize the actual event and need fewer extra sights.
 Each stop: window_id from THAT date, type (spot/meal/activity/logistics), specific title WITHOUT clock text, nearby area, period, start_time/end_time (HH:mm or empty), duration_minutes, travel_minutes from the preceding area and request_ids.
 Give useful planned times and appropriate duration: meals 45-90 min, luggage 15-30 min, sights 45-120 min; concerts must retain the full requested duration, not become 90-min sightseeing. Sort by city window and time.
 Include each fixed activity with its request ID; exact user times take precedence. Allow 30 minutes of travel before fixed activities. Plan optional stops around them, not over them.
@@ -3901,6 +3961,7 @@ The app reserves airport/station connections and hotel/luggage return time. Fit 
 Sight titles must name actual attractions, markets, museums or shopping streets. NEVER use generic walks, free time, nearby sights, hotel-area sightseeing or choose-it-yourself placeholders.
 Meal titles should name a restaurant or a specific district AND food suggestion. Avoid duplicate attractions across the trip.
 Luggage handling is logistics, not a sight. Do not assume a convenience store has luggage storage; mark service availability as unconfirmed. Once luggage is stored at a station, collect it there rather than returning to the old hotel.
+${preferences.family ? 'For rest/nap/feeding use type:logistics, a specific area in the title, explicit start_time/end_time and adequate duration_minutes. Use travel_minutes:0 when staying in the preceding stop\'s area; do not count a rest break as an attraction.' : ''}
 If introductions=true, each visit needs a useful 40-90 character description of its highlights or why it suits this day. If transportTips=true, give a short route_suggestion from the preceding area; label routes as suggestions, no invented live schedules.
 If practicalTips=true, add brief tickets/reservation/storage tips. If dining=true, meals may include at most 2 menu_recommendations (local/cn/estimated price) and price_level. Omit unselected fields.
 If seasonalAdvice=true, add seasonal_advice and clothing_suggestion explicitly labeled seasonal estimates, not real-time weather. If cityGuides=true, return short city_infos only for cities in this batch, with at most 3 basic_phrases each.
@@ -3930,14 +3991,16 @@ The app preserves original booked flight/train codes and times; you only select 
       const raw = byDate.get(dates[i]);
       if (raw?.day_index !== offset + i + 1 || !Array.isArray(raw.stops)) throw incomplete('AI 景點資料尚未完整。');
       const context = contexts[i];
-      const day = buildBasicTripDay({ ...raw, detail_options: preferences.details, fixed_pins: pins.filter(pin => pin.date === dates[i]) }, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
+      const day = buildBasicTripDay({ ...raw, detail_options: preferences.details, family_profile: preferences.family,
+        fixed_pins: pins.filter(pin => pin.date === dates[i]) }, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
       const available = context.windows.reduce((total, window) => total + window.end - window.start, 0);
       const hasLongActivity = day.timeline.some(item => item.type === 'activity' && !item.is_logistics && tripTimeMinutes(item.end_time) - tripTimeMinutes(item.time) >= 120);
-      const minimumSights = hasLongActivity ? 1 : available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
+      const minimumSights = hasLongActivity ? 1 : preferences.family ? (context.windows.some(window => window.end - window.start >= 150) ? 1 : 0)
+        : available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
       if (day.timeline.filter(item => item.type === 'spot' || item.type === 'activity' && !item.is_logistics).length < minimumSights) {
         throw incomplete(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點或指定活動，AI 尚未完成有效規劃。`);
       }
-      for (const window of context.windows) if (window.end - window.start >= 150
+      for (const window of context.windows) if (!preferences.family && window.end - window.start >= 150
           && !day.timeline.some(item => (item.type === 'spot' || item.type === 'activity' && !item.is_logistics) && item.planning_window_id === window.id)) {
         throw incomplete(`第 ${day.day_index} 天的 ${window.city || window.area || '可用時段'} 尚未安排有效景點或指定活動。`);
       }
@@ -4459,6 +4522,7 @@ function applyDayAdjustment(day, patch, bookingContext) {
 async function generateDayAdjustment({ apiKey, modelFamily = 'flash', day, instruction, bookingContext, preferences = {}, requestOptions = {} }) {
   const request = bookingText(instruction).trim();
   if (!request || request.length > 2000) throw dayAdjustmentError('請填寫 2,000 字以內的單日調整需求。');
+  const family = getFamilyTravelProfile(preferences);
   const rules = bookingContext?.days?.find(value => value.date === day.date);
   const projection = { day_index: day.day_index, date: day.date, city: day.city, title: day.title,
     timeline: day.timeline.map((item, index) => ({ item_id: `item-${index + 1}`,
@@ -4467,7 +4531,8 @@ async function generateDayAdjustment({ apiKey, modelFamily = 'flash', day, instr
   const prompt = `Adjust ONLY the existing single travel day below. Respond in Traditional Chinese with one valid JSON object.
 READ CURRENT DAY FIRST: ${JSON.stringify(projection)}
 USER ADJUSTMENT: ${JSON.stringify(request)}
-TRAVEL PREFERENCES: ${JSON.stringify(preferences)}
+TRAVEL PREFERENCES: ${JSON.stringify({ ...preferences, family })}
+${getFamilyTravelGuidance(family, true)}
 AUTHORITATIVE BOOKINGS FOR THIS DATE: ${JSON.stringify(getTripPromptBookings(bookingContext, [day.date]))}
 Return a MINIMAL patch, not a replacement itinerary. Use the original item_id for update/remove, and unique new-* item_id for add. Each item_id may appear only once. fields contains ONLY changed fields; add requires time, end_time, type, title, description and location_query. Moving an item means changing time/end_time. Preserve descriptions and all unmentioned items. Change only what the request asks and the transfers/times necessary to connect it logically; do not redesign the rest of the day.
 Keep day_index, date, city, booked train/flight codes and times, hotel identity, check-in/out limits and fixed activities. Respect each item's locks and cannot_remove. For lodging only arrival/return/departure time may be adjusted within constraints. After an evening outing, update the final hotel return or add a hotel return_to_hotel with the booked hotel ID/name/address. Preserve enough travel and luggage time. Cross-city activities must take place in the city reached at that time. Never overlap events, use an impossible transit window or invent booked transport.
@@ -4556,6 +4621,8 @@ const App = () => {
     dates: '',        // 清空
     type: '休閒 (慢步調)', // 給一個預設值即可
     travelers: 2,     // 預設人數可以留 1 或 2，避免報錯
+    childCount: '',
+    childAges: '',
     hasTransitTour: false, // 預設關閉
     isMultiCityFlight: false,
     hasFlights: true, // 預設開啟航班填寫
@@ -4985,8 +5052,7 @@ const App = () => {
       const bookingContext = sourceItinerary.booking_context || buildTripBookingContext({ basicData, ...inputs,
         dateList: sourceItinerary.days.map(value => value.date) });
       const result = await generateDayAdjustment({ apiKey, modelFamily: effectiveModelType, day: JSON.parse(request.original), instruction,
-        bookingContext, preferences: { style: basicData.type, transportMode: basicData.transportMode, travelers: basicData.travelers,
-          restaurantBudget: basicData.priceRanges, specialRequests: bookingText(basicData.specialRequests).slice(0, 6000) },
+        bookingContext, preferences: getDayTravelPreferences(sourceItinerary, basicData),
         requestOptions: { signal: request.controller.signal, ...(apiUsageMode === 'free' ? { session: { attempts: 0, maxAttempts: 4 } } : {}) } });
       if (dayAdjustmentRequest.current !== request || request.controller.signal.aborted) return;
       const latest = itineraryRef.current;
@@ -5018,6 +5084,10 @@ const App = () => {
       alert("請輸入您的 Gemini API Key");
       return;
     }
+    let travelerPreferences;
+    try { travelerPreferences = getDayTravelPreferences(null, basicData); }
+    catch (error) { setErrorMsg(error.message); return; }
+    const familyProfile = travelerPreferences.family || null;
     setStep('loading');
     setErrorMsg('');
 
@@ -5074,7 +5144,9 @@ const App = () => {
     
     // 動態風格指令
     let styleInstruction = "";
-    if (basicData.type.includes('休閒')) {
+    if (familyProfile) {
+        styleInstruction = "FAMILY PACE. Only 1-2 main visits daily, clustered nearby, with age-appropriate meals and generous breaks. Follow the children's ages and FAMILY TRAVEL NEEDS below.";
+    } else if (basicData.type.includes('休閒')) {
         styleInstruction = "VERY SLOW PACE. Max 2-3 main spots per day. Focus on relaxing vibes.";
     } else if (basicData.type.includes('購物')) {
         styleInstruction = "HIGH DENSITY. Focus heavily on shopping districts, malls. 4-5 items per day.";
@@ -5095,6 +5167,7 @@ const App = () => {
       - Total Trip Length: ${totalDays} days (${basicData.dates})
       - Travel Style & Pacing: ${basicData.type}. CRITICAL: ${styleInstruction}
       - Travelers: ${basicData.travelers}
+      ${familyProfile ? `- Children: ${JSON.stringify(familyProfile)}\n      - Parenting Needs: ${getFamilyTravelGuidance(familyProfile)}` : ''}
       - Transit Sightseeing: ${basicData.hasTransitTour ? 'Only when connection time, luggage, entry and return-to-terminal buffers allow it.' : 'No city sightseeing during connections; stay inside the airport/station.'}
       - Transport Mode: ${transportConstraint}
       - Parking: ${parkingConstraint || 'No extra parking requirement.'}
@@ -5108,14 +5181,16 @@ const App = () => {
     const session = apiUsageMode === 'free' ? { attempts: 0, maxAttempts: 6 } : null;
     const planningPreferences = { destinations: basicData.destinations, style: basicData.type, transport: transportConstraint,
       requests: basicData.specialRequests, budget: priceConstraint, details: normalizeBasicDetailOptions(detailOptions),
-      fixedActivities: Array.isArray(fixedActivities) ? fixedActivities : [] };
+      fixedActivities: Array.isArray(fixedActivities) ? fixedActivities : [],
+      ...(familyProfile ? { family: familyProfile, travelers: basicData.travelers } : {}) };
     try {
       const tripData = await runTripWithWaiting(() => generateTripData({
         apiKey: apiKey, modelFamily, baseConstraints, dateList, batchSize, bookingContext,
         basicPreferences: planningPreferences, requestOptions: { signal: controller.signal, session },
       }), { mode: apiUsageMode, signal: controller.signal, session, onStatus: setGenerationStatus });
       throwIfGeminiCancelled(controller.signal);
-      const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations }, created: Date.now() };
+      const finalItinerary = { ...tripData, booking_inputs: { simpleFlights, multiFlights, accommodations },
+        travel_preferences: travelerPreferences, created: Date.now() };
 
       // 根據 AI 回傳的幣別設定符號
       if (finalItinerary.currency_code) {
@@ -5466,6 +5541,7 @@ const App = () => {
                   <option>文化 (歷史古蹟)</option>
                   <option>深度 (在地體驗)</option>
                   <option>綜合 (購物+文化)</option>
+                  <option>{FAMILY_TRAVEL_STYLE}</option>
                 </select>
               </div>
               <div className="space-y-2">
@@ -5476,6 +5552,25 @@ const App = () => {
                 </div>
               </div>
             </div>
+
+            {isFamilyTravelStyle(basicData.type) && <fieldset className="rounded-2xl border border-teal-200 dark:border-teal-900/70 bg-teal-50/50 dark:bg-teal-950/20 p-4 md:p-5 space-y-3">
+              <legend className="px-2 text-sm font-bold text-teal-800 dark:text-teal-200">同行小孩資料</legend>
+              <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-4">
+                <div className="space-y-2">
+                  <label htmlFor="travel-child-count" className="block text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">小孩人數</label>
+                  <input id="travel-child-count" type="number" name="childCount" min="1" step="1" value={basicData.childCount ?? ''}
+                    onChange={handleBasicChange} aria-describedby="travel-children-hint" placeholder="例如：2"
+                    className="w-full min-w-0 p-3 md:p-4 bg-white dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm md:text-base dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="travel-child-ages" className="block text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">每位小孩的年齡</label>
+                  <input id="travel-child-ages" type="text" name="childAges" maxLength={500} value={basicData.childAges ?? ''}
+                    onChange={handleBasicChange} aria-describedby="travel-children-hint" placeholder="例如：3、7，或 6 個月、3 歲"
+                    className="w-full min-w-0 p-3 md:p-4 bg-white dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-teal-500 outline-none text-sm md:text-base dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" />
+                </div>
+              </div>
+              <p id="travel-children-hint" className="text-xs leading-relaxed text-slate-600 dark:text-[#a9bdd7]">每位小孩填一個年齡，以逗號分隔；嬰兒可填月齡。上方人數請包含成人與小孩。AI 會依年齡安排合適景點、用餐、休息及較輕鬆的路線。</p>
+            </fieldset>}
   
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
@@ -5540,7 +5635,7 @@ const App = () => {
                     <span><span className="block text-sm font-semibold text-slate-700 dark:text-[#e8f1ff]">{option.label}</span><span className="block text-xs text-slate-500 dark:text-[#9bafc9]">{option.detail}</span></span>
                   </label>)}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-[#9bafc9]">勾選越多，回覆內容與等待時間通常越多；資訊會併入同一次行程生成，避免每個項目另外發送請求。</p>
+                <p className="text-xs text-slate-500 dark:text-[#9bafc9]">建議全選，以獲得更完整的旅遊規劃體驗；若持續生成失敗，可考慮取消部分選項後再試。選取的資訊會併入同一次行程生成。</p>
               </fieldset>
               <details className="rounded-2xl border border-purple-200 dark:border-[#314861] p-4" open={fixedActivities.length > 0 || undefined}>
                 <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-[#e8f1ff]">固定活動／訂位時間（選填）</summary>
