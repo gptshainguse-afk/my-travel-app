@@ -54,6 +54,28 @@ const TRAVEL_THEME_CSS = `
      ${travelDarkRule('color', [500, 600, 700, 800, 900].map(level => `text-${color}-${level}`), text)}
      ${travelDarkRule('border-color', [50, 100, 200].map(level => `border-${color}-${level}`), background)}`).join('\n')}
   html[data-travel-theme="dark"] button[class~="bg-white"]:hover, html[data-travel-theme="dark"] button[class~="bg-slate-100"]:hover { background-color: #233d59; }
+  .travel-day-header { background: linear-gradient(125deg, #e4f0fa, #e1f1ef); color: #24495f; border-bottom: 1px solid #d3e4ea; }
+  .travel-day-header input.travel-day-input { background: transparent; border-color: transparent; box-shadow: none; color: #24495f; filter: none; }
+  .travel-day-header .travel-day-subtitle, .travel-day-header input.travel-day-subtitle { color: #526c7f; }
+  .travel-day-header input.travel-day-input::placeholder { color: #708797; }
+  .travel-day-header input.travel-day-input:hover { border-bottom-color: #9eb9c7; }
+  .travel-day-header input.travel-day-input:focus { border-bottom-color: #548a9e; }
+  .travel-day-header .travel-day-badge { background: rgb(255 255 255 / .65); border: 1px solid rgb(110 150 167 / .15); box-shadow: none; backdrop-filter: none; color: #42687e; }
+  .travel-day-header .travel-day-clothing { color: #426c63; }
+  .travel-day-header .travel-day-refresh { color: #42687e; background: rgb(255 255 255 / .45); box-shadow: none; }
+  .travel-day-header .travel-day-glow { opacity: .12; }
+  .travel-day-header .travel-day-plane { color: #7296a5; opacity: .25; }
+  html[data-travel-theme="dark"] .travel-day-header { background: linear-gradient(125deg, #1b344c, #1b3b40); color: #e0edf7; border-bottom-color: #304e60; }
+  html[data-travel-theme="dark"] .travel-day-header input.travel-day-input { background: transparent; color: #e0edf7; border-color: transparent; box-shadow: none; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-subtitle, html[data-travel-theme="dark"] .travel-day-header input.travel-day-subtitle { color: #b8cdda; }
+  html[data-travel-theme="dark"] .travel-day-header input.travel-day-input::placeholder { color: #8faab9; }
+  html[data-travel-theme="dark"] .travel-day-header input.travel-day-input:hover { border-bottom-color: #527084; }
+  html[data-travel-theme="dark"] .travel-day-header input.travel-day-input:focus { border-bottom-color: #82b8ca; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-badge { background: rgb(255 255 255 / .045); border-color: rgb(170 211 225 / .12); color: #bdd4e4; box-shadow: none; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-clothing { color: #bdd8cc; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-refresh { background: rgb(255 255 255 / .07); color: #bdd4e4; box-shadow: none; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-glow { opacity: .035; }
+  html[data-travel-theme="dark"] .travel-day-header .travel-day-plane { color: #9ab9c8; opacity: .18; }
   @media (prefers-reduced-motion: reduce) { .travel-shell *, .travel-share-overlay { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
   @media print { html[data-travel-theme="dark"], html[data-travel-theme="dark"] body, .travel-shell { color-scheme: light !important; background: white !important; color: #111 !important; } html[data-travel-theme="dark"] [class*="bg-"], html[data-travel-theme="dark"] .travel-panel { background: white !important; } html[data-travel-theme="dark"] [class*="text-"] { color: #111 !important; } .travel-share-overlay { display: none !important; } }
 `;
@@ -986,7 +1008,7 @@ const safeRender = (content) => {
 };
 
 // --- AI 深度規劃彈窗 (Portal) ---
-const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenerate }) => {
+const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenerate, requestMessage, error }) => {
   if (!isOpen) return null;
   
   const getMultiStopMapUrl = () => {
@@ -1004,7 +1026,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
 
   return createPortal(
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-0 md:p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
+      <div role="dialog" aria-modal="true" aria-labelledby="deep-dive-title" className="bg-white rounded-t-2xl md:rounded-3xl w-full h-[85vh] md:h-auto md:max-h-[85vh] md:max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 absolute bottom-0 md:relative md:bottom-auto">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-4 md:p-6 flex justify-between items-center shrink-0">
@@ -1012,9 +1034,9 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
             <div className="flex items-center gap-2 text-purple-200 text-xs md:text-sm font-bold mb-1">
               <Sparkles className="w-4 h-4" /> AI 深度導遊
             </div>
-            <h3 className="text-lg md:text-2xl font-bold truncate pr-2">{itemTitle}</h3>
+            <h3 id="deep-dive-title" className="text-lg md:text-2xl font-bold truncate pr-2">{itemTitle}</h3>
           </div>
-          <button onClick={onClose} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors shrink-0">
+          <button onClick={onClose} aria-label="關閉 AI 深度導覽" className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full transition-colors shrink-0">
             <X className="w-5 h-5 md:w-6 md:h-6" />
           </button>
         </div>
@@ -1024,10 +1046,12 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
           {isLoading ? (
             <div className="flex flex-col items-center justify-center h-full space-y-4 text-slate-500">
               <Loader2 className="w-10 h-10 md:w-12 md:h-12 animate-spin text-purple-600" />
-              <p className="animate-pulse font-medium text-sm md:text-base">AI 正在實地考察中，請稍候...</p>
+              <p role="status" aria-live="polite" className="font-medium text-sm md:text-base text-center">{requestMessage || '正在等待生成此景點的深度導覽，請稍候…'}</p>
+              <p className="text-xs text-center">只針對此景點獨立請求；完成後會保留內容。關閉視窗可停止等待。</p>
             </div>
           ) : data ? (
             <div className="space-y-4 md:space-y-6 pb-4">
+               {error && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{error} 已保留上次的導覽內容。</p>}
                {/* 路線指引 */}
                <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-purple-100">
                   <h4 className="flex items-center gap-2 font-bold text-slate-800 mb-2 md:mb-3 text-base md:text-lg border-b border-slate-100 pb-2">
@@ -1092,7 +1116,7 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
           ) : (
             <div className="text-center text-slate-400 py-20 flex flex-col items-center">
               <AlertTriangle className="w-12 h-12 mb-2 text-slate-300" />
-              <p>資料讀取失敗，請重試</p>
+              <p role={error ? 'alert' : undefined}>{error || '資料讀取失敗，請重試'}</p>
             </div>
           )}
         </div>
@@ -1105,12 +1129,12 @@ const DeepDiveModal = ({ isOpen, onClose, data, isLoading, itemTitle, onRegenera
           >
             返回
           </button>
-          {!isLoading && data && (
+          {!isLoading && (data || error) && (
             <button 
               onClick={onRegenerate} 
               className="px-5 py-2.5 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2"
             >
-              <RefreshCw className="w-4 h-4" /> 重新生成
+              <RefreshCw className="w-4 h-4" /> {data ? '重新生成' : '重試導覽'}
             </button>
           )}
         </div>
@@ -1807,13 +1831,28 @@ const CityGuide = ({ guideData, cities }) => {
 };
 
 // --- Day Timeline ---
-const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather, onIconClick }) => {
+const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currencySettings, isPrintMode = false, apiKey, geminiRequestMessage = '', updateItineraryItem, onSavePlan, onDeleteClick, onEditClick, onTimeUpdate, onAddClick, onUpdateDayInfo, onRefreshWeather, onIconClick }) => {
   const [editingExpense, setEditingExpense] = useState(null); 
   const [expenseToEdit, setExpenseToEdit] = useState(null); 
   const [activeNote, setActiveNote] = useState(null); 
   const [activeDeepDive, setActiveDeepDive] = useState(null);
   const [editingTimeId, setEditingTimeId] = useState(null);
   const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
+  const deepDiveRequestRef = useRef(null);
+
+  useEffect(() => {
+    setActiveDeepDive(null);
+    return () => {
+      deepDiveRequestRef.current?.controller.abort();
+      deepDiveRequestRef.current = null;
+    };
+  }, [apiKey, dayIndex, day.date]);
+
+  const closeDeepDive = () => {
+    deepDiveRequestRef.current?.controller.abort();
+    deepDiveRequestRef.current = null;
+    setActiveDeepDive(null);
+  };
 
   // 1. 記帳功能
   const addExpense = (timelineIndex, newItem) => {
@@ -1848,19 +1887,24 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     updateItineraryItem(dayIndex, timelineIndex, { photos: newPhotos });
   };
   const handleNoteChange = (timelineIndex, text) => { updateItineraryItem(dayIndex, timelineIndex, { user_notes: text }); };
-  const handleDeepDive = async (timelineIndex, item) => {
-    if (item.ai_details) {
+  const handleDeepDive = async (timelineIndex, item, regenerate = false) => {
+    // 同一次點擊只建立一筆工作；重開已完成的景點直接讀取快取。
+    if (deepDiveRequestRef.current) return;
+    if (item.ai_details && !regenerate) {
       setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details, title: item.title });
       return;
     }
     if (!normalizeGeminiKey(apiKey)) return alert("需要 API Key 才能使用此功能");
     
-    setActiveDeepDive({ timelineIndex, isLoading: true, data: null, title: item.title });
-    const modelFamily = 'lite';
+    const request = { controller: new AbortController() };
+    deepDiveRequestRef.current = request;
+    setActiveDeepDive({ timelineIndex, isLoading: true, data: item.ai_details || null, title: item.title, error: '' });
+    const freeMode = getGeminiCache(apiKey).policy.mode === 'free';
     
-    // ✅ 完整還原 Prompt (移除省略號，明確要求 JSON 欄位)
+    // 按需導覽只送出單一景點，不附上整份行程、航班或住宿訂單。
     const prompt = `
-      針對景點/地點: "${item.title}" (位於 ${day.city}) 進行深度分析。
+      以繁體中文針對景點/地點: ${JSON.stringify(item.title)} (位於 ${JSON.stringify(day.city)}，地圖搜尋: ${JSON.stringify(item.location_query || item.title)}) 進行深度分析。
+      請提供精簡、實用的在地導覽。僅推薦能確認的地點；不確定的店名、出口或營業資訊請明確標示需確認，不要編造。
       請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
       請務必回傳合法的 JSON 物件，不要有其他文字。
       包含以下欄位:
@@ -1877,64 +1921,41 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
     `;
 
     try {
-      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
+      const data = await requestGemini(apiKey, 'lite', {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json', ...(freeMode ? { maxOutputTokens: 2048 } : {}) },
+      }, { signal: request.controller.signal });
       
       const resultText = getGeminiText(data);
       if (!resultText) throw new Error("AI 無回應");
       
       const cleanedText = cleanJsonResult(resultText);
-      let aiResult = JSON.parse(cleanedText);
+      const aiResult = JSON.parse(cleanedText);
+      if (!aiResult || typeof aiResult !== 'object' || Array.isArray(aiResult)
+          || ['route_guide', 'must_visit_shops', 'safety_alert', 'mini_map_desc'].some(field => !safeRender(aiResult[field]).trim())) {
+        throw new Error('AI 導覽資料不完整，尚未覆蓋已儲存的內容。');
+      }
+      const route = Array.isArray(aiResult.walking_route)
+        ? aiResult.walking_route.filter(point => typeof point === 'string' && point.trim()).slice(0, 5) : [];
+      if (route.length) aiResult.walking_route = route;
+      else delete aiResult.walking_route;
+      if (deepDiveRequestRef.current !== request || request.controller.signal.aborted) return;
       
       updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
       setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title: item.title });
     } catch (error) {
+      if (deepDiveRequestRef.current !== request || request.controller.signal.aborted) return;
       console.error(error);
-      alert("AI 分析失敗: " + error.message);
-      setActiveDeepDive(null);
+      setActiveDeepDive({ timelineIndex, isLoading: false, data: item.ai_details || null, title: item.title, error: `AI 導覽暫時無法完成：${error.message}` });
+    } finally {
+      if (deepDiveRequestRef.current === request) deepDiveRequestRef.current = null;
     }
   };
 
-  const handleRegenerateDeepDive = async () => {
-    const { timelineIndex, title } = activeDeepDive;
-    if (!normalizeGeminiKey(apiKey)) return alert("需要 API Key");
-    
-    setActiveDeepDive({ timelineIndex, title, isLoading: true, data: null });
-    const modelFamily = 'lite';
-    
-    // ✅ 完整還原 Prompt
-    const prompt = `
-      針對景點/地點: "${title}" (位於 ${day.city}) 進行深度分析。
-      請以 JSON 格式回傳，不要有 Markdown 標記，純 JSON 字串。
-      請務必回傳合法的 JSON 物件，不要有其他文字。
-      包含以下欄位:
-      1. "route_guide": 詳細步行或參觀路線建議 (100字以內)
-      2. "must_visit_shops": 3間附近必去店舖或攤位 (名稱 + 特色)
-      3. "safety_alert": 針對此地的具體治安或避雷提示
-      4. "mini_map_desc": 文字描述周邊地圖重點 (例如: "出口X出來直走看到Y地標右轉")
-      5. "walking_route": [
-           "起點: 建議的最近車站出口或地標",
-           "途經1: 沿途好逛或好拍的點",
-           "途經2: (選填)",
-           "終點: ${title}" 
-         ]
-    `;
-
-    try {
-      const data = await requestGemini(apiKey, modelFamily, { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } });
-      
-      const resultText = getGeminiText(data);
-      if (!resultText) throw new Error("AI 無回應");
-      
-      const cleanedText = cleanJsonResult(resultText);
-      let aiResult = JSON.parse(cleanedText);
-      
-      updateItineraryItem(dayIndex, timelineIndex, { ai_details: aiResult });
-      setActiveDeepDive({ timelineIndex, isLoading: false, data: aiResult, title });
-    } catch (error) {
-      console.error(error);
-      alert("重新生成失敗: " + error.message);
-      setActiveDeepDive(prev => ({ ...prev, isLoading: false }));
-    }
+  const handleRegenerateDeepDive = () => {
+    if (!activeDeepDive || activeDeepDive.isLoading) return;
+    const item = day.timeline[activeDeepDive.timelineIndex];
+    if (item) return handleDeepDive(activeDeepDive.timelineIndex, item, true);
   };
   const convertToHomeCurrency = (amount) => { if (!currencySettings.rate || currencySettings.rate === 0) return ''; const homeAmount = Math.round(amount * currencySettings.rate); return `(≈ NT$${homeAmount.toLocaleString()})`; };
   const handleWeatherClick = async () => { setIsRefreshingWeather(true); await onRefreshWeather(dayIndex, day.city, day.date); setIsRefreshingWeather(false); };
@@ -1943,13 +1964,13 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   return (
     <div className={`bg-[#fffef8] dark:bg-[#14243a] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white dark:border-[#0e1b2d] relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
       {!isPrintMode && (<><div className="absolute bottom-0 right-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-amber-600 dark:text-amber-400"><Tent className="w-48 h-48 -rotate-12 translate-x-10 translate-y-10" /></div><div className="absolute top-1/2 left-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-sky-600 dark:text-sky-400"><Cloud className="w-32 h-32 rotate-12 -translate-x-10" /></div></>)}
-      <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
-        {!isPrintMode && (<><div className="absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div><div className="absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-yellow-300 opacity-20 rounded-full blur-3xl"></div><div className="absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div></>)}
+      <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : 'travel-day-header'}`}>
+        {!isPrintMode && (<><div className="travel-day-glow absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div><div className="travel-day-glow absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-teal-200 opacity-20 rounded-full blur-3xl"></div><div className="travel-day-plane absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div></>)}
         <div className="relative z-10">
-           <div className="flex items-end gap-2 mb-2">{isPrintMode ? (<h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>) : (<input value={day.city} onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })} className="bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/70 drop-shadow-sm" placeholder="輸入城市名稱" />)}</div>
-           <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : ''}`}><Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> {isPrintMode ? <span>{day.title}</span> : (<input value={day.title} onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })} className="bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full md:w-1/2 transition-colors placeholder-sky-100/70" placeholder="輸入行程主題" />)}</div>
+           <div className="flex items-end gap-2 mb-2">{isPrintMode ? (<h3 className="text-4xl font-extrabold text-black"><span className="text-xl block text-slate-500 mb-1">Day {day.day_index}</span>{day.city}</h3>) : (<input value={day.city} onChange={(e) => onUpdateDayInfo(dayIndex, { city: e.target.value })} className="travel-day-input bg-transparent text-3xl md:text-5xl font-extrabold text-white border-b-2 border-transparent hover:border-white/50 focus:border-white focus:outline-none w-full md:w-auto transition-colors placeholder-white/70 drop-shadow-sm" placeholder="輸入城市名稱" />)}</div>
+           <div className={`flex items-center gap-2 text-sky-100 text-base md:text-xl font-medium ${isPrintMode ? 'text-slate-700' : 'travel-day-subtitle'}`}><Sparkles className={`w-5 h-5 flex-shrink-0 ${isPrintMode ? 'hidden' : ''}`} /> {isPrintMode ? <span>{day.title}</span> : (<input value={day.title} onChange={(e) => onUpdateDayInfo(dayIndex, { title: e.target.value })} className="travel-day-input travel-day-subtitle bg-transparent border-b border-transparent hover:border-sky-200/50 focus:border-sky-100 focus:outline-none w-full md:w-1/2 transition-colors placeholder-sky-100/70" placeholder="輸入行程主題" />)}</div>
            {day.planning_notes && <p className="mt-3 text-xs text-white/90">{day.planning_notes}</p>}
-           {(day.weather_forecast || day.clothing_suggestion) && (<div className={`mt-4 flex flex-wrap gap-3 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>{day.weather_forecast && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-sky-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}><CloudSun className="w-4 h-4" /><span>{day.weather_forecast}</span></div>)}{day.clothing_suggestion && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-orange-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : ''}`}><Shirt className="w-4 h-4" /><span>{day.clothing_suggestion}</span></div>)}{!isPrintMode && (<button onClick={handleWeatherClick} disabled={isRefreshingWeather} className={`p-2 rounded-full bg-white/20 hover:bg-white/40 transition-all text-white ${isRefreshingWeather ? 'animate-spin' : 'hover:rotate-180'}`} title="重新預測天氣"><RefreshCw className="w-5 h-5" /></button>)}</div>)}
+           {(day.weather_forecast || day.clothing_suggestion) && (<div className={`mt-4 flex flex-wrap gap-3 items-center ${isPrintMode ? 'text-sm mt-2' : 'text-sm md:text-base'}`}>{day.weather_forecast && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-sky-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'travel-day-badge'}`}><CloudSun className="w-4 h-4" /><span>{day.weather_forecast}</span></div>)}{day.clothing_suggestion && (<div className={`flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full text-orange-600 font-medium shadow-sm ${isPrintMode ? 'bg-slate-100 border-slate-200 text-slate-800' : 'travel-day-badge travel-day-clothing'}`}><Shirt className="w-4 h-4" /><span>{day.clothing_suggestion}</span></div>)}{!isPrintMode && (<button onClick={handleWeatherClick} disabled={isRefreshingWeather} className={`travel-day-refresh p-2 rounded-full bg-white/20 hover:bg-white/40 transition-all text-white ${isRefreshingWeather ? 'animate-spin' : 'hover:rotate-180'}`} title="重新預測天氣"><RefreshCw className="w-5 h-5" /></button>)}</div>)}
         </div>
       </div>
 
@@ -1992,7 +2013,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
                              </span>
                          </label>
 
-                         {(day.planning_mode !== 'basic' || getGeminiCache(apiKey).policy.mode === 'paid') && <button onClick={() => handleDeepDive(timelineIndex, item)} className={`p-2.5 rounded-full transition-colors relative ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-300 hover:bg-violet-50 hover:text-violet-500'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>}
+                         <button onClick={() => handleDeepDive(timelineIndex, item)} disabled={activeDeepDive?.isLoading} aria-label={`AI 深度導覽：${item.title}`} title={item.ai_details ? '查看已生成的 AI 深度導覽' : '點擊後獨立生成 AI 深度導覽'} className={`p-2.5 rounded-full transition-colors relative disabled:opacity-50 ${item.ai_details ? 'text-violet-600 bg-violet-100 ring-2 ring-violet-200' : 'text-violet-400 hover:bg-violet-50 hover:text-violet-600'}`}><Bot className="w-5 h-5" />{item.ai_details && <span className="absolute -top-1 -right-1 w-3 h-3 bg-violet-500 rounded-full border-2 border-white"></span>}</button>
                       </div>
                     </div>
                     <div className={`text-slate-600 text-sm md:text-base leading-relaxed mb-4 md:mb-6 whitespace-pre-line pl-2 ${isPrintMode ? 'text-black pl-0' : ''}`}>{item.description}</div>
@@ -2112,11 +2133,13 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
         <LedgerSummary expenses={expenses} dayIndex={dayIndex} travelers={travelers} currencySettings={currencySettings} />
         <DeepDiveModal 
            isOpen={activeDeepDive !== null}
-           onClose={() => setActiveDeepDive(null)}
+           onClose={closeDeepDive}
            data={activeDeepDive?.data}
            isLoading={activeDeepDive?.isLoading}
            itemTitle={activeDeepDive?.title}
            onRegenerate={handleRegenerateDeepDive} 
+           requestMessage={geminiRequestMessage}
+           error={activeDeepDive?.error}
         />
       </div>
     </div>
@@ -5037,6 +5060,7 @@ const App = () => {
               {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#20334d] p-3 mb-3">
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#e8f1ff]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-1">免費模式的運算與配額有限，保留具名景點、簡短介紹、用餐與特殊要求；依交通時間切換城市，以住宿地區安排起終點。進階資訊可在下方勾選，與行程一起產生。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。</p>
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">免費版也可使用 AI 深度導覽：生成行程後，點選景點的紫色 AI 按鈕才獨立生成該景點的步行路線、周邊店舖與提醒。已生成內容再次開啟會直接讀取，並共用免費請求限速。</p>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並有限次自動接續。整次規劃最多送出 6 次生成嘗試；每日額度、權限或輸入衝突會明確停止。成功時只需一次請求，等待本身不消耗生成額度。</p>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
                 {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">
@@ -5643,6 +5667,7 @@ const App = () => {
         {itineraryData.planning_mode === 'basic' && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-bold">免費簡易行程：交通時間保留，活動時間與住宿地區路線為概估。</p>
           <p className="mt-1">{itineraryData.detail_options ? `本次選擇：${BASIC_TRIP_DETAIL_OPTIONS.filter(option => itineraryData.detail_options[option.key]).map(option => option.label).join('、') || '景點與交通時間表'}。` : '景點與交通時間表。'}路線、價格與季節資訊為建議，營業、寄存服務與住宿政策請於出發前確認。</p>
+          <p className="mt-2">點選景點右上方的紫色 AI 按鈕，即可按需生成深度導覽；已生成的內容可直接重看。</p>
           {itineraryData.fallback_message && <p className="mt-2 font-medium">{itineraryData.fallback_message}</p>}
         </div>}
         {itineraryData.request_reports?.length > 0 && <details className="rounded-2xl border border-purple-200 bg-purple-50 p-4 text-sm text-purple-900">
@@ -5683,6 +5708,7 @@ const App = () => {
              currencySettings={currencySettings}
              isPrintMode={false} 
              apiKey={apiKey}
+             geminiRequestMessage={geminiModels.requestState?.message}
              updateItineraryItem={updateItineraryItem}
              onSavePlan={saveCurrentPlan}
              onDeleteClick={handleDeleteItem} 
