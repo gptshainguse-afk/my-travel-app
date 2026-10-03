@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { 
@@ -18,6 +18,68 @@ import {
 
 // 【注意】在本地開發時，請取消下一行的註解以載入樣式
 import './index.css'; 
+
+// 跟隨系統外觀，也讓未加上 dark: 的舊卡片與 Portal 彈窗使用同一套色彩。
+const travelDarkRule = (property, classes, value) => `${classes.map(name => `html[data-travel-theme="dark"] [class~="${name}"]`).join(',')} { ${property}: ${value}; }`;
+const TRAVEL_THEME_CSS = `
+  :root { color-scheme: light; }
+  body { margin: 0; }
+  .travel-shell { color: #24364c; background: radial-gradient(ellipse at 8% 0%, #dbeefe 0%, transparent 42%), radial-gradient(ellipse at 100% 32%, #fce5ee 0%, transparent 44%), linear-gradient(145deg, #f0f7ff, #fffaf4); }
+  .travel-header, .travel-panel { transition: background-color .25s, border-color .25s, box-shadow .25s; }
+  .travel-share-content { min-height: 18rem; height: min(48vh, 30rem); line-height: 1.8; resize: none; }
+  .travel-share-overlay { background: rgb(8 18 35 / .58); backdrop-filter: blur(8px); }
+  html[data-travel-theme="dark"] { color-scheme: dark; background: #081321; color: #e8f1ff; }
+  html[data-travel-theme="dark"] .travel-shell { color: #e8f1ff; background: radial-gradient(ellipse at 8% 0%, rgb(41 108 163 / .28), transparent 44%), radial-gradient(ellipse at 96% 36%, rgb(46 129 132 / .14), transparent 42%), linear-gradient(145deg, #081321, #101e32 58%, #081623); }
+  html[data-travel-theme="dark"] .travel-header { background: linear-gradient(125deg, rgb(24 45 70 / .9), rgb(15 34 49 / .92)); border-color: #304963; box-shadow: 0 20px 64px rgb(0 0 0 / .24), inset 0 1px 0 rgb(170 214 255 / .06); }
+  html[data-travel-theme="dark"] .travel-panel { background-color: rgb(19 36 57 / .94); border-color: #30435d; box-shadow: 0 24px 70px rgb(0 0 0 / .24); }
+  html[data-travel-theme="dark"] .travel-share-overlay { background: rgb(1 8 17 / .76); }
+  html[data-travel-theme="dark"] .travel-share-dialog { background: #13243a; border-color: #36516f; box-shadow: 0 30px 90px rgb(0 0 0 / .5); }
+  html[data-travel-theme="dark"] .travel-share-content { background: #0b192b; color: #dce9fa; border-color: #314861; }
+  html[data-travel-theme="dark"] :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]) { color: #e3edfb; background-color: #0d1b2d; border-color: #314861; }
+  html[data-travel-theme="dark"] :is(input, textarea)::placeholder { color: #91a5bf; }
+  html[data-travel-theme="dark"] :is(input[type="checkbox"], input[type="radio"]) { accent-color: #79baff; }
+  html[data-travel-theme="dark"] :is(button, input, textarea, select, summary, a):focus-visible { outline: 2px solid #81bfff; outline-offset: 3px; }
+  html[data-travel-theme="dark"] :is(button, input, select):disabled { color: #9bacbf; }
+  html[data-travel-theme="dark"] .travel-decoration { opacity: .07; }
+  html[data-travel-theme="dark"] [class*="shadow"]:not(.travel-header):not(.travel-panel):not(.travel-share-dialog) { box-shadow: 0 8px 28px rgb(0 0 0 / .2); }
+  ${travelDarkRule('background-color', ['bg-white', 'bg-[#fffef8]'], '#13243a')}
+  ${travelDarkRule('background-color', ['bg-white/50', 'bg-white/60', 'bg-white/80', 'bg-white/90'], 'rgb(19 36 57 / .9)')}
+  ${travelDarkRule('background-color', ['bg-slate-50', 'bg-slate-50/50', 'bg-slate-100', 'bg-slate-200'], '#0e1d30')}
+  ${travelDarkRule('color', ['text-slate-700', 'text-slate-800', 'text-slate-900', 'text-gray-800'], '#e5efff')}
+  ${travelDarkRule('color', ['text-slate-500', 'text-slate-600', 'text-gray-500', 'text-gray-600'], '#b2c4dc')}
+  ${travelDarkRule('color', ['text-slate-300', 'text-slate-400', 'text-gray-400'], '#92a8c3')}
+  ${travelDarkRule('border-color', ['border-white', 'border-white/50', 'border-slate-50', 'border-slate-100', 'border-slate-100/50', 'border-slate-200', 'border-slate-300'], '#30455f')}
+  ${[['blue', '#112e4b', '#9ecfff'], ['sky', '#112e4b', '#9edbff'], ['indigo', '#202a48', '#bbc7ff'], ['purple', '#29243f', '#d2bcff'], ['orange', '#35281f', '#ffc89a'], ['amber', '#342e1f', '#f7d792'], ['yellow', '#342e1f', '#f7d792'], ['red', '#35232e', '#ffa9b8'], ['rose', '#35232e', '#ffbbd0'], ['emerald', '#12332f', '#97e4c9'], ['green', '#12332f', '#97e4c9'], ['teal', '#163138', '#9ae3df']].map(([color, background, text]) =>
+    `${travelDarkRule('background-color', [50, 100, 200].flatMap(level => [`bg-${color}-${level}`, `bg-${color}-${level}/50`, `bg-${color}-${level}/80`]), background)}
+     ${travelDarkRule('color', [500, 600, 700, 800, 900].map(level => `text-${color}-${level}`), text)}
+     ${travelDarkRule('border-color', [50, 100, 200].map(level => `border-${color}-${level}`), background)}`).join('\n')}
+  html[data-travel-theme="dark"] button[class~="bg-white"]:hover, html[data-travel-theme="dark"] button[class~="bg-slate-100"]:hover { background-color: #233d59; }
+  @media (prefers-reduced-motion: reduce) { .travel-shell *, .travel-share-overlay { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  @media print { html[data-travel-theme="dark"], html[data-travel-theme="dark"] body, .travel-shell { color-scheme: light !important; background: white !important; color: #111 !important; } html[data-travel-theme="dark"] [class*="bg-"], html[data-travel-theme="dark"] .travel-panel { background: white !important; } html[data-travel-theme="dark"] [class*="text-"] { color: #111 !important; } .travel-share-overlay { display: none !important; } }
+`;
+
+const useAdaptiveTravelTheme = () => {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const previousTheme = root.getAttribute('data-travel-theme');
+    const previousScheme = root.style.colorScheme;
+    const media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const sync = () => {
+      const theme = media?.matches ? 'dark' : 'light';
+      root.setAttribute('data-travel-theme', theme);
+      root.style.colorScheme = theme;
+    };
+    sync();
+    if (media?.addEventListener) media.addEventListener('change', sync);
+    else media?.addListener?.(sync);
+    return () => {
+      if (media?.removeEventListener) media.removeEventListener('change', sync);
+      else media?.removeListener?.(sync);
+      if (previousTheme === null) root.removeAttribute('data-travel-theme'); else root.setAttribute('data-travel-theme', previousTheme);
+      root.style.colorScheme = previousScheme;
+    };
+  }, []);
+};
 
 // --- Gemini 模型集中管理：官方清單 + 自動更新 + 同系列停用備援 ---
 // 不把固定版本寫進各項功能；models.list 是名稱與能力的資料來源。
@@ -1552,20 +1614,92 @@ const FunLoading = ({ destination, status, selectedInfo = [], onCancel }) => {
     <div className="flex flex-col items-center justify-center min-h-[75vh] px-4 animate-in fade-in duration-500">
       <div className="w-full max-w-lg space-y-5 text-center">
         <Plane className="w-14 h-14 mx-auto text-blue-600 animate-bounce" />
-        <h2 className="text-xl md:text-2xl font-bold text-slate-700 dark:text-[#ebd5c1]">正在規劃 {destination || '你的旅程'}</h2>
-        <div className="rounded-2xl border border-blue-200 dark:border-[#5d4037] bg-blue-50 dark:bg-[#2c1f1b] p-5 space-y-3" role="status" aria-live="polite">
+        <h2 className="text-xl md:text-2xl font-bold text-slate-700 dark:text-[#e8f1ff]">正在規劃 {destination || '你的旅程'}</h2>
+        <div className="rounded-2xl border border-blue-200 dark:border-[#314861] bg-blue-50 dark:bg-[#0e1b2d] p-5 space-y-3" role="status" aria-live="polite">
           <Loader2 className="w-6 h-6 mx-auto animate-spin text-blue-600" />
           <p className="text-sm text-blue-800 dark:text-sky-200">{status?.message || '正在處理行程資料…'}</p>
           {status?.remainingSeconds > 0 && <p className="text-3xl font-bold tabular-nums text-blue-700 dark:text-sky-300">{status.remainingSeconds} 秒</p>}
-          <p className="text-xs text-slate-500 dark:text-[#a08d85]">已等待 {elapsed} 秒；請保持此頁開啟。結果完成後會自動顯示。</p>
+          <p className="text-xs text-slate-500 dark:text-[#9bafc9]">已等待 {elapsed} 秒；請保持此頁開啟。結果完成後會自動顯示。</p>
         </div>
-        {selectedInfo.length > 0 && <p className="text-xs text-slate-500 dark:text-[#a08d85]">此次一併產生：{selectedInfo.join('、')}。資訊越多，通常需要較長時間。</p>}
-        <button type="button" onClick={onCancel} className="rounded-xl border border-slate-300 dark:border-[#5d4037] px-5 py-2 text-sm text-slate-600 dark:text-[#d6c0b3] hover:bg-slate-100 dark:hover:bg-[#33241f]">停止等待，保留資料</button>
+        {selectedInfo.length > 0 && <p className="text-xs text-slate-500 dark:text-[#9bafc9]">此次一併產生：{selectedInfo.join('、')}。資訊越多，通常需要較長時間。</p>}
+        <button type="button" onClick={onCancel} className="rounded-xl border border-slate-300 dark:border-[#314861] px-5 py-2 text-sm text-slate-600 dark:text-[#c0cfe2] hover:bg-slate-100 dark:hover:bg-[#132338]">停止等待，保留資料</button>
       </div>
     </div>
   );
 };
 // --- City Guide ---
+const ShareItineraryModal = ({ mode, text, onModeChange, onClose }) => {
+  const dialogRef = useRef(null);
+  const previewRef = useRef(null);
+  const closeRef = useRef(null);
+  const mounted = useRef(true);
+  const copyVersion = useRef(0);
+  const [copyState, setCopyState] = useState('idle');
+  useEffect(() => {
+    mounted.current = true;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+    const onKeyDown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const controls = [...dialogRef.current.querySelectorAll('button:not(:disabled), textarea, [tabindex="0"]')];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      mounted.current = false;
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+  useEffect(() => { copyVersion.current++; setCopyState('idle'); if (previewRef.current) previewRef.current.scrollTop = 0; }, [mode, text]);
+  const copyPreview = async () => {
+    if (copyState === 'copying') return;
+    const version = ++copyVersion.current;
+    setCopyState('copying');
+    let copied = false;
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); copied = true; } catch { /* 未取得權限時改用目前可見的文字。 */ }
+    }
+    if (!copied && mounted.current && version === copyVersion.current) {
+      const preview = previewRef.current;
+      try {
+        preview?.focus(); preview?.select(); preview?.setSelectionRange(0, text.length);
+        copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+      } catch { copied = false; }
+    }
+    if (mounted.current && version === copyVersion.current) setCopyState(copied ? 'copied' : 'error');
+  };
+  return createPortal(
+    <div className="travel-share-overlay fixed inset-0 z-[10000] flex items-center justify-center p-3 md:p-6 print:hidden" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="share-preview-title" className="travel-share-dialog w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 px-5 py-4 md:px-6 border-b border-slate-100">
+          <div><h3 id="share-preview-title" className="text-lg font-bold text-slate-800">行程文字預覽</h3><p className="mt-1 text-xs text-slate-500">確認內容後，再複製分享給旅伴。</p></div>
+          <button ref={closeRef} type="button" aria-label="關閉行程預覽" onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-100"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-4 md:p-6 flex-1 min-h-0 overflow-y-auto space-y-4">
+          <div className="flex gap-2 rounded-xl bg-slate-100 p-1" role="group" aria-label="行程文字格式">
+            {[['simple', '簡約內容'], ['detailed', '詳細內容']].map(([value, label]) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => onModeChange(value)} className={`flex-1 rounded-lg px-4 py-2 text-sm font-bold transition-colors ${mode === value ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white'}`}>{label}</button>)}
+          </div>
+          <textarea ref={previewRef} aria-label={`${mode === 'simple' ? '簡約' : '詳細'}行程預覽`} readOnly value={text} className="travel-share-content w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 outline-none font-mono" />
+        </div>
+        <div className="border-t border-slate-100 px-4 pb-4 pt-3 md:px-6 md:pb-5 space-y-3 shrink-0">
+          {copyState === 'copied' && <p role="status" className="text-sm text-emerald-600 text-center">已複製行程到剪貼簿。</p>}
+          {copyState === 'error' && <p role="alert" className="text-sm text-red-600">目前無法自動複製，已選取預覽文字；可使用 Ctrl／⌘ + C，或長按文字手動複製。</p>}
+          <button type="button" onClick={copyPreview} disabled={copyState === 'copying'} className="w-full rounded-xl bg-blue-600 px-5 py-3 font-bold text-white hover:bg-blue-700 disabled:opacity-60 flex justify-center items-center gap-2">
+            {copyState === 'copying' ? <Loader2 className="w-5 h-5 animate-spin" /> : copyState === 'copied' ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}複製行程到剪貼簿
+          </button>
+        </div>
+      </div>
+    </div>, document.body
+  );
+};
+
 const CityGuide = ({ guideData, cities }) => {
   const [selectedCity, setSelectedCity] = useState(cities[0]);
   const [isOpen, setIsOpen] = useState(false);
@@ -1807,7 +1941,7 @@ const DayTimeline = ({ day, dayIndex, expenses, setExpenses, travelers, currency
   const typeColors = { flight: 'bg-sky-100 text-sky-500 ring-sky-200', transport: 'bg-indigo-100 text-indigo-500 ring-indigo-200', meal: 'bg-orange-100 text-orange-500 ring-orange-200', hotel: 'bg-rose-100 text-rose-500 ring-rose-200', activity: 'bg-teal-100 text-teal-500 ring-teal-200', spot: 'bg-emerald-100 text-emerald-500 ring-emerald-200', shopping: 'bg-pink-100 text-pink-500 ring-pink-200', default: 'bg-slate-100 text-slate-500 ring-slate-200' };
 
   return (
-    <div className={`bg-[#fffef8] dark:bg-[#3a2a25] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white dark:border-[#2c1f1b] relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
+    <div className={`bg-[#fffef8] dark:bg-[#14243a] rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.08)] min-h-[600px] overflow-hidden border-4 border-white dark:border-[#0e1b2d] relative ${isPrintMode ? 'shadow-none border-none bg-white min-h-0 overflow-visible mb-8 break-inside-avoid' : ''}`}>
       {!isPrintMode && (<><div className="absolute bottom-0 right-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-amber-600 dark:text-amber-400"><Tent className="w-48 h-48 -rotate-12 translate-x-10 translate-y-10" /></div><div className="absolute top-1/2 left-0 opacity-[0.07] dark:opacity-20 pointer-events-none text-sky-600 dark:text-sky-400"><Cloud className="w-32 h-32 rotate-12 -translate-x-10" /></div></>)}
       <div className={`bg-gradient-to-r from-sky-400 via-cyan-400 to-teal-300 p-6 md:p-10 relative overflow-hidden ${isPrintMode ? 'bg-white text-black p-0 mb-4 border-b-2 border-slate-800 pb-2' : ''}`}>
         {!isPrintMode && (<><div className="absolute top-[-20%] right-[-10%] w-40 h-40 bg-white opacity-20 rounded-full blur-2xl"></div><div className="absolute bottom-[-20%] left-[-10%] w-60 h-60 bg-yellow-300 opacity-20 rounded-full blur-3xl"></div><div className="absolute top-4 right-4 text-white opacity-50"><Plane className="w-8 h-8 rotate-45" /></div></>)}
@@ -2652,7 +2786,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-[#3a2a25] rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative transition-colors duration-300">
+      <div className="bg-white dark:bg-[#14243a] rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl relative transition-colors duration-300">
         
         {/* Header */}
         <div className="bg-gradient-to-r from-orange-500 to-red-500 p-4 flex justify-between items-center text-white shrink-0">
@@ -2672,9 +2806,9 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                         ))}
                         
                         {/* 上傳按鈕 */}
-                        <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-lg hover:bg-slate-50 dark:hover:bg-[#4a3b32] hover:border-orange-400 transition-colors shrink-0 relative">
-                            <Camera className="w-6 h-6 text-slate-400 dark:text-[#a08d85]" />
-                            <span className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">加入照片</span>
+                        <div className="h-24 w-24 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-[#314861] rounded-lg hover:bg-slate-50 dark:hover:bg-[#29405b] hover:border-orange-400 transition-colors shrink-0 relative">
+                            <Camera className="w-6 h-6 text-slate-400 dark:text-[#9bafc9]" />
+                            <span className="text-xs text-slate-500 dark:text-[#9bafc9] mt-1">加入照片</span>
                             <input 
                                 type="file" 
                                 accept="image/png, image/jpeg, image/jpg" 
@@ -2692,7 +2826,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                 <button 
                     onClick={handleAnalyzeMenu} 
                     disabled={isAnalyzingMenu || selectedImages.length === 0}
-                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 dark:disabled:bg-[#4a3b32] text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-md mt-4"
+                    className="w-full py-3 bg-orange-500 hover:bg-orange-600 disabled:bg-slate-300 dark:disabled:bg-[#29405b] text-white rounded-xl font-bold flex justify-center items-center gap-2 transition-all shadow-md mt-4"
                 >
                     {isAnalyzingMenu ? <Loader2 className="animate-spin"/> : <Sparkles />} 
                     {isAnalyzingMenu ? 'AI 正在努力看菜單...' : '開始翻譯與整理菜單'}
@@ -2706,11 +2840,11 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                             <h4 className="font-bold text-orange-700 dark:text-orange-400 text-lg mb-2 pb-1 border-b border-orange-100 dark:border-orange-900/30">{cat.name}</h4>
                             <div className="space-y-3">
                                 {cat.items.map((item, itemIdx) => (
-                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-lg border border-transparent dark:border-[#4a3b32]">
+                                    <div key={itemIdx} className="flex justify-between items-start bg-slate-50 dark:bg-[#0e1b2d] p-3 rounded-lg border border-transparent dark:border-[#29405b]">
                                         <div>
-                                            <div className="font-bold text-slate-800 dark:text-[#ebd5c1]">{item.translated_name}</div>
-                                            <div className="text-xs text-slate-500 dark:text-[#a08d85]">{item.original_name}</div>
-                                            {item.description && <div className="text-sm text-slate-600 dark:text-[#d6c0b3] mt-1">{item.description}</div>}
+                                            <div className="font-bold text-slate-800 dark:text-[#e8f1ff]">{item.translated_name}</div>
+                                            <div className="text-xs text-slate-500 dark:text-[#9bafc9]">{item.original_name}</div>
+                                            {item.description && <div className="text-sm text-slate-600 dark:text-[#c0cfe2] mt-1">{item.description}</div>}
                                         </div>
                                         <div className="text-right font-mono font-bold text-orange-600 dark:text-orange-400">
                                             {item.price_tax_included ? <>{currencySymbol}{item.price_tax_included}<span className="text-xs ml-1 text-slate-400">(含稅)</span></> : 
@@ -2728,7 +2862,7 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
 
         {/* Footer */}
         {menuData && (
-            <div className="p-4 bg-orange-50 dark:bg-[#2c1f1b] border-t border-orange-100 dark:border-[#4a3b32] shrink-0">
+            <div className="p-4 bg-orange-50 dark:bg-[#0e1b2d] border-t border-orange-100 dark:border-[#29405b] shrink-0">
                 <div className="flex flex-col gap-3">
                     {/* 輸入框 */}
                     <div className="flex gap-3">
@@ -2737,14 +2871,14 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                             placeholder={`預算 (例如: 2000${currencySymbol})`} 
                             value={budget} 
                             onChange={e=>setBudget(e.target.value)} 
-                            className="w-1/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" 
+                            className="w-1/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#132338] dark:border-[#314861] dark:text-[#e8f1ff]" 
                         />
                         <input 
                             type="text" 
                             placeholder="特殊要求 (例如: 不吃牛、對蝦過敏)" 
                             value={requests} 
                             onChange={e=>setRequests(e.target.value)} 
-                            className="w-2/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#33241f] dark:border-[#5d4037] dark:text-[#ebd5c1]" 
+                            className="w-2/3 p-3 border rounded-xl text-sm outline-none focus:border-orange-400 dark:bg-[#132338] dark:border-[#314861] dark:text-[#e8f1ff]" 
                         />
                     </div>
 
@@ -2763,8 +2897,8 @@ const MenuHelperModal = ({ isOpen, onClose, apiKey, currencySymbol }) => {
                     // ✅ 關鍵修正：
                     // 1. max-h-60 + overflow-y-auto: 限制高度並允許卷動
                     // 2. whitespace-pre-line: 讓 AI 的換行符號 (\n) 生效，文章不再擠成一團
-                    <div className="mt-4 bg-white dark:bg-[#33241f] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#d6c0b3] leading-relaxed animate-in fade-in max-h-60 overflow-y-auto whitespace-pre-line">
-                        <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1 sticky top-0 bg-white dark:bg-[#33241f] pb-2 border-b border-red-50 dark:border-red-900/10">💡 推薦結果：</h5>
+                    <div className="mt-4 bg-white dark:bg-[#132338] p-4 rounded-xl border border-red-100 dark:border-red-900/30 shadow-sm text-slate-700 dark:text-[#c0cfe2] leading-relaxed animate-in fade-in max-h-60 overflow-y-auto whitespace-pre-line">
+                        <h5 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-1 sticky top-0 bg-white dark:bg-[#132338] pb-2 border-b border-red-50 dark:border-red-900/10">💡 推薦結果：</h5>
                         {recommendation}
                     </div>
                 )}
@@ -2884,7 +3018,7 @@ function buildTripBookingContext({ basicData, simpleFlights, multiFlights, accom
   };
   const inputs = !basicData.hasFlights ? [] : basicData.isMultiCityFlight
     ? (multiFlights || []).map(normalizeTransportInput).filter(item => ['date', 'arrivalDate', 'depTime', 'arrTime', 'code', 'station', 'departureStation', 'arrivalStation'].some(key => bookingText(item[key])))
-    : ['outbound', 'transit', 'inbound'].map(role => ({ ...normalizeTransportInput(simpleFlights?.[role]), role })).filter(item => ['date', 'arrivalDate', 'depTime', 'arrTime', 'code', 'station', 'departureStation', 'arrivalStation'].some(key => bookingText(item[key])));
+    : ['outbound', 'transit', 'inbound'].filter(role => simpleFlights?.[role]?.enabled !== false).map(role => ({ ...normalizeTransportInput(simpleFlights?.[role]), role })).filter(item => ['date', 'arrivalDate', 'depTime', 'arrTime', 'code', 'station', 'departureStation', 'arrivalStation'].some(key => bookingText(item[key])));
   const transport = inputs.map((input, index) => {
     const inferredRole = /回程|返程|回國/.test(input.type || '') ? 'inbound' : /去程|出國/.test(input.type || '') ? 'outbound'
       : /中轉|轉機/.test(input.type || '') ? 'transit' : index === 0 ? 'outbound' : index === inputs.length - 1 ? 'inbound' : 'transfer';
@@ -4094,7 +4228,24 @@ async function generateTripData({ apiKey, modelFamily, baseConstraints, dateList
   return { ...baseData, days, ...(bookingContext ? { booking_context: bookingContext } : {}) };
 }
 
+const getItineraryShareText = (itinerary, destination, mode = 'simple') => {
+  if (!itinerary) return '';
+  let text = `${destination || ''}\n`;
+  if (itinerary.planning_mode === 'basic') text += '免費簡易行程：活動與接駁時間為概估，班次時間依輸入保留。\n';
+  if (itinerary.fallback_message) text += `${itinerary.fallback_message}\n`;
+  (itinerary.days || []).forEach(day => {
+    text += `\nDay ${day.day_index}${day.planning_mode === 'basic' ? `｜${day.city}` : ''}\n`;
+    (day.timeline || []).forEach(item => {
+      const time = `${item.time_estimated && tripTimeMinutes(item.time) !== null ? '約 ' : ''}${item.time}`;
+      const description = String(item.description || '').replace(/[\r\n]+/g, ' ').trim();
+      text += mode === 'simple' ? `${time}｜${item.title}\n` : `${time}｜${item.title}｜${description}\n`;
+    });
+  });
+  return text;
+};
+
 const App = () => {
+  useAdaptiveTravelTheme();
   const [showCalendar, setShowCalendar] = useState(false);
   const [modelType, setModelType] = usePersistentState('gemini_model_type', 'pro');
   const [itineraryData, setItineraryData] = usePersistentState('current_itinerary_data', null);
@@ -4169,8 +4320,7 @@ const App = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [savedPlans, setSavedPlans] = useState([]);
   const [isExporting, setIsExporting] = useState(false); 
-  const [copySuccess, setCopySuccess] = useState(false);
-  const [showCopyMenu, setShowCopyMenu] = useState(false);
+  const [sharePreviewMode, setSharePreviewMode] = useState(null);
   const inputTutorialPages = [
     { icon: '🌍', title: '第一步：設定目的地與日期', desc: '輸入您想去的城市（如：東京、巴黎），並點擊日曆圖示選擇出發與回程日期。' },
     { icon: '✈️', title: '第二步：航班與交通', desc: '填寫已訂航班／車次的出發與抵達時間，跨日航班加填抵達日期。多段交通可指定航段用途；自駕遊可在交通偏好選擇「自駕」並開啟停車建議。' },
@@ -4343,6 +4493,7 @@ const App = () => {
   const handleSimpleFlightChange = (key, field, value) => {
     setSimpleFlights(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
   };
+  const setSimpleFlightEnabled = (key, enabled) => handleSimpleFlightChange(key, 'enabled', enabled);
 
   const addMultiFlight = () => setMultiFlights(prev => [...prev.map(f => ({ ...f, isOpen: false })), normalizeTransportInput({ id: Date.now(), type: '航段', isOpen: true })]);
   const updateMultiFlight = (id, field, value) => setMultiFlights(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
@@ -4522,58 +4673,6 @@ const App = () => {
   };
 
   const handleExportPDF = () => window.print();
-
-  const fallbackCopyTextToClipboard = (text) => {
-    var textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.top = "0";
-    textArea.style.left = "0";
-    textArea.style.position = "fixed";
-    textArea.style.opacity = "0"; 
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    try {
-      var successful = document.execCommand('copy');
-      if (successful) {
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2000);
-      } else {
-        alert('複製失敗，請手動選取文字複製');
-      }
-    } catch (err) {
-      console.error('Fallback: Oops, unable to copy', err);
-    }
-    document.body.removeChild(textArea);
-  };
-
-  const handleShareText = (mode = 'simple') => {
-    if (!itineraryData) return;
-    let text = `${basicData.destinations}\n`;
-    if (itineraryData.planning_mode === 'basic') text += '免費簡易行程：活動與接駁時間為概估，班次時間依輸入保留。\n';
-    if (itineraryData.fallback_message) text += `${itineraryData.fallback_message}\n`;
-    (itineraryData.days || []).forEach(day => {
-      text += `\nDay ${day.day_index}${day.planning_mode === 'basic' ? `｜${day.city}` : ''}\n`;
-      day.timeline.forEach(item => {
-        const time = `${item.time_estimated && tripTimeMinutes(item.time) !== null ? '約 ' : ''}${item.time}`;
-        if (mode === 'simple') {
-          text += `${time}｜${item.title}\n`;
-        } else {
-          const desc = item.description ? item.description.replace(/[\r\n]+/g, ' ').trim() : '';
-          text += `${time}｜${item.title}｜${desc}\n`;
-        }
-      });
-    });
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(() => {
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2000);
-      }).catch(() => fallbackCopyTextToClipboard(text));
-    } else {
-      fallbackCopyTextToClipboard(text);
-    }
-    setShowCopyMenu(false);
-  };
 
   const updateItineraryItem = (dayIndex, timelineIndex, updates) => {
      setItineraryData(prev => {
@@ -4839,7 +4938,7 @@ const App = () => {
   const renderInputForm = () => {
     return (
       // ✅ 修改：輸入表單容器 (深色模式：摩卡色背景 + 深咖啡邊框)
-      <div className="max-w-4xl mx-auto bg-white/80 dark:bg-[#3a2a25]/90 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 dark:border-[#5d4037] print:hidden transition-colors duration-300">
+      <div className="travel-panel max-w-4xl mx-auto bg-white/80 dark:bg-[#14243a]/90 backdrop-blur-xl p-6 md:p-8 rounded-3xl shadow-2xl space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 border border-white/50 dark:border-[#314861] print:hidden transition-colors duration-300">
         <TutorialModal 
            isOpen={showInputTutorial} 
            onClose={() => setShowInputTutorial(false)} 
@@ -4852,13 +4951,13 @@ const App = () => {
            onClose={() => setShowApiKeyTutorial(false)} 
         />
         {/* --- Header 區域開始 --- */}
-        <div className="pb-6 border-b border-slate-100/50 dark:border-[#5d4037]/50">
+        <div className="pb-6 border-b border-slate-100/50 dark:border-[#314861]/50">
           
           {/* 1. 上排：功能按鈕區 */}
           <div className="flex justify-start mb-4">
             <button 
               onClick={() => { localStorage.removeItem('tutorial_input_seen'); setShowInputTutorial(true); }}
-              className="px-3 py-2 text-slate-500 dark:text-[#d6c0b3] hover:text-blue-600 dark:hover:text-sky-300 transition-colors flex items-center gap-2 text-sm font-bold border border-slate-200 dark:border-[#5d4037] rounded-xl hover:bg-blue-50 dark:hover:bg-[#4a3b32] bg-white dark:bg-[#2c1f1b] shadow-sm"
+              className="px-3 py-2 text-slate-500 dark:text-[#c0cfe2] hover:text-blue-600 dark:hover:text-sky-300 transition-colors flex items-center gap-2 text-sm font-bold border border-slate-200 dark:border-[#314861] rounded-xl hover:bg-blue-50 dark:hover:bg-[#29405b] bg-white dark:bg-[#0e1b2d] shadow-sm"
             >
                <Info className="w-4 h-4" /> 使用教學
             </button>
@@ -4870,13 +4969,13 @@ const App = () => {
               <Sparkles className="w-8 h-8 md:w-10 md:h-10 text-teal-500 dark:text-teal-300" />
               AI 智能旅程規劃師
             </h1>
-            <p className="text-slate-500 dark:text-[#d6c0b3] mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
+            <p className="text-slate-500 dark:text-[#c0cfe2] mt-3 text-base md:text-lg">智慧分析航班與機場，為您量身打造深度文化之旅</p>
           </div>
         </div>
 
         <div className="space-y-6">
           {/* API Key 區塊 */}
-          <div id="ai-settings" className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-[#2a1e1a] dark:to-[#33241f] p-5 md:p-6 rounded-2xl border border-blue-100 dark:border-[#5d4037] shadow-inner transition-colors duration-300">
+          <div id="ai-settings" className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-[#102033] dark:to-[#132338] p-5 md:p-6 rounded-2xl border border-blue-100 dark:border-[#314861] shadow-inner transition-colors duration-300">
             <div className="flex justify-between items-center mb-2">
               <label htmlFor="ai-api-key" className="block text-sm font-bold text-blue-800 dark:text-sky-200 flex items-center gap-2 flex-wrap">
                 <Key className="w-4 h-4" /> Gemini API Key (必填)
@@ -4888,7 +4987,7 @@ const App = () => {
                 </button>
               </label>
               <div className="flex gap-2">
-                <button onClick={resetForm} className="text-xs text-slate-500 dark:text-[#a08d85] hover:text-slate-700 dark:hover:text-[#ebd5c1] underline transition-colors">重置所有欄位</button>
+                <button onClick={resetForm} className="text-xs text-slate-500 dark:text-[#9bafc9] hover:text-slate-700 dark:hover:text-[#e8f1ff] underline transition-colors">重置所有欄位</button>
                 {apiKey && <button onClick={clearApiKey} className="text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 underline transition-colors">清除儲存的 Key</button>}
               </div>
             </div>
@@ -4899,28 +4998,28 @@ const App = () => {
                  value={apiKey} 
                  onChange={(e) => setApiKey(e.target.value)} 
                  placeholder="貼上您的 Gemini API Key (將自動儲存在本機)"
-                 className="w-full pl-4 pr-4 py-3 bg-white dark:bg-[#2c1f1b] border border-blue-200 dark:border-[#5d4037] rounded-xl focus:ring-4 focus:ring-blue-100 dark:focus:ring-[#5d4037]/50 focus:border-blue-500 dark:focus:border-sky-400 outline-none transition-all shadow-sm text-sm md:text-base dark:text-[#ebd5c1]" 
+                 className="w-full pl-4 pr-4 py-3 bg-white dark:bg-[#0e1b2d] border border-blue-200 dark:border-[#314861] rounded-xl focus:ring-4 focus:ring-blue-100 dark:focus:ring-[#314861]/50 focus:border-blue-500 dark:focus:border-sky-400 outline-none transition-all shadow-sm text-sm md:text-base dark:text-[#e8f1ff]" 
                />
             </div>
             
             <fieldset className="mt-4 space-y-2">
-              <legend className="text-xs font-bold text-slate-600 dark:text-[#d6c0b3] mb-2">這把 API Key 使用哪種方案？</legend>
+              <legend className="text-xs font-bold text-slate-600 dark:text-[#c0cfe2] mb-2">這把 API Key 使用哪種方案？</legend>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {[{ value: 'free', title: '免費 API：簡易規劃', detail: '保留特殊要求、簡短介紹與概略路線；可自選資訊，盡量一次生成。' },
                   { value: 'paid', title: '已開通 API 計費', detail: '可選 Pro 或 Flash；費用依 Google 專案計費。' }].map(mode => (
-                  <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#3e2b26]' : 'border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b]'}`}>
+                  <label key={mode.value} className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${apiUsageMode === mode.value ? 'border-blue-500 bg-blue-50 dark:bg-[#20334d]' : 'border-slate-200 dark:border-[#314861] bg-white dark:bg-[#0e1b2d]'}`}>
                     <input type="radio" name="apiUsageMode" value={mode.value} checked={apiUsageMode === mode.value} onChange={() => setApiUsageMode(mode.value)} className="mt-1" />
-                    <span><span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{mode.title}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{mode.detail}</span></span>
+                    <span><span className="block text-sm font-bold text-slate-800 dark:text-[#e8f1ff]">{mode.title}</span><span className="block text-xs text-slate-500 dark:text-[#9bafc9] mt-1">{mode.detail}</span></span>
                   </label>
                 ))}
               </div>
-              <p className="text-xs text-slate-500 dark:text-[#a08d85]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 Google 專案決定。</p>
+              <p className="text-xs text-slate-500 dark:text-[#9bafc9]">此選項只調整呼叫策略，不會開通計費或改變額度。實際免費額度、模型資格與費用由 API Key 所屬的 Google 專案決定。</p>
             </fieldset>
 
             {/* 免費規劃使用 Flash；已開通計費者保留 Pro / Flash 選擇。 */}
-            <div className="bg-white/60 dark:bg-[#2c1f1b]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#5d4037]/50 mt-4">
+            <div className="bg-white/60 dark:bg-[#0e1b2d]/60 p-3 rounded-xl border border-blue-100/50 dark:border-[#314861]/50 mt-4">
               <div className="flex items-center justify-between gap-2 mb-2">
-                <div className="text-xs font-bold text-slate-500 dark:text-[#a08d85] flex items-center gap-1">
+                <div className="text-xs font-bold text-slate-500 dark:text-[#9bafc9] flex items-center gap-1">
                   <Bot className="w-3 h-3" /> 選擇 AI 模型引擎 · 自動更新
                 </div>
                 {normalizeGeminiKey(apiKey) && (
@@ -4929,24 +5028,24 @@ const App = () => {
                   </button>
                 )}
               </div>
-              <p className="text-xs text-slate-500 dark:text-[#a08d85] mb-3" role="status" aria-live="polite">
+              <p className="text-xs text-slate-500 dark:text-[#9bafc9] mb-3" role="status" aria-live="polite">
                 {geminiModels.status === 'idle' && '輸入 API Key 後會自動取得可用模型。'}
                 {geminiModels.status === 'loading' && '正在取得可用模型…'}
                 {geminiModels.status === 'ready' && '已同步官方模型清單；實際使用資格仍依這把 Key 的配額決定。'}
                 {geminiModels.status === 'error' && `模型清單更新失敗：${geminiModels.error} 可按「更新模型」重試。`}
               </p>
-              {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#3e2b26] p-3 mb-3">
-                <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-1">免費模式的運算與配額有限，保留具名景點、簡短介紹、用餐與特殊要求；依交通時間切換城市，以住宿地區安排起終點。進階資訊可在下方勾選，與行程一起產生。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。</p>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並有限次自動接續。整次規劃最多送出 6 次生成嘗試；每日額度、權限或輸入衝突會明確停止。成功時只需一次請求，等待本身不消耗生成額度。</p>
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
-                {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
+              {apiUsageMode !== 'paid' && <div className="rounded-lg border border-indigo-500 dark:border-sky-400 bg-indigo-50 dark:bg-[#20334d] p-3 mb-3">
+                <span className="block text-sm font-bold text-slate-800 dark:text-[#e8f1ff]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-1">免費模式的運算與配額有限，保留具名景點、簡短介紹、用餐與特殊要求；依交通時間切換城市，以住宿地區安排起終點。進階資訊可在下方勾選，與行程一起產生。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。</p>
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並有限次自動接續。整次規劃最多送出 6 次生成嘗試；每日額度、權限或輸入衝突會明確停止。成功時只需一次請求，等待本身不消耗生成額度。</p>
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
+                {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">
                   <summary className="cursor-pointer">查看查詢到的文字模型（{geminiModels.listedModels.length} 個）</summary>
                   <ul className="mt-1 space-y-1">{geminiModels.listedModels.map(model => <li key={model.id}>{model.label} · {model.id}</li>)}</ul>
                   <p className="mt-1">清單包含 Flash、Flash-Lite 與 Pro；列出不代表具有免費配額。主行程使用 Flash。</p>
                 </details>}
-                <p className="text-xs text-slate-600 dark:text-[#d6c0b3] mt-2">建議開通 Gemini API 計費後使用完整模式，可取得較高配額與更完整的規劃。Flash 少量文字規劃可能只需幾元；實際費用依模型、Token 用量、重試與當時費率而定，付費仍可能遇到服務忙碌。</p>
-                <details className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">建議開通 Gemini API 計費後使用完整模式，可取得較高配額與更完整的規劃。Flash 少量文字規劃可能只需幾元；實際費用依模型、Token 用量、重試與當時費率而定，付費仍可能遇到服務忙碌。</p>
+                <details className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">
                   <summary className="cursor-pointer">查看費用估算範例</summary>
                   <p className="mt-1">以 2026/10/02 公告、2026/12/31 前 Gemini 3.8 Flash 標準費率估算：輸入 10,000 Token、輸出 20,000 Token（含思考）約 US$0.0825；假設 US$1＝NT$32，約 NT$2.64。這是範例而非每次費用上限；Pro 或較多輸出可能更高。</p>
                 </details>
@@ -4954,40 +5053,40 @@ const App = () => {
                   <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-sky-300 underline">查看 Google API 計費設定</a>
                   <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-sky-300 underline">官方最新價格</a>
                 </div>
-                {geminiModels.lastUsed.flash && <p className="text-xs text-slate-500 dark:text-[#a08d85] mt-1">上次實際使用：{geminiModels.lastUsed.flash.label}</p>}
+                {geminiModels.lastUsed.flash && <p className="text-xs text-slate-500 dark:text-[#9bafc9] mt-1">上次實際使用：{geminiModels.lastUsed.flash.label}</p>}
               </div>}
               <div className="flex flex-col md:flex-row gap-3">
                 {[{ type: 'pro', detail: '自動選擇最新 Pro，適合深度與複雜規劃。' },
                   { type: 'flash', detail: '自動選擇最新 Flash，適合快速規劃。' }].map(model => (
-                  <label key={model.type} className={`flex-1 border rounded-lg p-3 transition-all ${apiUsageMode !== 'paid' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${effectiveModelType === model.type ? 'bg-indigo-50 dark:bg-[#3e2b26] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#2c1f1b] border-slate-200 dark:border-[#5d4037]'}`}>
+                  <label key={model.type} className={`flex-1 border rounded-lg p-3 transition-all ${apiUsageMode !== 'paid' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${effectiveModelType === model.type ? 'bg-indigo-50 dark:bg-[#20334d] border-indigo-500 dark:border-sky-400 shadow-sm' : 'bg-white dark:bg-[#0e1b2d] border-slate-200 dark:border-[#314861]'}`}>
                     <div className="flex items-start gap-3">
-                      <input type="radio" name="modelType" value={model.type} checked={effectiveModelType === model.type} disabled={apiUsageMode !== 'paid'} onChange={() => setModelType(model.type)} className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
+                      <input type="radio" name="modelType" value={model.type} checked={effectiveModelType === model.type} disabled={apiUsageMode !== 'paid'} onChange={() => setModelType(model.type)} className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500 dark:bg-[#081321] dark:border-[#314861]" />
                       <div>
-                        <span className="block text-sm font-bold text-slate-800 dark:text-[#ebd5c1]">{geminiModels.labels[model.type]}</span>
-                        <span className="block text-xs text-slate-500 dark:text-[#a08d85] mt-1">{apiUsageMode === 'paid' ? model.detail : '已開通 API 計費模式可選用。'}</span>
-                        {geminiModels.lastUsed[model.type] && <span className="block text-[10px] text-slate-500 dark:text-[#a08d85] mt-1">上次使用：{geminiModels.lastUsed[model.type].label}</span>}
+                        <span className="block text-sm font-bold text-slate-800 dark:text-[#e8f1ff]">{geminiModels.labels[model.type]}</span>
+                        <span className="block text-xs text-slate-500 dark:text-[#9bafc9] mt-1">{apiUsageMode === 'paid' ? model.detail : '已開通 API 計費模式可選用。'}</span>
+                        {geminiModels.lastUsed[model.type] && <span className="block text-[10px] text-slate-500 dark:text-[#9bafc9] mt-1">上次使用：{geminiModels.lastUsed[model.type].label}</span>}
                       </div>
                     </div>
                   </label>
                 ))}
               </div>
-              <label className="flex items-start gap-2 mt-3 text-xs text-slate-600 dark:text-[#d6c0b3] cursor-pointer">
+              <label className="flex items-start gap-2 mt-3 text-xs text-slate-600 dark:text-[#c0cfe2] cursor-pointer">
                 <input type="checkbox" name="allowBusyFallback" checked={Boolean(allowBusyFallback)} onChange={e => setAllowBusyFallback(e.target.checked)} className="mt-0.5" />
                 <span>持續忙碌時自動使用同系列備援模型（最多切換一次）。模型停用時仍會尋找可用版本。</span>
               </label>
-              <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">{apiUsageMode === 'free' ? '免費模式每筆需求最多自動重試 1 次，至少等待 30 秒；同系列備援也共用重試額度。持續 503 時暫停該系列 60 秒，等待過程會顯示倒數。' : '短時間限制會等待後重試，每個模型最多重試 3 次。'} 模型仍可能忙碌，限速無法保證消除 503。免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完會直接提示。</p>
+              <p className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">{apiUsageMode === 'free' ? '免費模式每筆需求最多自動重試 1 次，至少等待 30 秒；同系列備援也共用重試額度。持續 503 時暫停該系列 60 秒，等待過程會顯示倒數。' : '短時間限制會等待後重試，每個模型最多重試 3 次。'} 模型仍可能忙碌，限速無法保證消除 503。免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完會直接提示。</p>
             </div>
           </div>
           
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#e8f1ff] flex items-center gap-2">
               <span className="bg-blue-100 dark:bg-sky-900/50 p-2 rounded-lg text-blue-600 dark:text-sky-300"><MapPin className="w-5 h-5" /></span>基本行程
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">
                   目的城市 
-                  <span className="text-xs text-slate-400 dark:text-[#8e7c75] font-normal ml-2">
+                  <span className="text-xs text-slate-400 dark:text-[#8ea3bf] font-normal ml-2">
                     (多個城市請用逗號或空白隔開)
                   </span>
                 </label>
@@ -4996,23 +5095,23 @@ const App = () => {
                   value={basicData.destinations} 
                   onChange={handleBasicChange} 
                   placeholder="例如：福岡, 熊本, 由布院"
-                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
+                  className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" 
                 />
               </div>
               
               {/* 日期選擇 (含月曆) */}
               <div className="space-y-2 relative">
-                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">旅遊日期</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">旅遊日期</label>
                 <div 
                   className="relative cursor-pointer"
                   onClick={() => setShowCalendar(!showCalendar)}
                 >
-                  <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />
+                  <Calendar className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />
                   <input 
                     name="dates" 
                     value={basicData.dates} 
                     readOnly 
-                    className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base cursor-pointer dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
+                    className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base cursor-pointer dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" 
                     placeholder="點擊選擇日期範圍"
                   />
                 </div>
@@ -5031,8 +5130,8 @@ const App = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">風格</label>
-                <select name="type" value={basicData.type} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]">
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">風格</label>
+                <select name="type" value={basicData.type} onChange={handleBasicChange} className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#e8f1ff]">
                   <option>休閒 (慢步調)</option>
                   <option>購物 (商圈為主)</option>
                   <option>文化 (歷史古蹟)</option>
@@ -5041,20 +5140,20 @@ const App = () => {
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">人數</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">人數</label>
                 <div className="relative">
-                  <Users className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />
-                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#ebd5c1]" />
+                  <Users className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />
+                  <input type="number" name="travelers" value={basicData.travelers} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base dark:text-[#e8f1ff]" />
                 </div>
               </div>
             </div>
   
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">交通偏好</label>
+                <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">交通偏好</label>
                 <div className="relative">
-                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8e7c75]" />}
-                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#ebd5c1]">
+                  {basicData.transportMode === 'self_driving' ? <Car className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" /> : <Train className="absolute left-4 top-3.5 md:top-4 w-5 h-5 text-slate-400 dark:text-[#8ea3bf]" />}
+                  <select name="transportMode" value={basicData.transportMode} onChange={handleBasicChange} className="w-full pl-12 p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all appearance-none text-sm md:text-base dark:text-[#e8f1ff]">
                     <option value="public">大眾交通</option>
                     <option value="self_driving">自駕</option>
                   </select>
@@ -5063,16 +5162,16 @@ const App = () => {
               
               {basicData.transportMode === 'self_driving' && (
                 <div className="space-y-2 flex items-center h-full pt-6">
-                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 dark:bg-[#2c1f1b] p-3 rounded-xl border border-slate-200 dark:border-[#5d4037] w-full hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
+                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 dark:bg-[#0e1b2d] p-3 rounded-xl border border-slate-200 dark:border-[#314861] w-full hover:bg-slate-100 dark:hover:bg-[#132338] transition-colors">
                     <input 
                       type="checkbox" 
                       name="needParking" 
                       checked={basicData.needParking} 
                       onChange={handleBasicChange} 
-                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" 
+                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#081321] dark:border-[#314861]" 
                     />
-                    <span className="text-sm font-semibold text-slate-700 dark:text-[#ebd5c1] flex items-center gap-2">
-                      <ParkingCircle className="w-5 h-5 text-slate-500 dark:text-[#a08d85]" />
+                    <span className="text-sm font-semibold text-slate-700 dark:text-[#e8f1ff] flex items-center gap-2">
+                      <ParkingCircle className="w-5 h-5 text-slate-500 dark:text-[#9bafc9]" />
                       是否提供停車資訊
                     </span>
                   </label>
@@ -5081,15 +5180,15 @@ const App = () => {
             </div>
           </section>
   
-          <hr className="border-slate-100 dark:border-[#5d4037]" />
+          <hr className="border-slate-100 dark:border-[#314861]" />
   
           {/* 特殊要求與價位 */}
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#e8f1ff] flex items-center gap-2">
               <span className="bg-purple-100 dark:bg-purple-900/50 p-2 rounded-lg text-purple-600 dark:text-purple-300"><MessageSquare className="w-5 h-5" /></span>特殊要求與偏好
             </h3>
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3]">特殊要求</label>
+              <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2]">特殊要求</label>
               <textarea 
                 ref={textareaRef} // 綁定 ref
                 name="specialRequests" 
@@ -5097,37 +5196,37 @@ const App = () => {
                 maxLength={apiUsageMode === 'free' ? 6000 : undefined}
                 onChange={handleBasicChange} 
                 rows={2} 
-                className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto dark:text-[#ebd5c1] dark:placeholder-[#6e5850]" 
+                className="w-full p-3 md:p-4 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-xl focus:ring-2 focus:ring-blue-500 dark:focus:ring-sky-400 outline-none transition-all text-sm md:text-base min-h-[80px] max-h-[240px] resize-none overflow-y-auto dark:text-[#e8f1ff] dark:placeholder-[#7f96b2]" 
                 placeholder="例如：一定要吃燒肉、想在天神待久一點..." 
               />
-              {apiUsageMode === 'free' && <p className="text-xs text-slate-500 dark:text-[#a08d85]">每行一項需求，最多 6,000 字，送出時會完整保留。固定時間可寫「第 3 天 17:00–21:00 名古屋巨蛋演唱會」，或填寫下方固定活動；未提供的營業與寄存服務會標示待確認。</p>}
+              {apiUsageMode === 'free' && <p className="text-xs text-slate-500 dark:text-[#9bafc9]">每行一項需求，最多 6,000 字，送出時會完整保留。固定時間可寫「第 3 天 17:00–21:00 名古屋巨蛋演唱會」，或填寫下方固定活動；未提供的營業與寄存服務會標示待確認。</p>}
             </div>
             {apiUsageMode === 'free' && <>
-              <fieldset className="rounded-2xl border border-purple-200 dark:border-[#5d4037] p-4 space-y-3">
-                <legend className="px-2 text-sm font-bold text-slate-700 dark:text-[#ebd5c1]">希望一起產生哪些資訊？</legend>
+              <fieldset className="rounded-2xl border border-purple-200 dark:border-[#314861] p-4 space-y-3">
+                <legend className="px-2 text-sm font-bold text-slate-700 dark:text-[#e8f1ff]">希望一起產生哪些資訊？</legend>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {BASIC_TRIP_DETAIL_OPTIONS.map(option => <label key={option.key} className="flex items-start gap-3 cursor-pointer">
                     <input type="checkbox" name={`detail_${option.key}`} checked={normalizeBasicDetailOptions(detailOptions)[option.key]}
                       onChange={event => setDetailOptions(previous => ({ ...normalizeBasicDetailOptions(previous), [option.key]: event.target.checked }))} className="mt-1 w-4 h-4 rounded text-purple-600" />
-                    <span><span className="block text-sm font-semibold text-slate-700 dark:text-[#ebd5c1]">{option.label}</span><span className="block text-xs text-slate-500 dark:text-[#a08d85]">{option.detail}</span></span>
+                    <span><span className="block text-sm font-semibold text-slate-700 dark:text-[#e8f1ff]">{option.label}</span><span className="block text-xs text-slate-500 dark:text-[#9bafc9]">{option.detail}</span></span>
                   </label>)}
                 </div>
-                <p className="text-xs text-slate-500 dark:text-[#a08d85]">勾選越多，回覆內容與等待時間通常越多；資訊會併入同一次行程生成，避免每個項目另外發送請求。</p>
+                <p className="text-xs text-slate-500 dark:text-[#9bafc9]">勾選越多，回覆內容與等待時間通常越多；資訊會併入同一次行程生成，避免每個項目另外發送請求。</p>
               </fieldset>
-              <details className="rounded-2xl border border-purple-200 dark:border-[#5d4037] p-4" open={fixedActivities.length > 0 || undefined}>
-                <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-[#ebd5c1]">固定活動／訂位時間（選填）</summary>
-                <p className="mt-2 text-xs text-slate-500 dark:text-[#a08d85]">演唱會、餐廳訂位或必排行程先保留，再安排其他景點。請填日期與開始時間；填結束時間可避免活動被提早結束。</p>
-                <div className="mt-3 space-y-3">{fixedActivities.map((activity, index) => <div key={activity.id} className="rounded-xl bg-slate-50 dark:bg-[#2c1f1b] p-3 space-y-2">
+              <details className="rounded-2xl border border-purple-200 dark:border-[#314861] p-4" open={fixedActivities.length > 0 || undefined}>
+                <summary className="cursor-pointer text-sm font-bold text-slate-700 dark:text-[#e8f1ff]">固定活動／訂位時間（選填）</summary>
+                <p className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">演唱會、餐廳訂位或必排行程先保留，再安排其他景點。請填日期與開始時間；填結束時間可避免活動被提早結束。</p>
+                <div className="mt-3 space-y-3">{fixedActivities.map((activity, index) => <div key={activity.id} className="rounded-xl bg-slate-50 dark:bg-[#0e1b2d] p-3 space-y-2">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     {[{ key: 'date', label: '活動日期', type: 'date' }, { key: 'startTime', label: '開始時間', type: 'time' }, { key: 'endTime', label: '結束時間（選填）', type: 'time' },
-                      { key: 'title', label: '活動／餐廳名稱', type: 'text' }, { key: 'area', label: '城市／地區（選填）', type: 'text' }].map(field => <label key={field.key} className="text-xs text-slate-600 dark:text-[#d6c0b3]">
+                      { key: 'title', label: '活動／餐廳名稱', type: 'text' }, { key: 'area', label: '城市／地區（選填）', type: 'text' }].map(field => <label key={field.key} className="text-xs text-slate-600 dark:text-[#c0cfe2]">
                       {field.label}<input type={field.type} aria-label={`固定活動 ${index + 1} ${field.label}`} value={activity[field.key] || ''}
                         onChange={event => setFixedActivities(previous => previous.map(item => item.id === activity.id ? { ...item, [field.key]: event.target.value } : item))}
-                        className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#1e1410] p-2" />
+                        className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#314861] bg-white dark:bg-[#081321] p-2" />
                     </label>)}
-                    <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">活動類型<select aria-label={`固定活動 ${index + 1} 活動類型`} value={activity.type || 'activity'}
+                    <label className="text-xs text-slate-600 dark:text-[#c0cfe2]">活動類型<select aria-label={`固定活動 ${index + 1} 活動類型`} value={activity.type || 'activity'}
                       onChange={event => setFixedActivities(previous => previous.map(item => item.id === activity.id ? { ...item, type: event.target.value } : item))}
-                      className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#5d4037] bg-white dark:bg-[#1e1410] p-2">
+                      className="mt-1 w-full rounded-lg border border-slate-200 dark:border-[#314861] bg-white dark:bg-[#081321] p-2">
                       <option value="activity">活動／演唱會</option><option value="meal">用餐／訂位</option><option value="spot">必訪景點</option><option value="logistics">行李／接送</option>
                     </select></label>
                   </div>
@@ -5138,28 +5237,28 @@ const App = () => {
               </details>
             </>}
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-600 dark:text-[#d6c0b3] flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
+              <label className="text-sm font-semibold text-slate-600 dark:text-[#c0cfe2] flex items-center gap-2"><Banknote className="w-4 h-4" /> 餐廳價位偏好</label>
               <div className="flex flex-wrap gap-3">
                 {[
                   { key: 'high', label: '高 (NT$1000+)' },
                   { key: 'medium', label: '中 (NT$301-1000)' },
                   { key: 'low', label: '低 (NT$300以下)' }
                 ].map((price) => (
-                  <label key={price.key} className="flex items-center gap-2 bg-slate-50 dark:bg-[#2c1f1b] px-4 py-3 rounded-xl border border-slate-200 dark:border-[#5d4037] cursor-pointer hover:bg-slate-100 dark:hover:bg-[#33241f] transition-colors">
-                    <input type="checkbox" name={price.key} checked={basicData.priceRanges?.[price.key] || false} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
-                    <span className="text-sm font-medium text-slate-700 dark:text-[#ebd5c1]">{price.label}</span>
+                  <label key={price.key} className="flex items-center gap-2 bg-slate-50 dark:bg-[#0e1b2d] px-4 py-3 rounded-xl border border-slate-200 dark:border-[#314861] cursor-pointer hover:bg-slate-100 dark:hover:bg-[#132338] transition-colors">
+                    <input type="checkbox" name={price.key} checked={basicData.priceRanges?.[price.key] || false} onChange={handlePriceChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#081321] dark:border-[#314861]" />
+                    <span className="text-sm font-medium text-slate-700 dark:text-[#e8f1ff]">{price.label}</span>
                   </label>
                 ))}
               </div>
             </div>
           </section>
 
-          <hr className="border-slate-100 dark:border-[#5d4037]" />
+          <hr className="border-slate-100 dark:border-[#314861]" />
           
           {/* 航班資訊區塊 */}
           <section className="space-y-4">
             <div className="flex justify-between items-center">
-              <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2">
+              <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#e8f1ff] flex items-center gap-2">
                 <span className="bg-indigo-100 dark:bg-indigo-900/50 p-2 rounded-lg text-indigo-600 dark:text-indigo-300">
                    {simpleFlights.outbound.mode === 'train' ? <Train className="w-5 h-5" /> : <Plane className="w-5 h-5" />}
                 </span>
@@ -5167,15 +5266,15 @@ const App = () => {
               </h3>
               
               <div className="flex items-center gap-4">
-                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#33241f] p-2 rounded-lg transition-colors">
-                  <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
-                  <span className="text-sm font-bold text-slate-600 dark:text-[#d6c0b3]">無 (不需安排)</span>
+                 <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#132338] p-2 rounded-lg transition-colors">
+                  <input type="checkbox" checked={!basicData.hasFlights} onChange={() => setBasicData(prev => ({ ...prev, hasFlights: !prev.hasFlights }))} className="w-5 h-5 text-slate-500 rounded focus:ring-slate-500 dark:bg-[#081321] dark:border-[#314861]" />
+                  <span className="text-sm font-bold text-slate-600 dark:text-[#c0cfe2]">無 (不需安排)</span>
                 </label>
 
                 {basicData.hasFlights && (
-                  <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#33241f] p-2 rounded-lg transition-colors">
-                    <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
-                    <span className="text-sm font-bold text-slate-600 dark:text-[#d6c0b3]">多段/複雜行程</span>
+                  <label className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-[#132338] p-2 rounded-lg transition-colors">
+                    <input type="checkbox" name="isMultiCityFlight" checked={basicData.isMultiCityFlight} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#081321] dark:border-[#314861]" />
+                    <span className="text-sm font-bold text-slate-600 dark:text-[#c0cfe2]">多段/複雜行程</span>
                   </label>
                 )}
               </div>
@@ -5195,182 +5294,190 @@ const App = () => {
             
             {basicData.hasFlights && (
               !basicData.isMultiCityFlight ? (
-              <div className="bg-slate-50/50 dark:bg-[#2c1f1b]/50 p-4 md:p-6 rounded-2xl border border-slate-200 dark:border-[#5d4037] space-y-4 shadow-sm">
-                {[ { label: '去程', key: 'outbound', color: 'text-emerald-600 dark:text-emerald-400' }, { label: '中轉', key: 'transit', color: 'text-amber-600 dark:text-amber-400' }, { label: '回程', key: 'inbound', color: 'text-blue-600 dark:text-blue-400' } ].map((row) => (
-                  <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white dark:bg-[#33241f] p-3 rounded-xl border border-slate-100 dark:border-[#4a3b32] shadow-sm">
+              <div className="bg-slate-50/50 dark:bg-[#0e1b2d]/50 p-4 md:p-6 rounded-2xl border border-slate-200 dark:border-[#314861] space-y-4 shadow-sm">
+                <p className="text-xs text-slate-500 dark:text-[#9bafc9]">可直接修改時間、班次與交通工具，也可移除不需要的航段；移除後可加回，不必切換複雜行程。</p>
+                {[ { label: '去程', key: 'outbound', color: 'text-emerald-600 dark:text-emerald-400' }, { label: '中轉', key: 'transit', color: 'text-amber-600 dark:text-amber-400' }, { label: '回程', key: 'inbound', color: 'text-blue-600 dark:text-blue-400' } ].filter(row => simpleFlights[row.key].enabled !== false).map((row) => (
+                  <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center bg-white dark:bg-[#132338] p-3 rounded-xl border border-slate-100 dark:border-[#29405b] shadow-sm">
                     
                     {/* 標籤與模式切換 */}
-                    <div className="col-span-1 md:col-span-1 flex flex-col items-center justify-center gap-1">
+                    <div className="col-span-1 md:col-span-12 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
                       <span className={`text-sm font-bold ${row.color}`}>{row.label}</span>
                       <button 
                         onClick={() => handleSimpleFlightChange(row.key, 'mode', simpleFlights[row.key].mode === 'flight' ? 'train' : 'flight')}
-                        className="p-1.5 bg-slate-100 dark:bg-[#2c1f1b] hover:bg-blue-100 dark:hover:bg-blue-900/30 text-slate-500 dark:text-[#a08d85] hover:text-blue-600 dark:hover:text-blue-300 rounded-lg transition-colors"
+                        className="p-1.5 bg-slate-100 dark:bg-[#0e1b2d] hover:bg-blue-100 dark:hover:bg-blue-900/30 text-slate-500 dark:text-[#9bafc9] hover:text-blue-600 dark:hover:text-blue-300 rounded-lg transition-colors"
                         title="切換 飛機/火車"
+                        aria-label={`切換${row.label}交通工具`}
                       >
                         {simpleFlights[row.key].mode === 'train' ? <Train className="w-4 h-4" /> : <Plane className="w-4 h-4" />}
                       </button>
+                      </div>
+                      <button type="button" aria-label={`移除${row.label}航段`} onClick={() => setSimpleFlightEnabled(row.key, false)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-slate-500 hover:bg-red-50 hover:text-red-600"><Trash2 className="w-4 h-4" />移除</button>
                     </div>
 
                     {/* 日期 */}
-                    <div className="col-span-1 md:col-span-3">
-                      <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">日期</label>
-                      <input type="date" value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-bold text-slate-700 dark:text-[#ebd5c1]" />
+                    <div className="col-span-1 md:col-span-4">
+                      <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] pl-1 block">日期</label>
+                      <input type="date" aria-label={`${row.label}出發日期`} value={simpleFlights[row.key].date} onChange={(e) => handleSimpleFlightChange(row.key, 'date', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-lg text-sm font-bold text-slate-700 dark:text-[#e8f1ff]" />
                     </div>
 
                     {/* 時間 (拆分為出發/抵達) */}
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">出發時間</label>
-                        <input type="time" value={simpleFlights[row.key].depTime} onChange={(e) => handleSimpleFlightChange(row.key, 'depTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] pl-1 block">出發時間</label>
+                        <input type="time" aria-label={`${row.label}出發時間`} value={simpleFlights[row.key].depTime} onChange={(e) => handleSimpleFlightChange(row.key, 'depTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:text-[#e8f1ff]" />
                     </div>
                     <div className="col-span-2 md:col-span-2 relative">
-                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">抵達時間</label>
-                        <input type="time" value={simpleFlights[row.key].arrTime} onChange={(e) => handleSimpleFlightChange(row.key, 'arrTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
-                        <div className="absolute -left-2 top-8 text-slate-300 dark:text-[#5d4037] text-xs">➜</div>
+                        <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] pl-1 block">抵達時間</label>
+                        <input type="time" aria-label={`${row.label}抵達時間`} value={simpleFlights[row.key].arrTime} onChange={(e) => handleSimpleFlightChange(row.key, 'arrTime', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:text-[#e8f1ff]" />
+                        <div className="absolute -left-2 top-8 text-slate-300 dark:text-[#314861] text-xs">➜</div>
                     </div>
 
                     {/* 班次與地點 */}
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">班次/車次</label>
-                        <input type="text" placeholder="例如 IT202" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:text-[#ebd5c1]" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] pl-1 block">班次/車次</label>
+                        <input type="text" aria-label={`${row.label}班次`} placeholder="例如 IT202" value={simpleFlights[row.key].code} onChange={(e) => handleSimpleFlightChange(row.key, 'code', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:text-[#e8f1ff]" />
                     </div>
                     <div className="col-span-2 md:col-span-2">
-                        <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] pl-1 block">機場/車站代碼</label>
-                        <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#2c1f1b] border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase text-center dark:text-[#ebd5c1]" />
+                        <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] pl-1 block">機場/車站代碼</label>
+                        <input type="text" placeholder="例如 NRT" value={simpleFlights[row.key].station} onChange={(e) => handleSimpleFlightChange(row.key, 'station', e.target.value)} className="w-full p-2 bg-slate-50 dark:bg-[#0e1b2d] border border-slate-200 dark:border-[#314861] rounded-lg text-sm font-mono uppercase text-center dark:text-[#e8f1ff]" />
                     </div>
                     <div className="col-span-1 md:col-span-12 grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">抵達日期（未填預設同日）
-                        <input type="date" aria-label={`${row.label}抵達日期`} value={simpleFlights[row.key].arrivalDate || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      <label className="text-xs text-slate-500 dark:text-[#9bafc9]">抵達日期（未填預設同日）
+                        <input type="date" aria-label={`${row.label}抵達日期`} value={simpleFlights[row.key].arrivalDate || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm bg-slate-50 dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                       </label>
-                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">出發機場／車站（選填）
-                        <input aria-label={`${row.label}出發地點`} placeholder="例如 TPE 桃園機場" value={simpleFlights[row.key].departureStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      <label className="text-xs text-slate-500 dark:text-[#9bafc9]">出發機場／車站（選填）
+                        <input aria-label={`${row.label}出發地點`} placeholder="例如 TPE 桃園機場" value={simpleFlights[row.key].departureStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm bg-slate-50 dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                       </label>
-                      <label className="text-xs text-slate-500 dark:text-[#a08d85]">抵達機場／車站（選填）
-                        <input aria-label={`${row.label}抵達地點`} placeholder="例如 NRT 成田機場" value={simpleFlights[row.key].arrivalStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-slate-50 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                      <label className="text-xs text-slate-500 dark:text-[#9bafc9]">抵達機場／車站（選填）
+                        <input aria-label={`${row.label}抵達地點`} placeholder="例如 NRT 成田機場" value={simpleFlights[row.key].arrivalStation || ''} onChange={e => handleSimpleFlightChange(row.key, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm bg-slate-50 dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                       </label>
                     </div>
                   </div>
                 ))}
+                <div className="flex flex-wrap gap-2">
+                  {[['outbound', '去程'], ['transit', '中轉'], ['inbound', '回程']].filter(([key]) => simpleFlights[key].enabled === false).map(([key, label]) => <button key={key} type="button" onClick={() => setSimpleFlightEnabled(key, true)} className="flex items-center gap-1 rounded-xl border border-dashed border-slate-300 px-3 py-2 text-sm font-bold text-blue-600 hover:bg-blue-50"><Plus className="w-4 h-4" />新增{label}航段</button>)}
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
                 {multiFlights.map((flight) => (
-                  <div key={flight.id} className="bg-white dark:bg-[#33241f] border border-slate-200 dark:border-[#4a3b32] rounded-xl overflow-hidden shadow-sm">
-                    <div onClick={() => toggleMultiFlight(flight.id)} className="p-4 flex items-center justify-between cursor-pointer bg-slate-50/50 dark:bg-[#2c1f1b]/50 hover:bg-slate-100 dark:hover:bg-[#3e2b26]">
+                  <div key={flight.id} className="bg-white dark:bg-[#132338] border border-slate-200 dark:border-[#29405b] rounded-xl overflow-hidden shadow-sm">
+                    <div onClick={() => toggleMultiFlight(flight.id)} className="p-4 flex items-center justify-between cursor-pointer bg-slate-50/50 dark:bg-[#0e1b2d]/50 hover:bg-slate-100 dark:hover:bg-[#20334d]">
                       <div className="flex items-center gap-3">
-                        <span className={`font-bold text-slate-700 dark:text-[#ebd5c1] bg-white dark:bg-[#2c1f1b] px-3 py-1 rounded-md border border-slate-200 dark:border-[#4a3b32] text-sm shadow-sm flex items-center gap-2`}>
+                        <span className={`font-bold text-slate-700 dark:text-[#e8f1ff] bg-white dark:bg-[#0e1b2d] px-3 py-1 rounded-md border border-slate-200 dark:border-[#29405b] text-sm shadow-sm flex items-center gap-2`}>
                             {flight.mode === 'train' ? <Train className="w-3 h-3" /> : <Plane className="w-3 h-3" />}
                             {flight.type}
                         </span>
-                        {!flight.isOpen && <span className="text-sm text-slate-500 dark:text-[#a08d85]">{flight.date} | {flight.depTime} ➜ {flight.arrTime} | {flight.station}</span>}
+                        {!flight.isOpen && <span className="text-sm text-slate-500 dark:text-[#9bafc9]">{flight.date} | {flight.depTime} ➜ {flight.arrTime} | {flight.station}</span>}
                       </div>
                       <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeMultiFlight(flight.id); }} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{flight.isOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}</div>
                     </div>
                     {flight.isOpen && (
-                      <div className="p-4 grid grid-cols-2 md:grid-cols-6 gap-4 bg-white dark:bg-[#33241f]">
+                      <div className="p-4 grid grid-cols-2 md:grid-cols-6 gap-4 bg-white dark:bg-[#132338]">
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">類型</label>
-                            <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">類型</label>
+                            <input placeholder="類型" value={flight.type} onChange={(e) => updateMultiFlight(flight.id, 'type', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">交通工具</label>
-                            <select value={flight.mode} onChange={(e) => updateMultiFlight(flight.id, 'mode', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-white dark:bg-[#2c1f1b] dark:text-[#ebd5c1]">
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">交通工具</label>
+                            <select value={flight.mode} onChange={(e) => updateMultiFlight(flight.id, 'mode', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm bg-white dark:bg-[#0e1b2d] dark:text-[#e8f1ff]">
                               <option value="flight">飛機</option>
                               <option value="train">火車</option>
                             </select>
                         </div>
-                        <label className="col-span-2 md:col-span-1 text-xs text-slate-500 dark:text-[#a08d85]">航段用途
-                          <select aria-label="航段用途" value={flight.role || 'auto'} onChange={e => updateMultiFlight(flight.id, 'role', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm bg-white dark:bg-[#2c1f1b] dark:text-[#ebd5c1]">
+                        <label className="col-span-2 md:col-span-1 text-xs text-slate-500 dark:text-[#9bafc9]">航段用途
+                          <select aria-label="航段用途" value={flight.role || 'auto'} onChange={e => updateMultiFlight(flight.id, 'role', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm bg-white dark:bg-[#0e1b2d] dark:text-[#e8f1ff]">
                             <option value="auto">依順序判斷</option><option value="outbound">去程抵達</option><option value="transit">中轉銜接</option><option value="transfer">旅途中移動</option><option value="inbound">回程離境</option>
                           </select>
                         </label>
                         <div className="col-span-2 md:col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">日期</label>
-                            <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">日期</label>
+                            <input type="date" value={flight.date} onChange={(e) => updateMultiFlight(flight.id, 'date', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">出發時間</label>
-                            <input type="time" value={flight.depTime} onChange={(e) => updateMultiFlight(flight.id, 'depTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">出發時間</label>
+                            <input type="time" value={flight.depTime} onChange={(e) => updateMultiFlight(flight.id, 'depTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">抵達時間</label>
-                            <input type="time" value={flight.arrTime} onChange={(e) => updateMultiFlight(flight.id, 'arrTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">抵達時間</label>
+                            <input type="time" value={flight.arrTime} onChange={(e) => updateMultiFlight(flight.id, 'arrTime', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">班次</label>
-                            <input placeholder="班次" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">班次</label>
+                            <input placeholder="班次" value={flight.code} onChange={(e) => updateMultiFlight(flight.id, 'code', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
                         <div className="col-span-1">
-                            <label className="text-[10px] text-slate-400 dark:text-[#8e7c75] block mb-1">地點代碼</label>
-                            <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm font-mono uppercase dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                            <label className="text-[10px] text-slate-400 dark:text-[#8ea3bf] block mb-1">地點代碼</label>
+                            <input placeholder="機場/車站" value={flight.station} onChange={(e) => updateMultiFlight(flight.id, 'station', e.target.value)} className="w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm font-mono uppercase dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </div>
-                        <label className="col-span-2 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">抵達日期（未填預設同日）
-                          <input type="date" aria-label="航段抵達日期" value={flight.arrivalDate || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="col-span-2 md:col-span-2 text-xs text-slate-500 dark:text-[#9bafc9]">抵達日期（未填預設同日）
+                          <input type="date" aria-label="航段抵達日期" value={flight.arrivalDate || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalDate', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
-                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">出發機場／車站
-                          <input aria-label="航段出發地點" placeholder="出發地" value={flight.departureStation || ''} onChange={e => updateMultiFlight(flight.id, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#9bafc9]">出發機場／車站
+                          <input aria-label="航段出發地點" placeholder="出發地" value={flight.departureStation || ''} onChange={e => updateMultiFlight(flight.id, 'departureStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
-                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">抵達機場／車站
-                          <input aria-label="航段抵達地點" placeholder="抵達地" value={flight.arrivalStation || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="col-span-1 md:col-span-2 text-xs text-slate-500 dark:text-[#9bafc9]">抵達機場／車站
+                          <input aria-label="航段抵達地點" placeholder="抵達地" value={flight.arrivalStation || ''} onChange={e => updateMultiFlight(flight.id, 'arrivalStation', e.target.value)} className="mt-1 w-full p-2 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
                       </div>
                     )}
                   </div>
                 ))}
-                <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-xl text-slate-500 dark:text-[#a08d85] hover:border-blue-400 dark:hover:border-sky-500 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
+                <button onClick={addMultiFlight} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#314861] rounded-xl text-slate-500 dark:text-[#9bafc9] hover:border-blue-400 dark:hover:border-sky-500 flex items-center justify-center gap-2"><Plus className="w-5 h-5" /> 新增行程段</button>
               </div>
             ))}
 
-            {basicData.hasFlights && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl bg-slate-50 dark:bg-[#2c1f1b] p-4">
-              <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">飛機起飛前到機場預留（分鐘）
-                <input type="number" min="0" max="720" name="flightDepartureBuffer" value={basicData.flightDepartureBuffer ?? 180} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg dark:bg-[#33241f]" />
+            {basicData.hasFlights && <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl bg-slate-50 dark:bg-[#0e1b2d] p-4">
+              <label className="text-xs text-slate-600 dark:text-[#c0cfe2]">飛機起飛前到機場預留（分鐘）
+                <input type="number" min="0" max="720" name="flightDepartureBuffer" value={basicData.flightDepartureBuffer ?? 180} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#314861] rounded-lg dark:bg-[#132338]" />
               </label>
-              <label className="text-xs text-slate-600 dark:text-[#d6c0b3]">飛機抵達後入境／領行李預留（分鐘）
-                <input type="number" min="0" max="720" name="flightArrivalBuffer" value={basicData.flightArrivalBuffer ?? 90} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#5d4037] rounded-lg dark:bg-[#33241f]" />
+              <label className="text-xs text-slate-600 dark:text-[#c0cfe2]">飛機抵達後入境／領行李預留（分鐘）
+                <input type="number" min="0" max="720" name="flightArrivalBuffer" value={basicData.flightArrivalBuffer ?? 90} onChange={handleBasicChange} className="ml-2 w-20 p-2 border border-slate-200 dark:border-[#314861] rounded-lg dark:bg-[#132338]" />
               </label>
-              <p className="md:col-span-2 text-xs text-slate-500 dark:text-[#a08d85]">以上是可調整的規劃預留值；往返機場交通另計。火車預設提前 30 分鐘到站、下車後預留 15 分鐘。</p>
+              <p className="md:col-span-2 text-xs text-slate-500 dark:text-[#9bafc9]">以上是可調整的規劃預留值；往返機場交通另計。火車預設提前 30 分鐘到站、下車後預留 15 分鐘。</p>
             </div>}
 
-            <div className="flex items-center gap-3 pt-2 bg-blue-50/50 dark:bg-[#2c1f1b]/50 p-4 rounded-xl border border-blue-100 dark:border-[#5d4037]">
-                <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#1e1410] dark:border-[#5d4037]" />
-                <label htmlFor="transitTour" className="text-slate-700 dark:text-[#ebd5c1] font-bold cursor-pointer text-sm md:text-base">安排轉機/中途入境觀光</label>
+            <div className="flex items-center gap-3 pt-2 bg-blue-50/50 dark:bg-[#0e1b2d]/50 p-4 rounded-xl border border-blue-100 dark:border-[#314861]">
+                <input type="checkbox" id="transitTour" name="hasTransitTour" checked={basicData.hasTransitTour} onChange={handleBasicChange} className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 dark:bg-[#081321] dark:border-[#314861]" />
+                <label htmlFor="transitTour" className="text-slate-700 dark:text-[#e8f1ff] font-bold cursor-pointer text-sm md:text-base">安排轉機/中途入境觀光</label>
             </div>
           </section>
 
-          <hr className="border-slate-100 dark:border-[#5d4037]" />
+          <hr className="border-slate-100 dark:border-[#314861]" />
 
           {/* 住宿資訊區塊 */}
           <section className="space-y-4">
-            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#ebd5c1] flex items-center gap-2"><span className="bg-orange-100 dark:bg-orange-900/50 p-2 rounded-lg text-orange-600 dark:text-orange-300"><Hotel className="w-5 h-5" /></span>住宿資訊</h3>
-            <p className="text-xs md:text-sm text-slate-500 dark:text-[#a08d85]">多間住宿請填每間入住與退房日期，行程會依每晚住處安排動線。單間未填日期時會暫用抵達至回程期間。入住／退房時間未填時暫用 15:00／11:00，請依訂單調整。</p>
+            <h3 className="text-lg md:text-xl font-bold text-slate-800 dark:text-[#e8f1ff] flex items-center gap-2"><span className="bg-orange-100 dark:bg-orange-900/50 p-2 rounded-lg text-orange-600 dark:text-orange-300"><Hotel className="w-5 h-5" /></span>住宿資訊</h3>
+            <p className="text-xs md:text-sm text-slate-500 dark:text-[#9bafc9]">多間住宿請填每間入住與退房日期，行程會依每晚住處安排動線。單間未填日期時會暫用抵達至回程期間。入住／退房時間未填時暫用 15:00／11:00，請依訂單調整。</p>
             <div className="space-y-3">
               {accommodations.map((acc) => (
-                <div key={acc.id} className="bg-white dark:bg-[#33241f] border border-slate-200 dark:border-[#4a3b32] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
-                  <div onClick={() => toggleAccommodation(acc.id)} className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-[#3e2b26]">
-                    <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center text-orange-600 dark:text-orange-300 font-bold"><Hotel className="w-5 h-5" /></div><div><div className="font-bold text-slate-800 dark:text-[#ebd5c1] text-sm md:text-base">{acc.name || '新住宿地點'}</div><div className="text-xs text-slate-500 dark:text-[#a08d85]">{acc.address}</div></div></div>
+                <div key={acc.id} className="bg-white dark:bg-[#132338] border border-slate-200 dark:border-[#29405b] rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
+                  <div onClick={() => toggleAccommodation(acc.id)} className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-[#20334d]">
+                    <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/50 flex items-center justify-center text-orange-600 dark:text-orange-300 font-bold"><Hotel className="w-5 h-5" /></div><div><div className="font-bold text-slate-800 dark:text-[#e8f1ff] text-sm md:text-base">{acc.name || '新住宿地點'}</div><div className="text-xs text-slate-500 dark:text-[#9bafc9]">{acc.address}</div></div></div>
                     <div className="flex items-center gap-2"><button onClick={(e) => { e.stopPropagation(); removeAccommodation(acc.id); }} className="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-500 rounded-full"><Trash2 className="w-4 h-4" /></button>{acc.isOpen ? <ChevronUp className="w-5 h-5 text-slate-400" /> : <ChevronDown className="w-5 h-5 text-slate-400" />}</div>
                   </div>
                   {acc.isOpen && (
-                     <div className="p-5 bg-slate-50/50 dark:bg-[#2c1f1b]/50 border-t border-slate-100 dark:border-[#4a3b32] grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="類型" />
-                        <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder="名稱" />
-                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm md:col-span-2 dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" placeholder={apiUsageMode === 'free' ? '住宿地區即可，例如東京上野、首爾弘大' : '完整地址'} />
-                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">入住日期
-                          <input type="date" aria-label="住宿入住日期" value={acc.checkInDate || ''} onChange={e => updateAccommodation(acc.id, 'checkInDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                     <div className="p-5 bg-slate-50/50 dark:bg-[#0e1b2d]/50 border-t border-slate-100 dark:border-[#29405b] grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input value={acc.type} onChange={(e) => updateAccommodation(acc.id, 'type', e.target.value)} className="p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" placeholder="類型" />
+                        <input value={acc.name} onChange={(e) => updateAccommodation(acc.id, 'name', e.target.value)} className="p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" placeholder="名稱" />
+                        <input value={acc.address} onChange={(e) => updateAccommodation(acc.id, 'address', e.target.value)} className="p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm md:col-span-2 dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" placeholder={apiUsageMode === 'free' ? '住宿地區即可，例如東京上野、首爾弘大' : '完整地址'} />
+                        <label className="text-xs text-slate-500 dark:text-[#9bafc9]">入住日期
+                          <input type="date" aria-label="住宿入住日期" value={acc.checkInDate || ''} onChange={e => updateAccommodation(acc.id, 'checkInDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
-                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">退房日期
-                          <input type="date" aria-label="住宿退房日期" value={acc.checkOutDate || ''} onChange={e => updateAccommodation(acc.id, 'checkOutDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="text-xs text-slate-500 dark:text-[#9bafc9]">退房日期
+                          <input type="date" aria-label="住宿退房日期" value={acc.checkOutDate || ''} onChange={e => updateAccommodation(acc.id, 'checkOutDate', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
-                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">最早入住時間（預設 15:00）
-                          <input type="time" aria-label="住宿最早入住時間" value={acc.checkInTime || ''} onChange={e => updateAccommodation(acc.id, 'checkInTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="text-xs text-slate-500 dark:text-[#9bafc9]">最早入住時間（預設 15:00）
+                          <input type="time" aria-label="住宿最早入住時間" value={acc.checkInTime || ''} onChange={e => updateAccommodation(acc.id, 'checkInTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
-                        <label className="text-xs text-slate-500 dark:text-[#a08d85]">最晚退房時間（預設 11:00）
-                          <input type="time" aria-label="住宿最晚退房時間" value={acc.checkOutTime || ''} onChange={e => updateAccommodation(acc.id, 'checkOutTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#5d4037] rounded-lg text-sm dark:bg-[#2c1f1b] dark:text-[#ebd5c1]" />
+                        <label className="text-xs text-slate-500 dark:text-[#9bafc9]">最晚退房時間（預設 11:00）
+                          <input type="time" aria-label="住宿最晚退房時間" value={acc.checkOutTime || ''} onChange={e => updateAccommodation(acc.id, 'checkOutTime', e.target.value)} className="mt-1 w-full p-3 border border-slate-200 dark:border-[#314861] rounded-lg text-sm dark:bg-[#0e1b2d] dark:text-[#e8f1ff]" />
                         </label>
                      </div>
                   )}
                 </div>
               ))}
-              <button onClick={addAccommodation} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#5d4037] rounded-xl text-slate-500 dark:text-[#a08d85] flex justify-center items-center gap-2 hover:border-orange-400 dark:hover:border-orange-500"><Plus className="w-5 h-5" /> 新增住宿</button>
+              <button onClick={addAccommodation} className="w-full py-3 border-2 border-dashed border-slate-300 dark:border-[#314861] rounded-xl text-slate-500 dark:text-[#9bafc9] flex justify-center items-center gap-2 hover:border-orange-400 dark:hover:border-orange-500"><Plus className="w-5 h-5" /> 新增住宿</button>
             </div>
           </section>
 
@@ -5378,13 +5485,13 @@ const App = () => {
         {/* ^ 這個 div 是 space-y-6 的結束 */}
 
         <div className="space-y-4 pt-4">
-          <button onClick={generateItinerary} className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100 dark:ring-[#5d4037]">
+          <button onClick={generateItinerary} className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold py-5 rounded-2xl shadow-xl hover:shadow-2xl hover:scale-[1.01] transform transition-all flex justify-center items-center gap-3 text-lg md:text-xl ring-4 ring-blue-100 dark:ring-[#314861]">
             <Sparkles className="w-6 h-6 animate-pulse" /> 開始 AI 一鍵規劃
           </button>
-          <button onClick={() => setStep('saved_list')} className="w-full bg-white dark:bg-[#33241f] border-2 border-slate-200 dark:border-[#5d4037] text-slate-600 dark:text-[#d6c0b3] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#3e2b26] hover:border-slate-300 transition-all flex justify-center items-center gap-2">
+          <button onClick={() => setStep('saved_list')} className="w-full bg-white dark:bg-[#132338] border-2 border-slate-200 dark:border-[#314861] text-slate-600 dark:text-[#c0cfe2] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#20334d] hover:border-slate-300 transition-all flex justify-center items-center gap-2">
             <List className="w-5 h-5" /> 查看已儲存的規劃 ({savedPlans.length})
           </button>
-          <label className="w-full bg-white dark:bg-[#33241f] border-2 border-dashed border-slate-300 dark:border-[#5d4037] text-slate-500 dark:text-[#a08d85] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#3e2b26] hover:border-blue-400 hover:text-blue-500 transition-all flex justify-center items-center gap-2 cursor-pointer">
+          <label className="w-full bg-white dark:bg-[#132338] border-2 border-dashed border-slate-300 dark:border-[#314861] text-slate-500 dark:text-[#9bafc9] font-bold py-4 rounded-2xl hover:bg-slate-50 dark:hover:bg-[#20334d] hover:border-blue-400 hover:text-blue-500 transition-all flex justify-center items-center gap-2 cursor-pointer">
             <Upload className="w-5 h-5" /> 匯入 JSON
             <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
           </label>
@@ -5456,17 +5563,17 @@ const App = () => {
            storageKey="tutorial_result_seen"
         />
         {/* Header Card */}
-        <div className="bg-white/90 dark:bg-[#3a2a25]/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 dark:border-[#5d4037] relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
+        <div className="travel-panel bg-white/90 dark:bg-[#14243a]/90 backdrop-blur-md p-5 md:p-8 rounded-3xl shadow-lg border border-white/50 dark:border-[#314861] relative overflow-hidden print:border-none print:shadow-none print:bg-white print:p-0">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 print:hidden"></div>
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 relative z-10">
             <div className="w-full">
                 <div className="flex flex-wrap items-center gap-3 mb-2">
-                {/* text-slate-800 -> dark:text-[#ebd5c1] */}
-                <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 dark:text-[#ebd5c1] print:text-black">{basicData.destinations}</h2>
+                {/* text-slate-800 -> dark:text-[#e8f1ff] */}
+                <h2 className="text-2xl md:text-3xl font-extrabold text-slate-800 dark:text-[#e8f1ff] print:text-black">{basicData.destinations}</h2>
                 {/* ... */}
                 </div>
-                {/* text-slate-600 -> dark:text-[#d6c0b3] */}
-                <p className="text-slate-600 dark:text-[#d6c0b3] max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
+                {/* text-slate-600 -> dark:text-[#c0cfe2] */}
+                <p className="text-slate-600 dark:text-[#c0cfe2] max-w-2xl text-base md:text-lg leading-relaxed print:text-black">{itineraryData.trip_summary}</p>
                 {itineraryData.booking_context?.assumptions?.length > 0 && <details className="mt-3 text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3">
                   <summary className="cursor-pointer font-bold">規劃時採用的假設（{itineraryData.booking_context.assumptions.length}）</summary>
                   <ul className="list-disc pl-5 mt-2 space-y-1">{itineraryData.booking_context.assumptions.map((assumption, index) => <li key={index}>{assumption}</li>)}</ul>
@@ -5504,31 +5611,15 @@ const App = () => {
                 </button>
               </div>
 
-              <div className="relative">
-                <button 
-                  onClick={() => setShowCopyMenu(!showCopyMenu)} 
+              <div>
+                <button
+                  type="button" aria-label="預覽與複製行程" aria-haspopup="dialog"
+                  onClick={() => setSharePreviewMode('simple')}
                   className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500 flex items-center gap-2" 
                   title="複製文字分享"
                 >
-                  {copySuccess ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5" />}
+                  <Copy className="w-5 h-5" />
                 </button>
-                
-                {showCopyMenu && (
-                  <div className="absolute right-0 top-full mt-2 w-32 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
-                    <button 
-                      onClick={() => handleShareText('simple')}
-                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold border-b border-slate-50"
-                    >
-                      簡約內容
-                    </button>
-                    <button 
-                      onClick={() => handleShareText('detailed')}
-                      className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-600 font-bold"
-                    >
-                      詳細內容
-                    </button>
-                  </div>
-                )}
               </div>
 
               <button onClick={handleExportPDF} disabled={isExporting} className="p-3 md:p-4 rounded-full transition-all shadow-md hover:bg-slate-50 bg-white text-slate-500" title="匯出 PDF (使用瀏覽器列印)">
@@ -5634,31 +5725,32 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-rose-50 to-amber-50 dark:from-[#2c1f1b] dark:via-[#3a2a25] dark:to-[#1e1410] bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] dark:bg-[radial-gradient(#5d4037_1px,transparent_1px)] [background-size:16px_16px] p-4 md:p-8 relative overflow-hidden transition-colors duration-500">
+    <div className="travel-shell min-h-screen p-4 md:p-8 relative overflow-hidden transition-colors duration-500">
+      <style id="travel-adaptive-theme">{TRAVEL_THEME_CSS}</style>
       
       {/* 2. 背景裝飾貼紙 (浮水印) - 調整深色模式的顏色與透明度 */}
-      <div className="fixed top-20 left-10 text-sky-200 dark:text-sky-900/40 opacity-20 pointer-events-none animate-pulse"><Fish className="w-24 h-24 -rotate-12" /></div>
-      <div className="fixed bottom-10 right-10 text-rose-200 dark:text-rose-900/40 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
-      <div className="fixed top-40 right-20 text-amber-200 dark:text-amber-900/40 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
+      <div className="travel-decoration fixed top-20 left-10 text-sky-200 dark:text-sky-900/40 opacity-20 pointer-events-none animate-pulse"><Fish className="w-24 h-24 -rotate-12" /></div>
+      <div className="travel-decoration fixed bottom-10 right-10 text-rose-200 dark:text-rose-900/40 opacity-20 pointer-events-none"><Palmtree className="w-32 h-32 rotate-6" /></div>
+      <div className="travel-decoration fixed top-40 right-20 text-amber-200 dark:text-amber-900/40 opacity-20 pointer-events-none animate-bounce" style={{animationDuration: '3s'}}><Bird className="w-16 h-16" /></div>
 
       <div className="max-w-7xl mx-auto relative z-10">
         
         {/* ✅ 修改 2：主標題 Header */}
-        {/* dark:bg-[#3a2a25]/80 -> 半透明摩卡色 */}
-        {/* dark:border-[#5d4037] -> 深咖啡邊框 */}
-        <header className="text-center mb-8 md:mb-12 py-8 px-4 bg-white/60 dark:bg-[#3a2a25]/80 backdrop-blur-md rounded-[3rem] shadow-xl border-4 border-white dark:border-[#5d4037] relative overflow-hidden transition-colors duration-300">
+        {/* 系統深色模式：深藍卡片與柔和光暈 */}
+        
+        <header className="travel-header text-center mb-8 md:mb-12 py-8 px-4 bg-white/60 dark:bg-[#14243a]/80 backdrop-blur-md rounded-[3rem] shadow-xl border-4 border-white dark:border-[#314861] relative overflow-hidden transition-colors duration-300">
           
           {/* 標題背景裝飾 */}
           <div className="absolute top-[-20px] left-[-20px] text-yellow-300 dark:text-yellow-600/30 opacity-30"><Sun className="w-24 h-24 animate-spin-slow" /></div>
           <div className="absolute bottom-[-10px] right-[-10px] text-blue-300 dark:text-blue-900/30 opacity-20"><CarFront className="w-20 h-20" /></div>
           
-          <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-rose-400 to-amber-400 dark:from-sky-300 dark:via-rose-300 dark:to-amber-300 drop-shadow-sm flex items-center justify-center gap-3 relative z-10">
+          <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-rose-400 to-amber-400 dark:from-sky-300 dark:via-indigo-300 dark:to-teal-200 drop-shadow-sm flex items-center justify-center gap-3 relative z-10">
             <Plane className="w-10 h-10 md:w-14 md:h-14 text-sky-400 dark:text-sky-300 animate-bounce-slow" /> 
             AI 旅遊規劃小幫手 
             <span className="text-2xl md:text-4xl">✨</span>
           </h1>
            {!apiKey && (
-            <p className="text-slate-500 dark:text-[#d6c0b3] mt-3 text-sm md:text-base bg-white/80 dark:bg-[#2c1f1b]/50 inline-block px-4 py-1 rounded-full">
+            <p className="text-slate-500 dark:text-[#c0cfe2] mt-3 text-sm md:text-base bg-white/80 dark:bg-[#0e1b2d]/50 inline-block px-4 py-1 rounded-full">
               (請先在下方設定輸入 API Key 才能啟用 AI 大腦喔！)
             </p>
           )}
@@ -5678,13 +5770,16 @@ const App = () => {
         {step === 'saved_list' && renderSavedList()}
 
         {geminiModels.requestState && (
-          <div role="status" aria-live="polite" className="fixed bottom-4 left-4 right-4 mx-auto max-w-xl z-[1100] flex items-start gap-2 rounded-xl border border-blue-200 dark:border-[#5d4037] bg-white dark:bg-[#2c1f1b] p-4 shadow-lg text-sm text-blue-700 dark:text-sky-300">
+          <div role="status" aria-live="polite" className="fixed bottom-4 left-4 right-4 mx-auto max-w-xl z-[1100] flex items-start gap-2 rounded-xl border border-blue-200 dark:border-[#314861] bg-white dark:bg-[#0e1b2d] p-4 shadow-lg text-sm text-blue-700 dark:text-sky-300">
             <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
             <span>{geminiModels.requestState.message}</span>
           </div>
         )}
 
         {/* Modal 區塊 */}
+        {step === 'result' && sharePreviewMode && <ShareItineraryModal mode={sharePreviewMode}
+          text={getItineraryShareText(itineraryData, basicData.destinations, sharePreviewMode)}
+          onModeChange={setSharePreviewMode} onClose={() => setSharePreviewMode(null)} />}
         <MenuHelperModal 
           isOpen={isMenuModalOpen}
           onClose={() => setIsMenuModalOpen(false)}
