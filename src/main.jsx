@@ -120,7 +120,10 @@ const GEMINI_MAX_TRANSIENT_RETRIES = 3;
 const GEMINI_FREE_MAX_TRANSIENT_RETRIES = 1;
 const GEMINI_FREE_RETRY_DELAY_MS = 30000;
 const GEMINI_FREE_DISCOVERY_WAIT_MS = 15000;
-const GEMINI_FREE_MAX_HTTP_ATTEMPTS = 4;
+const GEMINI_FREE_MAX_HTTP_ATTEMPTS = 8;
+const GEMINI_FREE_MAX_TRIP_HTTP_ATTEMPTS = 24;
+const GEMINI_FREE_MAX_TRIP_RECOVERIES = 8;
+const GEMINI_FREE_MAX_SESSION_MS = 20 * 60 * 1000;
 const GEMINI_MODEL_PROFILE_MS = 24 * 60 * 60 * 1000;
 const GEMINI_MAX_RETRY_WAIT_MS = 60000;
 const GEMINI_BUSY_COOLDOWN_MS = 60000;
@@ -137,7 +140,7 @@ function getGeminiCache(apiKey) {
   if (!geminiModelCache.has(key)) {
     geminiModelCache.set(key, {
       models: [], updatedAt: 0, pending: null, error: null, retryAfter: 0,
-      unavailable: new Set(), busyUntil: new globalThis.Map(), lastUsed: {},
+      unavailable: new Set(), busyUntil: new globalThis.Map(), busyFailures: new globalThis.Map(), lastUsed: {},
       modelProfiles: new globalThis.Map(), profilePromise: null, profileStorageKey: '',
       policy: { mode: 'paid', allowBusyFallback: false }, queue: Promise.resolve(),
       requestStates: new globalThis.Map(),
@@ -292,6 +295,20 @@ function throwIfGeminiCancelled(signal) {
   if (signal?.aborted) throw Object.assign(new Error('已停止規劃，填寫資料已保留。'), { code: 'GEMINI_CANCELLED' });
 }
 
+function createGeminiRetrySession(maxAttempts = GEMINI_FREE_MAX_TRIP_HTTP_ATTEMPTS) {
+  return { attempts: 0, maxAttempts, deadlineAt: Date.now() + GEMINI_FREE_MAX_SESSION_MS };
+}
+
+function checkGeminiRetrySession(session) {
+  if (!session) return;
+  const timedOut = Number.isFinite(session.deadlineAt) && Date.now() >= session.deadlineAt;
+  if (session.attempts >= session.maxAttempts || timedOut) {
+    throw Object.assign(new Error(timedOut
+      ? '這次自動接續已等待 20 分鐘，先暫停請求；輸入與完成的行程已保留。'
+      : `這次規劃已達 ${session.maxAttempts} 次自動請求上限；輸入與完成的行程已保留。`), { code: 'GEMINI_SESSION_LIMIT' });
+  }
+}
+
 async function waitForGeminiRequest(key, requestId, until, message, signal) {
   while (until > Date.now()) {
     throwIfGeminiCancelled(signal);
@@ -396,22 +413,20 @@ async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retr
   const maxRetries = policy.mode === 'free' ? GEMINI_FREE_MAX_TRANSIENT_RETRIES : GEMINI_MAX_TRANSIENT_RETRIES;
   for (let retry = 0; retry <= maxRetries; retry++) {
     throwIfGeminiCancelled(retryBudget.signal);
-    if (retryBudget.session && retryBudget.session.attempts >= retryBudget.session.maxAttempts) {
-      throw Object.assign(new Error('這次規劃已達自動嘗試上限，已保留輸入與完成的行程。請查看顯示的原因再調整設定。'), {
-        status: retryBudget.lastError?.status, code: 'GEMINI_SESSION_LIMIT',
-      });
-    }
+    checkGeminiRetrySession(retryBudget.session);
     if (policy.mode === 'free' && retryBudget.attempts >= GEMINI_FREE_MAX_HTTP_ATTEMPTS) {
       throw Object.assign(new Error(`這次需求已嘗試 ${GEMINI_FREE_MAX_HTTP_ATTEMPTS} 次，先停止送出以避免快速消耗 RPM。${retryBudget.lastError?.message || '請稍後重試。'} 已保留填寫資料。`), {
         status: retryBudget.lastError?.status || 503, code: 'GEMINI_REQUEST_LIMIT', modelId: model.id,
       });
     }
     await paceGeminiAttempt(apiKey, model, policy, requestId, retryBudget.signal);
+    checkGeminiRetrySession(retryBudget.session);
     try {
       retryBudget.attempts++;
       if (retryBudget.session) retryBudget.session.attempts++;
       return await fetchGeminiJson(`models/${encodeURIComponent(model.id)}:generateContent`, apiKey,
-        { method: 'POST', body: JSON.stringify(body), signal: retryBudget.signal }, 180000);
+        { method: 'POST', body: JSON.stringify(body), signal: retryBudget.signal },
+        Math.min(180000, Number.isFinite(retryBudget.session?.deadlineAt) ? Math.max(1, retryBudget.session.deadlineAt - Date.now()) : 180000));
     } catch (error) {
       error.modelId = model.id;
       retryBudget.lastError = error;
@@ -421,6 +436,8 @@ async function fetchGeminiWithRetry(apiKey, model, body, requestId, policy, retr
         pacing.notBefore = Math.max(pacing.notBefore, Date.now() + info.serverDelayMs);
         saveGeminiFreePacing();
       }
+      // 免費模式的 503 交給外層換模型；不先對同一個忙碌端點連發重試。
+      if (policy.mode === 'free' && error.status === 503) throw error;
       if (!info.retryable || retry === maxRetries || policy.mode === 'free' && retryBudget.used >= maxRetries) throw error;
       const delayMs = Math.max(info.serverDelayMs || 0, policy.mode === 'free'
         ? GEMINI_FREE_RETRY_DELAY_MS : 1000 * (2 ** retry) + Math.floor(Math.random() * 500));
@@ -558,7 +575,7 @@ async function fetchGeminiJson(path, apiKey, options = {}, timeoutMs = 20000) {
     return data;
   } catch (error) {
     throwIfGeminiCancelled(externalSignal);
-    if (error.name === 'AbortError') throw new Error('Gemini 請求逾時，請稍後再試。');
+    if (error.name === 'AbortError') throw Object.assign(new Error('Gemini 請求逾時，將等待後自動接續。'), { status: 408, code: 'GEMINI_TIMEOUT' });
     throw error;
   } finally {
     clearTimeout(timer);
@@ -643,7 +660,11 @@ function getGeminiCandidates(apiKey, type, policy = getGeminiCache(apiKey).polic
   if (policy.mode !== 'free') return candidatesByStatus;
   const verified = candidatesByStatus.filter(model => model.type === family && cache.modelProfiles.get(model.id)?.succeededAt > Date.now() - GEMINI_MODEL_PROFILE_MS)
     .sort((a, b) => cache.modelProfiles.get(b.id).succeededAt - cache.modelProfiles.get(a.id).succeededAt)[0];
-  return verified ? [verified, ...candidatesByStatus.filter(model => model.id !== verified.id)] : candidatesByStatus;
+  const preferred = verified ? [verified, ...candidatesByStatus.filter(model => model.id !== verified.id)] : candidatesByStatus;
+  // 曾忙碌的版本排在尚未嘗試／較早失敗的版本之後，冷卻到期也不會反覆選回同一個端點。
+  return preferred.sort((a, b) => Number(!a.version?.length || a.stage === 'alias') - Number(!b.version?.length || b.stage === 'alias')
+    || (cache.busyFailures.get(a.id)?.count || 0) - (cache.busyFailures.get(b.id)?.count || 0)
+    || (cache.busyFailures.get(a.id)?.lastAt || 0) - (cache.busyFailures.get(b.id)?.lastAt || 0));
 }
 
 function getGeminiText(data) {
@@ -686,6 +707,7 @@ async function performGeminiRequest(key, type, payload, policy, requestOptions =
 
 async function performGeminiModelRequest(key, family, payload, policy, requestId, requestOptions = {}) {
   throwIfGeminiCancelled(requestOptions.signal);
+  checkGeminiRetrySession(requestOptions.session);
   const cache = getGeminiCache(key);
   if (policy.mode === 'free') {
     const remaining = getGeminiFreePacing(family).pausedUntil - Date.now();
@@ -712,7 +734,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
     attempted.add(model.id);
     try {
       const profile = cache.modelProfiles.get(model.id);
-      let schemaStyle = profile?.schemaStyle === 'plain' && profile.schemaUntil > Date.now() ? 'plain' : 'legacy';
+      let schemaStyle = retryBudget.schemaFallbackUsed || profile?.schemaStyle === 'plain' && profile.schemaUntil > Date.now() ? 'plain' : 'legacy';
       let modelPayload = getGeminiSchemaPayload(payload, schemaStyle);
       let generationConfig = modelPayload.generationConfig ? { ...modelPayload.generationConfig } : undefined;
       if (generationConfig?.maxOutputTokens && model.outputTokenLimit) {
@@ -749,6 +771,7 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       }
       cache.lastUsed[family] = { id: data.modelVersion || model.id, label: formatGeminiModel(data.modelVersion || model.id), requested: model.id };
       cache.busyUntil.delete(model.id);
+      cache.busyFailures.delete(model.id);
       cache.unavailable.delete(model.id);
       setGeminiModelProfile(cache, model.id, { unavailableUntil: 0, succeededAt: Date.now(), schemaStyle, schemaUntil: Date.now() + GEMINI_MODEL_PROFILE_MS });
       notifyGeminiModels(key);
@@ -759,24 +782,36 @@ async function performGeminiModelRequest(key, family, payload, policy, requestId
       if (error.status === 503) {
         if (error.code === 'GEMINI_BUSY_COOLDOWN') throw error;
         const serverDelayMs = getGeminiRetryInfo(error).serverDelayMs || 0;
-        cache.busyUntil.set(model.id, Date.now() + Math.max(GEMINI_BUSY_COOLDOWN_MS, serverDelayMs));
-        // 持續忙碌時只允許一次同系列具體版本備援；不把 alias 當成不同模型重試。
+        const previousFailure = cache.busyFailures.get(model.id);
+        const count = previousFailure ? previousFailure.count + 1 : 1;
+        const cooldown = Math.max(serverDelayMs, policy.mode === 'free'
+          ? Math.min(5 * 60000, GEMINI_BUSY_COOLDOWN_MS * (2 ** Math.min(count - 1, 3))) : GEMINI_BUSY_COOLDOWN_MS);
+        // 同版本的修訂端點不能當作另一個模型繞過 503；只輪替官方清單中的不同版本。
+        const equivalents = [model, ...cache.models.filter(candidate => candidate.type === model.type
+          && model.version?.length && candidate.version?.join('.') === model.version.join('.'))];
+        for (const candidate of equivalents) {
+          cache.busyUntil.set(candidate.id, Date.now() + cooldown);
+          cache.busyFailures.set(candidate.id, { count, lastAt: Date.now() });
+        }
         const alternatives = getGeminiCandidates(key, family, policy).filter(candidate =>
           candidate.version?.length && candidate.stage !== 'alias' && !attempted.has(candidate.id)
           && candidate.type === model.type);
         backupModel = alternatives.find(candidate => candidate.stage === 'stable') || alternatives[0];
-        if (!policy.allowBusyFallback || busyFallbacks >= 1 || !backupModel
+        if (!policy.allowBusyFallback || policy.mode !== 'free' && busyFallbacks >= 1 || !backupModel
             || serverDelayMs > GEMINI_MAX_RETRY_WAIT_MS) {
           if (policy.mode === 'free') {
             const pacing = getGeminiFreePacing(model.type);
-            pacing.pausedUntil = Date.now() + Math.max(GEMINI_BUSY_COOLDOWN_MS, serverDelayMs);
+            const busyTimes = [...cache.busyUntil].filter(([id, until]) => until > Date.now()
+              && !cache.unavailable.has(id) && cache.models.some(candidate => candidate.id === id && candidate.type === model.type)).map(([, until]) => until);
+            const resumeAt = Math.max(Date.now() + serverDelayMs, busyTimes.length ? Math.min(...busyTimes) : Date.now() + cooldown);
+            pacing.pausedUntil = Math.max(pacing.pausedUntil, resumeAt);
             saveGeminiFreePacing();
-            error.retryAfterMs = Math.max(error.retryAfterMs || 0, GEMINI_BUSY_COOLDOWN_MS, serverDelayMs);
+            error.retryAfterMs = Math.max(error.retryAfterMs || 0, resumeAt - Date.now());
           }
           throw error;
         }
         busyFallbacks++;
-        setGeminiRequestState(key, requestId, `${model.label || formatGeminiModel(model.id)} 持續忙碌，改用 ${backupModel.label || formatGeminiModel(backupModel.id)} 完成同一筆需求…`);
+        setGeminiRequestState(key, requestId, `${model.label || formatGeminiModel(model.id)} 忙碌，先冷卻此版本；改用 ${backupModel.label || formatGeminiModel(backupModel.id)} 接續同一筆需求…`);
         continue;
       }
       const unavailable = error.status === 404
@@ -3482,14 +3517,15 @@ function getTripAutomaticRetryDelay(error, recovery) {
   const info = getGeminiRetryInfo(error);
   if (error.status === 429 && !info.retryable) return null;
   if (![408, 429, 500, 502, 503, 504].includes(error.status)) return null;
-  const delay = Math.max(info.serverDelayMs || 0, 60000 * (2 ** recovery));
+  const delay = Math.max(info.serverDelayMs || 0, Math.min(180000, 60000 * (2 ** Math.min(recovery, 2))));
   // 每日配額、權限與過長的伺服器等待不能用無限重試解決。
   return delay <= 5 * 60000 ? delay : null;
 }
 
 async function runTripWithWaiting(generate, { mode, signal, session, onStatus = () => {} }) {
-  for (let recovery = 0; recovery <= 2; recovery++) {
+  for (let recovery = 0; recovery <= GEMINI_FREE_MAX_TRIP_RECOVERIES; recovery++) {
     throwIfGeminiCancelled(signal);
+    checkGeminiRetrySession(session);
     onStatus({ stage: 'generating', message: recovery ? '正在接續未完成的行程…' : '正在依交通、住宿與特殊要求規劃…' });
     try {
       const result = await generate();
@@ -3497,15 +3533,17 @@ async function runTripWithWaiting(generate, { mode, signal, session, onStatus = 
       return result;
     } catch (error) {
       throwIfGeminiCancelled(signal);
-      const delay = mode === 'free' && recovery < 2 && (!session || session.attempts < session.maxAttempts)
+      const delay = mode === 'free' && recovery < GEMINI_FREE_MAX_TRIP_RECOVERIES && (!session || session.attempts < session.maxAttempts)
         ? getTripAutomaticRetryDelay(error, recovery) : null;
       if (delay === null) throw error;
       const until = Date.now() + delay;
-      const reason = canSplitTripOutput(error) ? '正在補齊未完成的景點與特殊要求' : '服務或短時間配額暫時受限';
+      const reason = canSplitTripOutput(error) ? '正在補齊未完成的日期，保留其他已完成行程'
+        : error.status === 503 ? '忙碌模型已冷卻，等待可用模型恢復' : '服務或短時間配額暫時受限';
       while (until > Date.now()) {
         throwIfGeminiCancelled(signal);
+        checkGeminiRetrySession(session);
         const seconds = Math.ceil((until - Date.now()) / 1000);
-        onStatus({ stage: 'waiting', remainingSeconds: seconds, message: `${reason}，${seconds} 秒後自動接續（${recovery + 1}/2）。不需要再按規劃。` });
+        onStatus({ stage: 'waiting', remainingSeconds: seconds, message: `${reason}，${seconds} 秒後自動接續（${recovery + 1}/${GEMINI_FREE_MAX_TRIP_RECOVERIES}）。不需要再按規劃。` });
         await new Promise(resolve => setTimeout(resolve, Math.min(1000, until - Date.now())));
       }
     }
@@ -3553,7 +3591,7 @@ function getBasicTripRequests(text, dateList, fixedActivities = []) {
 const BASIC_TRIP_CITY_HINTS = [
   ['東京', /東京|东京|墨田|台東|淺草|浅草|上野|押上|\b(?:tokyo|sumida|taito|asakusa|ueno|narita|haneda|nrt|hnd)\b|淺草寺|浅草寺|晴空塔|skytree|senso[ -]?ji|阿美橫町|合羽橋/iu],
   ['名古屋', /名古屋|千種|今池|\b(?:nagoya|chikusa|imaike|aichi|ngo)\b|德川園|徳川園|熱田神宮|大須觀音|大須観音|名古屋城/iu],
-  ['京都', /京都|\bkyoto\b|清水寺|伏見稻荷|伏見稲荷|金閣寺/iu],
+  ['京都', /(?<!東|东)京都|\bkyoto\b|清水寺|伏見稻荷|伏見稲荷|金閣寺/iu],
   ['大阪', /大阪|\bosaka\b|\bkix\b|道頓堀|通天閣/iu],
   ['首爾', /首爾|首尔|서울|\b(?:seoul|hongdae|icn|gmp)\b|弘大|明洞|景福宮/iu],
   ['台北', /台北|臺北|\b(?:taipei|tpe|tsa)\b/iu],
@@ -3967,14 +4005,29 @@ async function generateBasicTripData({ apiKey, baseConstraints, dateList, bookin
   const signature = getTripCheckpointSignature({ baseConstraints, dateList, bookingContext, basicPreferences, modelFamily: 'flash', planningMode: 'basic' });
   const checkpoint = readTripCheckpoint(signature) || { signature, scheduleDays: [], completedDays: [] };
   const saved = new globalThis.Map((checkpoint.completedDays || []).filter(day => day.planning_mode === 'basic'
-    && day.generation_source === 'ai' && day.date === dateList[day.day_index - 1] && Array.isArray(day.timeline)).map(day => [day.date, day]));
+    && ['ai', 'booking_inputs'].includes(day.generation_source) && day.date === dateList[day.day_index - 1] && Array.isArray(day.timeline)).map(day => [day.date, day]));
   const usedSpots = new Set([...saved.values()].flatMap(day => day.timeline.filter(item => item.type === 'spot').map(item => basicStopIdentity(item.title))));
   const days = [];
   const guideData = preferences.details.cityGuides ? { ...checkpoint.city_guides } : {};
   const reports = new globalThis.Map((checkpoint.request_reports || []).map(report => [report.id, report]));
+  const retainDay = day => {
+    saved.set(day.date, day);
+    checkpoint.scheduleDays = [...saved.values()].sort((a, b) => a.day_index - b.day_index);
+    checkpoint.completedDays = checkpoint.scheduleDays;
+    writeTripCheckpoint(checkpoint);
+  };
+  const bookingOnlyDay = (date, index, raw = {}) => buildBasicTripDay({ ...raw, stops: [], title: basicTripText(raw?.title) || '已訂交通與住宿安排', detail_options: preferences.details,
+    fixed_pins: pins.filter(pin => pin.date === date) }, date, index, bookingContext, preferences.destinations, 'booking_inputs');
   for (let offset = 0; offset < dateList.length;) {
     throwIfGeminiCancelled(requestOptions.signal);
     if (saved.has(dateList[offset])) { days.push(saved.get(dateList[offset++])); continue; }
+    // 跨夜返程抵達、全天交通或未填完整時間的日期，沒有可安排景點的時段。
+    // 直接保留訂單；尤其剩下返程抵達日時，不需再呼叫 AI 製造不存在的景點。
+    if (!getBasicTripDayContext(bookingContext, dateList[offset], preferences.destinations, pins.filter(pin => pin.date === dateList[offset])).windows.length) {
+      const day = bookingOnlyDay(dateList[offset], offset + 1);
+      retainDay(day); days.push(day); offset++;
+      continue;
+    }
     let end = Math.min(offset + 10, dateList.length);
     for (let i = offset + 1; i < end; i++) if (saved.has(dateList[i])) { end = i; break; }
     const dates = dateList.slice(offset, end);
@@ -4002,7 +4055,7 @@ Include each fixed activity with its request ID; exact user times take precedenc
 Every stop MUST stay in that window's city. A rail arrival changes the activity city immediately. Do not reuse the departure hotel's area after arrival.
 When arrival_origin is present, start directly at that arriving station after ready_time, route to requested luggage storage or the fixed event, and check in later. Do not force a hotel detour or charge the same station connection twice. Hotel check-in opening time is not an appointment requiring the traveler to be there then. Label storage service/hours and late hotel check-in as unconfirmed.
 Cluster each day's stops in one or two nearby districts. Allow 30 minutes from the base, 15-30 minutes between nearby stops, and 45-60 minutes for distant districts. Respect requested pace and restaurant budget; do not fill an event day with unnecessary sights.
-The app reserves airport/station connections and hotel/luggage return time. Fit stops entirely inside windows; use [] when none are usable.
+The app reserves airport/station connections and hotel/luggage return time. Fit stops entirely inside windows; use [] when none are usable. An overnight return-arrival day needs no sightseeing; preserve the return destination, do not invent attractions back in the departed city.
 Sight titles must name actual attractions, markets, museums or shopping streets. NEVER use generic walks, free time, nearby sights, hotel-area sightseeing or choose-it-yourself placeholders.
 Meal titles should name a restaurant or a specific district AND food suggestion. Avoid duplicate attractions across the trip.
 Luggage handling is logistics, not a sight. Do not assume a convenience store has luggage storage; mark service availability as unconfirmed. Once luggage is stored at a station, collect it there rather than returning to the old hotel.
@@ -4021,9 +4074,12 @@ The app preserves original booked flight/train codes and times; you only select 
     let parsed;
     try { parsed = JSON.parse(cleanJsonResult(getGeminiText(response))); }
     catch { throw incomplete('AI 回覆尚未形成有效的景點資料，已保留輸入與完成的部分。'); }
-    if (!Array.isArray(parsed?.days) || parsed.days.length !== dates.length) throw incomplete('AI 行程日期尚未完整，正在保留已完成資料。');
-    const byDate = new globalThis.Map(parsed.days.map(day => [day.date, day]));
-    if (byDate.size !== dates.length) throw incomplete('AI 行程日期重複，尚未完成有效規劃。');
+    if (!Array.isArray(parsed?.days)) throw incomplete('AI 行程日期尚未完整，正在保留已完成資料。');
+    const byDate = new globalThis.Map(), duplicateDates = new Set();
+    for (const raw of parsed.days) if (raw && dates.includes(raw.date)) {
+      if (byDate.has(raw.date)) duplicateDates.add(raw.date);
+      byDate.set(raw.date, raw);
+    }
     // 同一份回覆中的選填資訊也要保存，補生成其他日期時不必重新索取。
     if (preferences.details.cityGuides && Array.isArray(parsed.city_infos)) for (const guide of parsed.city_infos) {
       if (bookingText(guide?.city) && ['history_culture', 'transport_tips', 'safety_scams', 'subsidies', 'tax_refund'].every(field => typeof guide[field] === 'string') && Array.isArray(guide.basic_phrases)) guideData[guide.city] = guide;
@@ -4032,30 +4088,35 @@ The app preserves original booked flight/train codes and times; you only select 
       if (reports.get(report.id)?.status !== 'scheduled') reports.set(report.id, report);
     }
     checkpoint.city_guides = guideData; checkpoint.request_reports = [...reports.values()];
+    const issues = [];
     for (let i = 0; i < dates.length; i++) {
       const raw = byDate.get(dates[i]);
-      if (raw?.day_index !== offset + i + 1 || !Array.isArray(raw.stops)) throw incomplete('AI 景點資料尚未完整。');
       const context = contexts[i];
+      if (!context.windows.length) { retainDay(bookingOnlyDay(dates[i], offset + i + 1, raw)); continue; }
+      if (duplicateDates.has(dates[i]) || raw?.day_index !== offset + i + 1 || !Array.isArray(raw?.stops)) {
+        issues.push(`第 ${offset + i + 1} 天的 AI 日期或景點資料尚未完整，其他有效日期已保留。`); continue;
+      }
+      const proposedSpots = new Set(usedSpots);
       const day = buildBasicTripDay({ ...raw, detail_options: preferences.details, family_profile: preferences.family,
-        fixed_pins: pins.filter(pin => pin.date === dates[i]) }, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', usedSpots);
+        fixed_pins: pins.filter(pin => pin.date === dates[i]) }, dates[i], offset + i + 1, bookingContext, preferences.destinations, 'ai', proposedSpots);
       const available = context.windows.reduce((total, window) => total + window.end - window.start, 0);
       const hasLongActivity = day.timeline.some(item => item.type === 'activity' && !item.is_logistics && tripTimeMinutes(item.end_time) - tripTimeMinutes(item.time) >= 120);
       const minimumSights = hasLongActivity ? 1 : preferences.family ? (context.windows.some(window => window.end - window.start >= 150) ? 1 : 0)
         : available >= 420 ? 2 : context.windows.some(window => window.end - window.start >= 150) ? 1 : 0;
       if (day.timeline.filter(item => item.type === 'spot' || item.type === 'activity' && !item.is_logistics).length < minimumSights) {
-        throw incomplete(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點或指定活動，AI 尚未完成有效規劃。`);
+        issues.push(`第 ${day.day_index} 天缺少符合城市與可用時間的具名景點或指定活動，請只補齊此日期，保留已完成日期。`); continue;
       }
-      for (const window of context.windows) if (!preferences.family && window.end - window.start >= 150
-          && !day.timeline.some(item => (item.type === 'spot' || item.type === 'activity' && !item.is_logistics) && item.planning_window_id === window.id)) {
-        throw incomplete(`第 ${day.day_index} 天的 ${window.city || window.area || '可用時段'} 尚未安排有效景點或指定活動。`);
-      }
+      const unplannedWindow = context.windows.find(window => !preferences.family && window.end - window.start >= 150
+        && !day.timeline.some(item => (item.type === 'spot' || item.type === 'activity' && !item.is_logistics) && item.planning_window_id === window.id));
+      if (unplannedWindow) { issues.push(`第 ${day.day_index} 天的 ${unplannedWindow.city || unplannedWindow.area || '可用時段'} 尚未安排有效景點或指定活動。`); continue; }
       if (preferences.details.introductions && day.timeline.some(item => ['spot', 'meal', 'activity'].includes(item.type) && !item.is_logistics && !item.fixed_activity_id && !bookingText(item.description))) {
-        throw incomplete(`第 ${day.day_index} 天尚未完成你選擇的景點簡短介紹。`);
+        issues.push(`第 ${day.day_index} 天尚未完成你選擇的景點簡短介紹。`); continue;
       }
-      days.push(day); saved.set(day.date, day);
-      checkpoint.scheduleDays = [...saved.values()]; checkpoint.completedDays = [...saved.values()];
-      writeTripCheckpoint(checkpoint);
+      for (const spot of proposedSpots) usedSpots.add(spot);
+      retainDay(day);
     }
+    if (issues.length) throw incomplete(issues.slice(0, 5).join(' '));
+    days.push(...dates.map(date => saved.get(date)));
     checkpoint.city_guides = guideData; checkpoint.request_reports = [...reports.values()]; checkpoint.last_issue = '';
     writeTripCheckpoint(checkpoint);
     offset = end;
@@ -5098,7 +5159,7 @@ const App = () => {
         dateList: sourceItinerary.days.map(value => value.date) });
       const result = await generateDayAdjustment({ apiKey, modelFamily: effectiveModelType, day: JSON.parse(request.original), instruction,
         bookingContext, preferences: getDayTravelPreferences(sourceItinerary, basicData),
-        requestOptions: { signal: request.controller.signal, ...(apiUsageMode === 'free' ? { session: { attempts: 0, maxAttempts: 4 } } : {}) } });
+        requestOptions: { signal: request.controller.signal, ...(apiUsageMode === 'free' ? { session: createGeminiRetrySession(GEMINI_FREE_MAX_HTTP_ATTEMPTS) } : {}) } });
       if (dayAdjustmentRequest.current !== request || request.controller.signal.aborted) return;
       const latest = itineraryRef.current;
       if (JSON.stringify(latest?.days?.[dayIndex]) !== request.original) {
@@ -5223,7 +5284,7 @@ const App = () => {
 
     const controller = new AbortController();
     generationController.current = controller;
-    const session = apiUsageMode === 'free' ? { attempts: 0, maxAttempts: 6 } : null;
+    const session = apiUsageMode === 'free' ? createGeminiRetrySession() : null;
     const planningPreferences = { destinations: basicData.destinations, style: basicData.type, transport: transportConstraint,
       requests: basicData.specialRequests, budget: priceConstraint, details: normalizeBasicDetailOptions(detailOptions),
       fixedActivities: Array.isArray(fixedActivities) ? fixedActivities : [],
@@ -5486,7 +5547,7 @@ const App = () => {
                 <span className="block text-sm font-bold text-slate-800 dark:text-[#e8f1ff]">免費模式：{geminiModels.freeModel?.label || GEMINI_MODEL_CONFIG.flash.label}</span>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-1">免費模式的運算與配額有限，保留具名景點、簡短介紹、用餐與特殊要求；依交通時間切換城市，以住宿地區安排起終點。進階資訊可在下方勾選，與行程一起產生。10 天內先嘗試一次生成全程，較長行程每批最多 10 天。</p>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">免費版也可使用 AI 深度導覽：生成行程後，點選景點的紫色 AI 按鈕才獨立生成該景點的步行路線、周邊店舖與提醒。已生成內容再次開啟會直接讀取，並共用免費請求限速。</p>
-                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並有限次自動接續。整次規劃最多送出 6 次生成嘗試；每日額度、權限或輸入衝突會明確停止。成功時只需一次請求，等待本身不消耗生成額度。</p>
+                <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">服務忙碌、短時間配額或部分內容未完成時，會留在等待畫面倒數並自動接續最多 {GEMINI_FREE_MAX_TRIP_RECOVERIES} 輪。整次最多 {GEMINI_FREE_MAX_TRIP_HTTP_ATTEMPTS} 次生成請求或 20 分鐘；每日額度、權限或輸入衝突會明確停止。順利時只需一次請求，等待本身不消耗生成額度。</p>
                 <p className="text-xs text-slate-600 dark:text-[#c0cfe2] mt-2">直接查詢官方模型清單，不消耗文字生成 Token。免費規劃優先現行正式 Flash，並沿用這把 Key 最近成功使用的模型；無法存取的模型會暫時略過。取得清單後至少等 15 秒，後續生成也至少間隔 15 秒。清單有列出不代表專案有使用權限或配額，實際額度請在 AI Studio 確認。</p>
                 {geminiModels.listedModels?.length > 0 && <details className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">
                   <summary className="cursor-pointer">查看查詢到的文字模型（{geminiModels.listedModels.length} 個）</summary>
@@ -5521,9 +5582,9 @@ const App = () => {
               </div>
               <label className="flex items-start gap-2 mt-3 text-xs text-slate-600 dark:text-[#c0cfe2] cursor-pointer">
                 <input type="checkbox" name="allowBusyFallback" checked={Boolean(allowBusyFallback)} onChange={e => setAllowBusyFallback(e.target.checked)} className="mt-0.5" />
-                <span>持續忙碌時自動使用同系列備援模型（最多切換一次）。模型停用時仍會尋找可用版本。</span>
+                <span>{apiUsageMode === 'free' ? '503 時先冷卻忙碌模型，輪替其他可用的同系列模型。' : '持續忙碌時自動使用同系列備援模型（最多切換一次）。'}模型停用時仍會尋找可用版本。</span>
               </label>
-              <p className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">{apiUsageMode === 'free' ? '免費模式每筆需求最多自動重試 1 次，至少等待 30 秒；同系列備援也共用重試額度。持續 503 時暫停該系列 60 秒，等待過程會顯示倒數。' : '短時間限制會等待後重試，每個模型最多重試 3 次。'} 模型仍可能忙碌，限速無法保證消除 503。免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完會直接提示。</p>
+              <p className="mt-2 text-xs text-slate-500 dark:text-[#9bafc9]">{apiUsageMode === 'free' ? '免費規劃會自動接續最多 8 輪，整次最多 24 次實際請求或 20 分鐘。遇到 503 先冷卻該版本並輪替其他可用 Flash；全部忙碌時會倒數等待，完成的日期會保留，不需要再次按規劃。' : '短時間限制會等待後重試，每個模型最多重試 3 次。'} 免費模式遇到模型額度為 0 時會尋找其他候選；每日額度用完、權限或輸入衝突會停止並顯示原因。</p>
             </div>
           </div>
           
